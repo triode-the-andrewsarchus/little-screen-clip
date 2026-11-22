@@ -780,6 +780,77 @@ mod playback {
         time::{Duration, Instant},
     };
 
+    #[test]
+    fn dialogue_reader_and_player_use_the_same_sparse_subtitle_timeline() {
+        use clip_media_protocol::playback::{Options, SubtitleCue};
+        let fixture = std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../little-clip-core/tests/fixtures/video/playback-tracks.mkv"
+        ));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("delayed.mkv");
+        let status = Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(fixture)
+            .args(["-itsoffset", "1.6", "-i"])
+            .arg(fixture)
+            .args(["-itsoffset", "2.2", "-i"])
+            .arg(fixture)
+            .args([
+                "-map", "0:v:0", "-map", "1:s:0", "-map", "2:s:1", "-c", "copy",
+            ])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        for (track, expected, start_ms) in
+            [(0, "FIRST SUBTITLE", 1600), (1, "SECOND SUBTITLE", 2200)]
+        {
+            let source = File::open(&path).unwrap();
+            let result = command(&[&source], "subtitle-track", &track.to_string())
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let cues: Vec<SubtitleCue> = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(cues.len(), 1);
+            assert_eq!(cues[0].text, expected);
+            assert_eq!(cues[0].start_ms, start_ms);
+        }
+
+        let mut player = Player::source(
+            &path,
+            Settings {
+                silent: false,
+                ..Player::settings(0)
+            },
+        );
+        player.until(|update| update.playing && update.bytes > 0);
+        player.control(1, Some(600), false);
+        player.until(|update| update.epoch == 1 && !update.playing);
+        let mut control = Control {
+            epoch: 2,
+            seek_ms: Some(600),
+            playing: false,
+            volume: 1.0,
+            options: Options {
+                subtitles_enabled: true,
+                subtitle_track: Some(1),
+                ..Options::default()
+            },
+        };
+        player.send(&control);
+        player.until(|update| update.epoch == 2 && update.bytes > 0);
+        control.epoch = 3;
+        control.seek_ms = Some(2200);
+        player.send(&control);
+        let (cue, _) = player.until(|update| update.epoch == 3 && update.bytes > 0);
+        assert!((2200..2251).contains(&cue.position_ms), "{cue:?}");
+    }
+
     struct Player {
         child: Child,
         input: Option<ChildStdin>,

@@ -125,7 +125,6 @@ pub(super) struct Viewers {
     config: AppConfig,
     gallery: Option<gallery::Collection>,
     video_start_seconds: f64,
-    pub(super) video_timeline: Option<super::video_timeline::Timeline>,
     document_start: Option<super::DocumentPosition>,
     system_navigation: Option<super::system::BrowserTarget>,
 }
@@ -138,6 +137,30 @@ impl Viewers {
     }
     pub(super) fn video_fullscreen(&self) -> bool {
         matches!(&self.session, Some(ViewerSession::Video(video)) if video.fullscreen())
+    }
+    pub(super) fn sync_video_timeline(
+        &mut self,
+        previews: &mut super::video_timeline::Previews,
+        ctx: &Context,
+    ) {
+        let video = match &mut self.session {
+            Some(ViewerSession::Video(video)) => Some(video),
+            _ => None,
+        };
+        let path = match &video {
+            Some(video) => video.timeline_path(),
+            None => self
+                .loading
+                .as_ref()
+                .filter(|loading| matches!(kind(&loading.path), Kind::Video))
+                .map(|loading| loading.path.as_path()),
+        };
+        previews.retain_for_viewer(path);
+        previews.poll(ctx);
+        let timeline = path.and_then(|path| previews.timeline(path));
+        if let Some(video) = video {
+            video.set_timeline(timeline);
+        }
     }
     pub(super) fn notify_video_copy(&mut self, ctx: &Context, text: &str) {
         if let Some(ViewerSession::Video(video)) = &mut self.session {
@@ -270,7 +293,6 @@ impl Viewers {
             self.office_preview = matches!(&loaded, Loaded::OfficePdf { .. });
             loaded
         });
-        let timeline = self.video_timeline.take();
         match result {
             Ok(Loaded::External) => {
                 self.open_external();
@@ -289,11 +311,6 @@ impl Viewers {
                         .map(super::search::SourceGuard::read_check)
                         .unwrap_or_default(),
                 );
-                if let Some(timeline) = timeline
-                    && let ViewerSession::Video(state) = &mut opened
-                {
-                    state.set_timeline(timeline);
-                }
                 if self.gallery.is_some()
                     && let ViewerSession::Image(state) = &mut opened
                 {
@@ -626,7 +643,6 @@ impl Viewers {
         self.pad_trim = None;
         self.audio_return_saving = false;
         self.video_start_seconds = 0.0;
-        self.video_timeline = None;
     }
     fn open_external(&mut self) {
         if let Some(ViewerSession::Video(state)) = &mut self.session {
@@ -941,6 +957,7 @@ fn session(
             prepared,
             video_start,
             config.file_manager.video_subtitles_enabled,
+            check,
         )),
         Loaded::VideoAudio(prepared) => ViewerSession::Audio(Box::new(prepared.studio(config))),
         Loaded::Text(state) => ViewerSession::Text(*state),

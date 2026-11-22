@@ -1,10 +1,28 @@
 //! Bounded streaming playback messages; decoded pixels never accumulate in a queue.
 use serde::{Deserialize, Serialize};
-use std::io::{self, Read, Write};
+use std::{
+    io::{self, Read, Write},
+    time::Duration,
+};
 
 /// Largest accepted tightly packed RGBA frame (full HD).
 pub const MAX_FRAME_BYTES: usize = 1920 * 1080 * 4;
+/// Maximum serialized transcript size for one embedded subtitle track.
+pub const MAX_SUBTITLE_BYTES: usize = 8 * 1024 * 1024;
+/// Overall budget for reading a subtitle track from a seekable source.
+pub const SUBTITLE_READ_TIMEOUT: Duration = Duration::from_secs(90);
 const MAX_HEADER_BYTES: usize = 65536;
+
+/// One decoded line on the playback clock.
+#[derive(Serialize, Deserialize)]
+pub struct SubtitleCue {
+    /// Cue start in source-relative milliseconds.
+    pub start_ms: u64,
+    /// UTF-8 text from the selected track.
+    pub text: String,
+    /// Whether the text contains Pango markup.
+    pub markup: bool,
+}
 
 /// Playback rates exposed by the viewer.
 pub const RATES: [f64; 8] = [0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 4.0, 10.0];

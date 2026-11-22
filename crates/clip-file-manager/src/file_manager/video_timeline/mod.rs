@@ -7,7 +7,7 @@ use egui::{Context, TextureHandle};
 use little_clip_core::{BackgroundJobs, ImageThumbnail, JobError};
 use std::{
     collections::BTreeMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock, mpsc},
     time::Duration,
 };
@@ -95,6 +95,15 @@ impl Previews {
         self.hover = None;
         self.frame = None;
     }
+    pub fn retain_for_viewer(&mut self, path: Option<&Path>) {
+        // Keep the visible player's render, including a job with no texture yet.
+        self.ready
+            .retain(|source, _| Some(source.as_path()) == path);
+        self.pending
+            .retain(|source, _| Some(source.as_path()) == path);
+        self.selection = None;
+        self.clear_hover();
+    }
     pub fn retain(&mut self, entries: &[&Entry], hovered: bool, ctx: &Context) {
         self.visible_jobs = entries.len().clamp(1, *dispatch::FILE_LIMIT);
         let keys: BTreeMap<_, _> = entries
@@ -176,7 +185,7 @@ impl Previews {
             .filter(|cached| cached.revision == entry.revision)
             .map(|cached| &cached.value)
     }
-    pub fn timeline(&self, path: &std::path::Path) -> Option<Timeline> {
+    pub fn timeline(&self, path: &Path) -> Option<Timeline> {
         let ready = self.ready.get(path)?.value.as_ref().ok()?;
         Some(Timeline {
             texture: ready.texture.clone()?,
@@ -409,6 +418,8 @@ mod tests {
             },
         );
         let ctx = Context::default();
+        previews.retain_for_viewer(Some(&path));
+        assert!(!cancelled.load(Ordering::Relaxed));
         inspected.send(metadata).unwrap();
         let image = || ImageThumbnail {
             width: 2,
@@ -427,6 +438,7 @@ mod tests {
             .id();
         assert!(previews.pending.contains_key(&path));
         assert_eq!(previews.ready[&path].width, 0);
+        previews.retain_for_viewer(Some(&path));
         updates.send(image()).unwrap();
         previews.poll(&ctx);
         let texture = previews.ready[&path]

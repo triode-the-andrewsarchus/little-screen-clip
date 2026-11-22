@@ -1,4 +1,6 @@
 //! Embedded video presentation; synchronized audio and decoding stay in the owned worker.
+mod dialogue;
+
 use super::super::{
     media::{VideoMetadata as Prepared, inspect_video},
     preview_copy::Copies,
@@ -6,10 +8,10 @@ use super::super::{
     video_playback::{AudioMode, Session, Span},
     video_timeline::{Timeline, selection::FrameCopy},
 };
-use crate::file_source::FileSource;
+use crate::file_source::{FileSource, ReadCheck};
 use clip_ui::buttons::ButtonRole;
 use egui::Ui;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(super) fn prepare(path: &std::path::Path) -> Result<Prepared, String> {
     inspect_video(path)
@@ -26,6 +28,8 @@ pub(super) struct Video {
     stopped: bool,
     last_activity: f64,
     context: Option<egui::Context>,
+    read_check: ReadCheck,
+    dialogue: dialogue::Find,
 }
 impl Video {
     pub fn new(
@@ -33,6 +37,7 @@ impl Video {
         prepared: Prepared,
         start_seconds: f64,
         subtitles_enabled: bool,
+        read_check: ReadCheck,
     ) -> Self {
         let start_ms = if start_seconds.is_finite() {
             (start_seconds.max(0.0) * 1000.0) as u64
@@ -54,13 +59,22 @@ impl Video {
             stopped: false,
             last_activity: 0.0,
             context: None,
+            read_check,
+            dialogue: dialogue::Find::default(),
         }
     }
-    pub(super) fn set_timeline(&mut self, timeline: Timeline) {
-        let metadata = &timeline.source.metadata;
-        if metadata.source == self.prepared.source && metadata.stream == self.prepared.stream {
-            self.transport.timeline = Some(timeline);
+    pub(super) fn timeline_path(&self) -> Option<&Path> {
+        (!self.stopped).then_some(self.path.as_path())
+    }
+    pub(super) fn set_timeline(&mut self, timeline: Option<Timeline>) {
+        let timeline = timeline.filter(|timeline| {
+            let metadata = &timeline.source.metadata;
+            metadata.source == self.prepared.source && metadata.stream == self.prepared.stream
+        });
+        if self.transport.timeline.is_some() != timeline.is_some() {
+            self.transport.seek_preview = None;
         }
+        self.transport.timeline = timeline;
     }
     pub(super) fn notify_copy(&mut self, ctx: &egui::Context, text: &str) {
         self.transport.notice = Some((text.to_owned(), ctx.input(|input| input.time) + 4.0));
@@ -75,12 +89,14 @@ impl Video {
         self.path = path;
         self.prepared.source = source.clone();
         self.transport.timeline = None;
+        self.dialogue = dialogue::Find::default();
         if let Some(player) = &self.player {
             player.relocate(source);
         }
     }
     pub(super) fn stop(&mut self) {
         self.player = None;
+        self.dialogue = dialogue::Find::default();
         self.stopped = true;
     }
     pub(in crate::file_manager) fn tick(&mut self, ctx: &egui::Context) {
@@ -104,6 +120,12 @@ impl Video {
         }
         if let Some(player) = &mut self.player {
             player.poll(ctx);
+            self.dialogue.tick(
+                ctx,
+                &self.prepared.source,
+                &self.read_check,
+                dialogue::selected_track(player).map(|track| track.index),
+            );
         }
     }
 
@@ -139,19 +161,18 @@ impl Video {
             shell.render_header(ui, |_| {});
         }
         let was_fullscreen = self.fullscreen;
-        if ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() {
-            shortcuts(ui, player, &mut self.fullscreen);
-        }
+        shortcuts(ui, player, &mut self.fullscreen, &mut self.dialogue);
+        self.dialogue.show(ui, player, palette);
         let response = picture(ui, player, self.fullscreen);
         let rect = response.rect;
         let menu_was_open = response.context_menu_opened() || egui::Popup::is_any_open(ui.ctx());
-        response.context_menu(|ui| playback_menu(ui, player));
+        response.context_menu(|ui| playback_menu(ui, player, &mut self.dialogue));
         let overlay_visible = overlay_visibility(
             ui,
             was_fullscreen != self.fullscreen,
             &mut self.last_activity,
         ) || response.context_menu_opened();
-        if self.fullscreen && !overlay_visible {
+        if self.fullscreen && !overlay_visible && response.contains_pointer() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         }
         if response.double_clicked() {
@@ -186,13 +207,27 @@ impl Video {
                 ));
             }
         }
-        dismiss_key(ui, &mut self.fullscreen, close, menu_was_open);
+        dismiss_key(
+            ui,
+            &mut self.fullscreen,
+            close,
+            menu_was_open,
+            &mut self.dialogue,
+        );
     }
 }
-fn dismiss_key(ui: &Ui, fullscreen: &mut bool, close: &mut bool, menu_was_open: bool) {
+fn dismiss_key(
+    ui: &Ui,
+    fullscreen: &mut bool,
+    close: &mut bool,
+    menu_was_open: bool,
+    dialogue: &mut dialogue::Find,
+) {
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         if menu_was_open {
             egui::Popup::close_all(ui.ctx());
+        } else if dialogue.is_open() {
+            dialogue.close(ui.ctx());
         } else if *fullscreen {
             *fullscreen = false;
             ui.ctx()
@@ -259,7 +294,9 @@ fn fullscreen_controls(
         .order(egui::Order::Middle)
         .fixed_pos(rect.left_top() + egui::vec2(16.0, 16.0))
         .show(&ctx, |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(rect));
             overlay_frame().show(ui, |ui| {
+                ui.set_max_width((rect.width() - 48.0).max(0.0));
                 ui.horizontal(|ui| {
                     if ui
                         .add(ButtonRole::Secondary.button("Back to folder", palette))
@@ -267,10 +304,6 @@ fn fullscreen_controls(
                     {
                         back = true;
                     }
-                    ui.colored_label(
-                        egui::Color32::WHITE,
-                        path.file_name().unwrap_or_default().to_string_lossy(),
-                    );
                     if ui
                         .add(ButtonRole::Secondary.button("Exit fullscreen", palette))
                         .clicked()
@@ -278,6 +311,15 @@ fn fullscreen_controls(
                         exit = true;
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                     }
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                path.file_name().unwrap_or_default().to_string_lossy(),
+                            )
+                            .color(egui::Color32::WHITE),
+                        )
+                        .truncate(),
+                    );
                 });
             });
         });
@@ -285,6 +327,7 @@ fn fullscreen_controls(
         .order(egui::Order::Middle)
         .fixed_pos(egui::pos2(rect.left() + 16.0, rect.bottom() - 64.0))
         .show(&ctx, |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(rect));
             overlay_frame().show(ui, |ui| {
                 ui.set_width((rect.width() - 48.0).max(100.0));
                 ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
@@ -297,7 +340,22 @@ fn fullscreen_controls(
     (back, exit)
 }
 
-fn shortcuts(ui: &mut Ui, player: &mut Session, fullscreen: &mut bool) {
+fn shortcuts(
+    ui: &mut Ui,
+    player: &mut Session,
+    fullscreen: &mut bool,
+    dialogue: &mut dialogue::Find,
+) {
+    if !ui.is_enabled() {
+        return;
+    }
+    if ui.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
+        egui::Popup::close_all(ui.ctx());
+        dialogue.open(ui.ctx());
+    }
+    if ui.ctx().egui_wants_keyboard_input() {
+        return;
+    }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space)) {
         player.set_playing(!player.playing());
     }
@@ -475,11 +533,16 @@ fn clock(ms: u64) -> String {
     }
 }
 
-fn playback_menu(ui: &mut Ui, player: &mut Session) {
+fn playback_menu(ui: &mut Ui, player: &mut Session, dialogue: &mut dialogue::Find) {
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         ui.close();
         return;
     }
+    if ui.button("Find dialogue…  Ctrl+F").clicked() {
+        dialogue.open(ui.ctx());
+        ui.close();
+    }
+    let selected_subtitle = dialogue::selected_track(player).map(|track| track.index);
     let mut options = player.options().clone();
     ui.menu_button("Subtitles", |ui| {
         ui.checkbox(&mut options.subtitles_enabled, "Enable subtitles");
@@ -487,8 +550,7 @@ fn playback_menu(ui: &mut Ui, player: &mut Session) {
             ui.add_enabled(false, egui::Label::new("No embedded subtitle tracks"));
         }
         for track in &player.tracks.subtitles {
-            let selected =
-                options.subtitle_track.or(player.tracks.current_subtitle) == Some(track.index);
+            let selected = selected_subtitle == Some(track.index);
             if ui
                 .selectable_label(selected, format!("{} · {}", track.index + 1, track.label))
                 .clicked()
@@ -532,14 +594,17 @@ fn overlay_frame() -> egui::Frame {
 mod tests {
     use super::*;
     #[test]
-    fn escape_dismisses_the_menu_before_fullscreen_or_the_viewer() {
+    fn escape_dismisses_the_menu_and_find_sidebar_before_the_player() {
         let ctx = egui::Context::default();
         let mut fullscreen = true;
         let mut close = false;
-        for (menu_was_open, expected_fullscreen, expected_close) in [
-            (true, true, false),
-            (false, false, false),
-            (false, false, true),
+        let mut dialogue = dialogue::Find::default();
+        dialogue.open(&ctx);
+        for (menu_was_open, expected_find, expected_fullscreen, expected_close) in [
+            (true, true, true, false),
+            (false, false, true, false),
+            (false, false, false, false),
+            (false, false, false, true),
         ] {
             let mut input = egui::RawInput::default();
             input.events.push(egui::Event::Key {
@@ -552,11 +617,18 @@ mod tests {
             let _ = clip_ui::test_support::run_frame(&ctx, input, |ctx| {
                 ctx.root_ui(|ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        dismiss_key(ui, &mut fullscreen, &mut close, menu_was_open)
+                        dismiss_key(
+                            ui,
+                            &mut fullscreen,
+                            &mut close,
+                            menu_was_open,
+                            &mut dialogue,
+                        )
                     })
                 });
             });
             assert_eq!((fullscreen, close), (expected_fullscreen, expected_close));
+            assert_eq!(dialogue.is_open(), expected_find);
         }
     }
 }
