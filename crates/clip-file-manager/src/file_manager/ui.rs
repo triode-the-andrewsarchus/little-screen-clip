@@ -23,7 +23,7 @@ pub(super) mod video;
 const ROW_HEIGHT: f32 = 28.0;
 pub(super) const GROUP_HEADER_HEIGHT: f32 = 52.0;
 
-fn address_id() -> Id {
+pub(super) fn address_id() -> Id {
     Id::unique("file_manager_address")
 }
 pub(super) fn list_id() -> Id {
@@ -560,21 +560,7 @@ impl FileManager {
             if nav_button(ui, Icon::ArrowRight, "Forward [Alt+Right]", self.index.is_some_and(|i| i + 1 < self.history.len()), palette) { self.history_step(true); }
             if nav_button(ui, Icon::ArrowUp, "Parent folder [Alt+Up]", self.path().parent().is_some(), palette) { self.parent(); }
             let address_width = (ui.available_width() - 235.0).max(80.0);
-            let mut output = egui::TextEdit::singleline(&mut self.address)
-                .id(address_id()).hint_text("Directory path [Ctrl+L]")
-                .desired_width(address_width).show(ui);
-            output.response.response.clone().on_hover_text("Enter a directory path. Relative paths and ~/ are supported. Backslashes: \\\\; unusual bytes: \\xHH.");
-            if self.focus_address {
-                self.focus_address = false;
-                focus_text(ui.ctx(), &mut output, self.address.chars().count());
-            }
-            if output.response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
-                self.submit_address();
-                ui.memory_mut(|memory| memory.request_focus(list_id()));
-            } else if output.response.lost_focus() {
-                self.address = self.location_label();
-            }
-            self.address_editing = ui.memory(|memory| memory.has_focus(address_id()));
+            self.address_ui(ui, address_width);
             self.index_ui(ui);
             if nav_button(ui, Icon::Repeat, "Refresh [F5]", true, palette) { self.refresh(); }
             if ui.add(clip_ui::buttons::ButtonRole::Secondary.button(if self.show_hidden { "Hidden: on" } else { "Hidden: off" }, palette)).on_hover_text("Show hidden files [Ctrl+H]").clicked() { self.toggle_hidden(); }

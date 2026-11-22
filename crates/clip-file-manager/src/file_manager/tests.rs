@@ -609,6 +609,116 @@ fn address_focus_selection_submission_and_escape_work_in_rendered_ui() {
     assert!(manager.pending.is_none());
 }
 
+fn address_hint<'a>(
+    output: &'a egui::FullOutput,
+    suffix: &str,
+) -> Option<(&'a egui::epaint::TextShape, egui::Rect)> {
+    output.shapes.iter().find_map(|clipped| {
+        let egui::Shape::Text(text) = &clipped.shape else {
+            return None;
+        };
+        (text.galley.text() == suffix).then_some((text, clipped.clip_rect))
+    })
+}
+
+fn wait_for_address_hint(
+    manager: &mut FileManager,
+    ctx: &egui::Context,
+    suffix: &str,
+) -> egui::FullOutput {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let output = frame(manager, ctx, vec![]);
+        if address_hint(&output, suffix).is_some() {
+            return output;
+        }
+        assert!(Instant::now() < deadline, "missing address hint {suffix}");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn address_completion_cycles_directories_and_chains_with_tab_slash_and_right_arrow() {
+    use egui::{Event, Key, Modifiers};
+
+    let temp = tempfile::tempdir().unwrap();
+    let nested = temp.path().join("alpine/café/final");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir(temp.path().join("alpha")).unwrap();
+    std::fs::write(temp.path().join("albatross.txt"), "").unwrap();
+    let (mut manager, jobs, ctx) = rendered(temp.path());
+    ctx.set_zoom_factor(1.5);
+    press(&mut manager, &ctx, Key::L, Modifiers::CTRL);
+    frame(&mut manager, &ctx, vec![Event::Text("al".into())]);
+    let output = wait_for_address_hint(&mut manager, &ctx, "pha/");
+    let (typed, _) = address_hint(&output, "al").unwrap();
+    let (hint, clip) = address_hint(&output, "pha/").unwrap();
+    let color = hint.galley.job.sections[0].format.color;
+    assert_eq!(color, ctx.style_of(ctx.theme()).visuals.weak_text_color());
+    assert_ne!(color, typed.galley.job.sections[0].format.color);
+    assert!(hint.pos.x + hint.galley.mesh_bounds.right() <= clip.right());
+    let repaint = frame(&mut manager, &ctx, vec![]);
+    let (repainted_hint, repaint_clip) = address_hint(&repaint, "pha/").unwrap();
+    assert_eq!((hint.pos, clip), (repainted_hint.pos, repaint_clip));
+
+    press(&mut manager, &ctx, Key::ArrowUp, Modifiers::NONE);
+    assert!(address_hint(&frame(&mut manager, &ctx, vec![]), "pine/").is_some());
+    press(&mut manager, &ctx, Key::ArrowDown, Modifiers::NONE);
+    assert!(address_hint(&frame(&mut manager, &ctx, vec![]), "pha/").is_some());
+    press(&mut manager, &ctx, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(manager.address, "al");
+    press(&mut manager, &ctx, Key::Tab, Modifiers::NONE);
+    assert_eq!(manager.address, "alpine/");
+    wait_for_address_hint(&mut manager, &ctx, "café/");
+
+    frame(
+        &mut manager,
+        &ctx,
+        vec![event(Key::Slash, Modifiers::NONE), Event::Text("/".into())],
+    );
+    assert_eq!(manager.address, "alpine/café/");
+    wait_for_address_hint(&mut manager, &ctx, "final/");
+    press(&mut manager, &ctx, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(manager.address, "alpine/café/final/");
+    assert_eq!(manager.path(), temp.path());
+    assert!(ctx.memory(|m| m.has_focus(super::ui::address_id())));
+    press(&mut manager, &ctx, Key::Enter, Modifiers::NONE);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), nested);
+}
+
+#[test]
+fn address_completion_renders_after_a_scrolled_path_and_leaves_other_edits_literal() {
+    use egui::{Event, Key, Modifiers};
+
+    let temp = tempfile::tempdir().unwrap();
+    let long = "long-folder".repeat(15);
+    std::fs::create_dir_all(temp.path().join(&long).join("child")).unwrap();
+    let (mut manager, _jobs, ctx) = rendered(temp.path());
+    press(&mut manager, &ctx, Key::L, Modifiers::CTRL);
+    let draft = format!("{}/{long}/ch", display_path(temp.path()));
+    frame(&mut manager, &ctx, vec![Event::Text(draft.clone())]);
+    wait_for_address_hint(&mut manager, &ctx, "ild/");
+    let output = frame(&mut manager, &ctx, vec![]);
+    let (hint, clip) = address_hint(&output, "ild/").unwrap();
+    assert!(hint.pos.x + hint.galley.mesh_bounds.right() <= clip.right());
+
+    press(&mut manager, &ctx, Key::ArrowLeft, Modifiers::NONE);
+    assert!(address_hint(&frame(&mut manager, &ctx, vec![]), "ild/").is_none());
+    press(&mut manager, &ctx, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(manager.address, draft);
+    press(&mut manager, &ctx, Key::ArrowLeft, Modifiers::NONE);
+    frame(&mut manager, &ctx, vec![Event::Text("/".into())]);
+    assert_eq!(
+        manager.address,
+        format!("{}/{long}/c/h", display_path(temp.path()))
+    );
+
+    press(&mut manager, &ctx, Key::L, Modifiers::CTRL);
+    frame(&mut manager, &ctx, vec![Event::Text("/".into())]);
+    assert_eq!(manager.address, "/");
+}
+
 fn type_in_browser(manager: &mut FileManager, ctx: &egui::Context, text: &str) {
     ctx.memory_mut(|memory| memory.request_focus(super::ui::list_id()));
     frame(manager, ctx, vec![]);

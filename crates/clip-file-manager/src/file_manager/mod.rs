@@ -1,5 +1,6 @@
 //! Folder browsing and file management on the shared bounded executor.
 
+mod address;
 mod app;
 mod archive_browse;
 mod binary_strip;
@@ -243,6 +244,7 @@ pub(crate) struct FileManager {
     error: Option<String>,
     failed: Option<(PathBuf, Navigation)>,
     address: String,
+    address_completion: address::Completion,
     show_hidden: bool,
     tree: FolderTree,
     containers: container_preview::Previews,
@@ -339,6 +341,7 @@ impl FileManager {
             error: None,
             failed: None,
             address: String::new(),
+            address_completion: address::Completion::default(),
             show_hidden: false,
             restore_scroll: false,
             reveal_selection: false,
