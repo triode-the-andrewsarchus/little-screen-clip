@@ -181,6 +181,8 @@ impl Clip {
                     "-y",
                     "-filter_threads",
                     "2",
+                    "-abort_on",
+                    "empty_output",
                 ])
                 .args([
                     "-protocol_whitelist",
@@ -203,6 +205,12 @@ impl Clip {
                     "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                     "-pix_fmt",
                     "yuv420p",
+                    // Keep boundary timestamps through the encoder instead of
+                    // rounding to its nominal frame interval.
+                    "-enc_time_base:v",
+                    "1:1000000",
+                    "-fps_mode",
+                    "passthrough",
                 ])
                 .args([
                     "-c:v",
