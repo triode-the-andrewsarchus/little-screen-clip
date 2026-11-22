@@ -153,7 +153,7 @@ them on a shared account if clipboard contents or recipe scripts are sensitive.
 Compile the workspace in release mode:
 
 ```bash
-cd /home/vega/Documents/git/local/little-screen-clip
+cd /path/to/little-screen-clip
 ./launch.sh build
 ```
 
@@ -202,7 +202,7 @@ Install and enable the service with one command:
 ./launch.sh install-service
 ```
 
-This installs `little-screen-clip.service` to `~/.config/systemd/user/` and enables it for `graphical-session.target`.
+This configures the service to run from the checkout where you ran `./launch.sh install-service`, then enables it for `graphical-session.target`. Run the installer again from the new checkout if you move the project.
 
 #### Service Commands:
 ```bash
@@ -240,24 +240,24 @@ PDF text selection and embedded-image copying use PyMuPDF in this environment. T
 
 ### 4. Configure Compositor Keybindings (Niri)
 
-Add the following binds to your `~/.config/niri/cfg/keybinds.kdl`:
+Add the following binds to your `~/.config/niri/cfg/keybinds.kdl` and substitute your checkout path.
 
 ```kdl
 binds {
     // ─── Little Screen Clip ───
     // Launch Crafting Workbench Modal
     Mod+C hotkey-overlay-title="Little Screen Clip: Workbench" {
-        spawn "/home/vega/Documents/git/local/little-screen-clip/launch.sh" "ui";
+        spawn "/path/to/little-screen-clip/launch.sh" "ui";
     }
 
     // Capture active window selection directly to Right-Hand Buffer
     CTRL+ALT+C hotkey-overlay-title="Little Screen Clip: Copy to Right Hand" {
-        spawn "/home/vega/Documents/git/local/little-screen-clip/launch.sh" "copy-right";
+        spawn "/path/to/little-screen-clip/launch.sh" "copy-right";
     }
 
     // Paste content from Right-Hand Buffer into active window
     CTRL+ALT+V hotkey-overlay-title="Little Screen Clip: Paste from Right Hand" {
-        spawn "/home/vega/Documents/git/local/little-screen-clip/launch.sh" "paste-right";
+        spawn "/path/to/little-screen-clip/launch.sh" "paste-right";
     }
 }
 ```

@@ -4,7 +4,8 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="$(realpath -- "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname -- "$SCRIPT_PATH")"
 cd "$SCRIPT_DIR"
 
 PID_FILE="$SCRIPT_DIR/.little-clipd.pid"
@@ -380,11 +381,14 @@ function run_workbench() {
 }
 
 function run_file_manager() {
-    ensure_dependencies
-    "$SCRIPT_DIR/scripts/build_timelens.sh"
-    "$SCRIPT_DIR/scripts/build_video_strip.sh"
-    local file_manager_bin
+    local file_manager_bin binary_dir
     file_manager_bin=$(workspace_binary clip-file-manager)
+    binary_dir=$(dirname "$file_manager_bin")
+    if [ ! -x "$file_manager_bin" ] || [ ! -x "$binary_dir/timelens" ] || [ ! -x "$binary_dir/video-strip" ]; then
+        ensure_dependencies
+        "$SCRIPT_DIR/scripts/build_timelens.sh"
+        "$SCRIPT_DIR/scripts/build_video_strip.sh"
+    fi
     if [ ! -x "$file_manager_bin" ]; then
         cargo build --release -p clip-file-manager -p clip-media-worker
         file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
@@ -424,9 +428,12 @@ function install_service() {
     mkdir -p "$service_dir"
     local target_unit="$service_dir/$SYSTEMD_SERVICE_NAME"
     local src_unit="$SCRIPT_DIR/little-screen-clip.service"
+    local project_dir="${SCRIPT_DIR//%/%%}"
+    local unit
+    unit=$(<"$src_unit")
 
     echo -e "${BLUE}Installing systemd service to $target_unit...${NC}"
-    cp "$src_unit" "$target_unit"
+    printf '%s\n' "${unit//@PROJECT_DIR@/"$project_dir"}" > "$target_unit"
 
     systemctl --user daemon-reload
     systemctl --user enable "$SYSTEMD_SERVICE_NAME"
