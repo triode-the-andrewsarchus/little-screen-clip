@@ -106,9 +106,7 @@ pub(super) fn spx(data: &[u8], plot: &mut Plot<'_>) -> Result {
 }
 
 pub(super) fn zhs(data: &[u8], plot: &mut Plot<'_>) -> Result {
-    let mut offsets = Bytes::at(data, 0x0f)?;
-    let stitches = offsets.le32()?;
-    let header = offsets.le32()?;
+    let [stitches, header] = Bytes::at(data, 0x0f)?.le32s()?;
     let mut palette = Bytes::at(data, header)?;
     let colors = usize::from(palette.u8()?);
     for &color in palette.take(colors * 3)?.as_chunks::<3>().0 {

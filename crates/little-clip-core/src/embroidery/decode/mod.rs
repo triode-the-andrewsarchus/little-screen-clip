@@ -221,6 +221,14 @@ impl<'a> Bytes<'a> {
         Ok(u32::from_le_bytes(self.array()?) as usize)
     }
 
+    fn le32s<const N: usize>(&mut self) -> Result<[usize; N]> {
+        let mut values = [0; N];
+        for value in &mut values {
+            *value = self.le32()?;
+        }
+        Ok(values)
+    }
+
     fn be32(&mut self) -> Result<usize> {
         Ok(u32::from_be_bytes(self.array()?) as usize)
     }

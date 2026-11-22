@@ -176,15 +176,12 @@ fn hus_streams(data: &[u8]) -> Result<HusStreams<'_>> {
             .or_else(|| data.strip_prefix(&PE_DESIGN_HUS.to_le_bytes()))
             .ok_or("Missing HUS signature")?,
     );
-    let records = header.le32()?;
-    let colors = header.le32()?;
+    let [records, colors] = header.le32s()?;
     if records > MAX_COMMANDS || colors > 1000 {
         return Err("Embroidery stitch budget exceeded".into());
     }
     header.skip(8)?;
-    let commands = header.le32()?;
-    let x = header.le32()?;
-    let y = header.le32()?;
+    let [commands, x, y] = header.le32s()?;
     let view = |range| data.get(range).ok_or("Invalid HUS stream offset");
     let mut palette = Bytes(view(0x2a..commands)?);
     Ok(HusStreams {
