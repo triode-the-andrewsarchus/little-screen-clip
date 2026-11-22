@@ -3,7 +3,7 @@ use super::super::{
     media::{VideoMetadata as Prepared, inspect_video},
     preview_copy::Copies,
     ui::video::paint_timelens,
-    video_playback::{Session, Span},
+    video_playback::{AudioMode, Session, Span},
     video_timeline::{Timeline, selection::FrameCopy},
 };
 use crate::file_source::FileSource;
@@ -92,7 +92,7 @@ impl Video {
             self.player = Some(Session::new(
                 &self.prepared,
                 Span::From(self.start_ms),
-                false,
+                AudioMode::Audible,
                 1280,
                 ctx.clone(),
                 Default::default(),

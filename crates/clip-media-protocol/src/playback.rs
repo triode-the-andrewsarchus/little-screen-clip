@@ -97,6 +97,9 @@ pub struct Settings {
     pub duration_ms: u64,
     /// Disable audio decoding and device acquisition for hover previews.
     pub silent: bool,
+    /// Mute audio from startup while keeping the track available.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start_muted: bool,
     /// Initial session choices; absent in older requests.
     #[serde(default)]
     pub options: Options,

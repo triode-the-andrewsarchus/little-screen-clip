@@ -4,7 +4,7 @@ use crate::file_manager::{
     preview_copy,
     preview_job::Task,
     search::PreviewContext,
-    video_playback::{Session, Span},
+    video_playback::{AudioMode, Session, Span},
 };
 use egui::{Context, Id, TextureHandle};
 use little_clip_core::{BackgroundJobs, media_backend, process::CommandRequest};
@@ -310,6 +310,7 @@ pub(in crate::file_manager) struct Selection {
     pub preview_open: bool,
     pub window: Range<u64>,
     pub adjusting: bool,
+    pub muted: bool,
     pending: Option<Task<Endpoints>>,
     pub frames: Option<[Result<TextureHandle, String>; 2]>,
     playback: Option<Session>,
@@ -332,6 +333,7 @@ impl Selection {
             preview_open: false,
             window,
             adjusting: false,
+            muted: true,
             pending: None,
             frames: None,
             playback: None,
@@ -351,10 +353,17 @@ impl Selection {
         }
         Some(self.playback.get_or_insert_with(|| {
             let clip = &self.clip;
+            let audio = if clip.source.metadata.audio_tracks == 0 {
+                AudioMode::Silent
+            } else if self.muted {
+                AudioMode::Muted
+            } else {
+                AudioMode::Audible
+            };
             Session::new(
                 &clip.source.metadata,
                 Span::Selection(clip.start_ms..clip.end_ms),
-                true,
+                audio,
                 width,
                 ctx.clone(),
                 clip.source.context.clone(),
@@ -364,6 +373,13 @@ impl Selection {
                 },
             )
         }))
+    }
+
+    pub fn toggle_mute(&mut self) {
+        self.muted = !self.muted;
+        if let Some(player) = &mut self.playback {
+            player.set_muted(self.muted);
+        }
     }
 
     pub fn set_edge(&mut self, edge: Edge, time: u64) {

@@ -281,6 +281,11 @@ fn show_playback(ui: &mut Ui, height: f32, selection: &mut Selection) -> bool {
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
     let has_audio = selection.clip.source.metadata.audio_tracks > 0;
+    if has_audio && response.clicked_by(egui::PointerButton::Primary) {
+        selection.toggle_mute();
+        ui.memory_mut(|memory| memory.request_focus(focus_id()));
+    }
+    let muted = selection.muted;
     let width = (rect.width().max(rect.height() * 16.0 / 9.0) * ui.ctx().pixels_per_point())
         .ceil()
         .clamp(128.0, 768.0) as u32;
@@ -296,6 +301,9 @@ fn show_playback(ui: &mut Ui, height: f32, selection: &mut Selection) -> bool {
         player.and_then(|player| player.texture.as_ref()),
         status,
     );
+    if has_audio {
+        paint_mute_status(ui, rect, muted);
+    }
     let mut edit = false;
     response.context_menu(|ui| {
         edit = ui
@@ -306,7 +314,30 @@ fn show_playback(ui: &mut Ui, height: f32, selection: &mut Selection) -> bool {
             ui.close();
         }
     });
+    if has_audio {
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(if muted {
+                "Click to unmute"
+            } else {
+                "Click to mute"
+            });
+    }
     edit
+}
+
+fn paint_mute_status(ui: &Ui, rect: Rect, muted: bool) {
+    let badge = Rect::from_min_size(rect.left_bottom() + vec2(4.0, -28.0), vec2(24.0, 24.0));
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(badge, 4.0, Color32::from_black_alpha(190));
+    let icon = badge.shrink(4.0);
+    Icon::Volume.paint(&painter, icon, Color32::WHITE);
+    if muted {
+        painter.line_segment(
+            [icon.left_bottom(), icon.right_top()],
+            egui::Stroke::new(2.0, Color32::WHITE),
+        );
+    }
 }
 
 fn paint_preview(ui: &Ui, rect: Rect, texture: Option<&egui::TextureHandle>, status: &str) {

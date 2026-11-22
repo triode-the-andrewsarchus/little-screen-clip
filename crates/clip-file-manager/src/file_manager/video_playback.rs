@@ -33,6 +33,12 @@ pub(super) enum Span {
     Selection(Range<u64>),
 }
 
+pub(super) enum AudioMode {
+    Silent,
+    Muted,
+    Audible,
+}
+
 pub(super) struct Session {
     task: Task<Result<(), String>>,
     worker: Worker,
@@ -57,7 +63,7 @@ impl Session {
     pub fn new(
         metadata: &VideoMetadata,
         span: Span,
-        silent: bool,
+        audio: AudioMode,
         width: u32,
         ctx: egui::Context,
         context: PreviewContext,
@@ -77,15 +83,18 @@ impl Session {
         let pending = Arc::new(Mutex::new(None));
         let delivery = Arc::new(Mutex::new(Delivery::default()));
         let source = Arc::new(Mutex::new(metadata.source.clone()));
+        let silent = matches!(audio, AudioMode::Silent);
+        let start_muted = matches!(audio, AudioMode::Muted);
         let settings = Settings {
             stream: 0,
             width,
             height: width * 9 / 16,
-            fps: if silent { 20 } else { 30 },
+            fps: if silent || end_ms.is_some() { 20 } else { 30 },
             start_ms,
             end_ms,
             duration_ms: metadata.duration_ms,
             silent,
+            start_muted,
             options: options.clone(),
         };
         let worker = Worker {
@@ -105,7 +114,7 @@ impl Session {
                 epoch: 0,
                 seek_ms: None,
                 playing: true,
-                volume: 1.0,
+                volume: if start_muted { 0.0 } else { 1.0 },
                 options,
             },
             pending,
@@ -145,6 +154,11 @@ impl Session {
         } else {
             self.send();
         }
+    }
+
+    pub fn set_muted(&mut self, muted: bool) {
+        self.control.volume = if muted { 0.0 } else { 1.0 };
+        self.send();
     }
     pub fn options(&self) -> &Options {
         &self.control.options
@@ -433,7 +447,7 @@ mod tests {
         let mut player = Session::new(
             &metadata(),
             Span::From(100),
-            true,
+            AudioMode::Silent,
             320,
             ctx.clone(),
             Default::default(),
@@ -487,7 +501,7 @@ mod tests {
         let mut player = Session::new(
             &metadata(),
             Span::From(0),
-            true,
+            AudioMode::Silent,
             320,
             ctx.clone(),
             PreviewContext::empty_results(),

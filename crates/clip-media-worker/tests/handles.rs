@@ -805,6 +805,7 @@ mod playback {
                 end_ms: None,
                 duration_ms: 3000,
                 silent: true,
+                start_muted: false,
                 options: Default::default(),
             }
         }

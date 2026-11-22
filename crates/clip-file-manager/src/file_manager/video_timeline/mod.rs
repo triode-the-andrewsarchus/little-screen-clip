@@ -290,7 +290,7 @@ impl Previews {
             self.frame = Some(super::video_playback::Session::new(
                 &metadata,
                 super::video_playback::Span::From(key.time_ms),
-                true,
+                super::video_playback::AudioMode::Silent,
                 key.width,
                 ctx.clone(),
                 self.context.clone(),

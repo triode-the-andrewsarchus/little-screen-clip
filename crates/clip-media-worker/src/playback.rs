@@ -170,6 +170,7 @@ impl Engine {
         }
         let (video, sink) = video_sink(settings, source.gpu_scale && !software)?;
         let player = gst::ElementFactory::make("playbin3")
+            .property("mute", settings.start_muted)
             .build()
             .map_err(message)?;
         // filesrc supports pull-mode indexing needed by MXF and other seek-heavy

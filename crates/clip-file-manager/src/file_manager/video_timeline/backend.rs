@@ -567,7 +567,7 @@ mod format_tests {
             let mut player = crate::file_manager::video_playback::Session::new(
                 &metadata,
                 crate::file_manager::video_playback::Span::From(500),
-                true,
+                crate::file_manager::video_playback::AudioMode::Silent,
                 96,
                 ctx.clone(),
                 Default::default(),
