@@ -1097,6 +1097,8 @@ pub(super) fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
         Icon::Folder
     } else if entry.is_brush() {
         Icon::Brush
+    } else if entry.is_spreadsheet() {
+        Icon::Spreadsheet
     } else if super::container_preview::inventory::archive(&entry.path) {
         Icon::FolderZip
     } else if little_clip_core::audio::is_audio_path(&entry.path) {

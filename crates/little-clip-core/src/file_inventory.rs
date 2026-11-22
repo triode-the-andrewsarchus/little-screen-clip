@@ -94,6 +94,9 @@ impl Entry {
         self.regular_file
             && file_format::Format::for_path(&self.path) == Some(file_format::Format::Notebook)
     }
+    pub fn is_spreadsheet(&self) -> bool {
+        self.document_format() == Some(file_format::Format::Spreadsheet)
+    }
     pub fn is_paged_document(&self) -> bool {
         self.regular_file
             && (crate::pdf::is_pdf_path(&self.path)

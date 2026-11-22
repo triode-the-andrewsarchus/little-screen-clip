@@ -481,7 +481,7 @@ impl SpreadsheetViewerState {
                                 );
                                 let response = ui.interact(
                                     rect,
-                                    ui.id().with(("cell", row, column)),
+                                    ui.scope_id().with(("cell", row, column)),
                                     egui::Sense::click(),
                                 );
                                 if response.clicked() {

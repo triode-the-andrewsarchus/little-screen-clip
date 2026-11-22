@@ -335,6 +335,19 @@ impl Viewers {
             (Some(ViewerSession::Pdf(state)), Some(super::DocumentPosition::PdfPage(page))) => {
                 state.selected_page = Some(page.max(1))
             }
+            (
+                Some(ViewerSession::Sheet(state)),
+                Some(super::DocumentPosition::SpreadsheetSheet(index)),
+            ) => {
+                if let Some(position) = state
+                    .data
+                    .sheets
+                    .iter()
+                    .position(|sheet| sheet.workbook_index == index)
+                {
+                    state.active_sheet_idx = position;
+                }
+            }
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::TextLine(line))) => {
                 state.preview.view_mode = crate::text_preview::TextViewMode::Raw;
                 state.preview.center_on_source_line(line);
@@ -622,7 +635,6 @@ enum Kind {
     Audio,
     Pdf,
     OfficeDoc,
-    Sheet,
     Midi,
     Scene,
     Model,
@@ -666,8 +678,6 @@ fn kind(path: &Path) -> Kind {
         Kind::Pdf
     } else if little_clip_core::document::is_office_document(path) {
         Kind::OfficeDoc
-    } else if little_clip_core::presentation::spreadsheet::is_spreadsheet_file(path) {
-        Kind::Sheet
     } else if little_clip_scene::is_splat_file(path) {
         Kind::Scene
     } else if little_clip_core::presentation::model3d::is_3d_model_file(path) {
@@ -739,7 +749,7 @@ fn load(
     let kind = kind(path);
     let limit = match kind {
         Kind::Image { max_bytes } => max_bytes as u64,
-        Kind::Sheet | Kind::Midi | Kind::Document(Format::Notebook) => 32 * 1024 * 1024,
+        Kind::Midi | Kind::Document(Format::Spreadsheet | Format::Notebook) => 32 * 1024 * 1024,
         _ => u64::MAX,
     };
     if metadata.len() > limit {
@@ -788,7 +798,7 @@ fn load(
             source.check()?;
             Ok(Loaded::Audio(metadata, source))
         }
-        Kind::Sheet => {
+        Kind::Document(Format::Spreadsheet) => {
             little_clip_core::presentation::spreadsheet::load_spreadsheet(path).map(Loaded::Sheet)
         }
         Kind::Midi => {

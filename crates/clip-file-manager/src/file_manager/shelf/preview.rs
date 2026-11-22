@@ -58,6 +58,7 @@ pub(in crate::file_manager) enum Source {
     Book(PathBuf),
     Calendar(PathBuf),
     Database(PathBuf),
+    Spreadsheet(PathBuf, u64),
     Geography(PathBuf),
     Toolpath(PathBuf),
     VcvPatch(PathBuf),
@@ -116,7 +117,11 @@ impl Source {
             self
         }
     }
-    pub fn for_document(format: super::super::document_format::Format, path: PathBuf) -> Source {
+    pub fn for_document(
+        format: super::super::document_format::Format,
+        path: PathBuf,
+        revision: u64,
+    ) -> Source {
         match format {
             super::super::document_format::Format::Font => Source::Font(path),
             super::super::document_format::Format::Notebook => Source::Notebook(path),
@@ -124,6 +129,9 @@ impl Source {
             super::super::document_format::Format::Mail => Source::Mail(path),
             super::super::document_format::Format::Calendar => Source::Calendar(path),
             super::super::document_format::Format::Database => Source::Database(path),
+            super::super::document_format::Format::Spreadsheet => {
+                Source::Spreadsheet(path, revision)
+            }
             super::super::document_format::Format::Geography => Source::Geography(path),
             super::super::document_format::Format::Toolpath => Source::Toolpath(path),
             super::super::document_format::Format::VcvPatch => Source::VcvPatch(path),
@@ -157,6 +165,7 @@ impl Source {
             | Self::Notebook(_)
             | Self::Book(_)
             | Self::Calendar(_)
+            | Self::Spreadsheet(..)
             | Self::Database(_)
             | Self::Geography(_)
             | Self::Toolpath(_)
@@ -285,6 +294,34 @@ impl Source {
             Source::VcvPatch(path) => super::super::vcv_strip::load(&path, token),
             Source::VcvRaster(request) => request.load(token),
             Source::Geography(path) => super::super::geography::load(&path, token),
+            Source::Spreadsheet(path, revision) => {
+                let mut data =
+                    Data::new(display_path(&path), "Spreadsheet".into(), Icon::Spreadsheet);
+                let loaded = (|| {
+                    use super::super::filesystem::check_revision;
+                    check_revision(&path, revision)?;
+                    let workbook = little_clip_core::spreadsheet::load_spreadsheet_preview(
+                        &path, 8, 32, token,
+                    )?;
+                    check_revision(&path, revision)?;
+                    workbook
+                        .sheets
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| "No sheet data".to_owned())
+                })();
+                match loaded {
+                    Ok(sheet) => {
+                        data.detail = format!(
+                            "{} · {} rows × {} columns",
+                            sheet.name, sheet.total_rows, sheet.total_cols
+                        );
+                        data.spreadsheet = Some(sheet);
+                    }
+                    Err(error) => data.text = error,
+                }
+                data
+            }
             Source::Database(path) => super::super::database::load(&path, token),
             Source::Calendar(path) => super::super::calendar::load(&path, token),
             Source::Mail(path) => super::super::mail::load(&path, token),

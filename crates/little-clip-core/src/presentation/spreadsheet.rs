@@ -623,15 +623,7 @@ fn workbook_sheet(
 
 /// Returns `true` if the given path has a supported spreadsheet file extension.
 pub fn is_spreadsheet_file(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    matches!(
-        ext.as_str(),
-        "csv" | "tsv" | "xlsx" | "xls" | "xlsb" | "ods"
-    )
+    crate::file_format::Format::for_path(path) == Some(crate::file_format::Format::Spreadsheet)
 }
 
 #[cfg(test)]

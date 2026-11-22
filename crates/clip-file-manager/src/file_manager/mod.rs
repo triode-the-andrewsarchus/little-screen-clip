@@ -108,6 +108,7 @@ pub(super) enum DocumentPosition {
     ArchiveMember(usize, u64),
     TextLine(usize),
     PdfPage(usize),
+    SpreadsheetSheet(usize),
     NotebookCell(usize),
     BookChapter(usize),
     MailAttachment(usize),

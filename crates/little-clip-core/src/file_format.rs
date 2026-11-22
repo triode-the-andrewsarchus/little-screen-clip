@@ -18,6 +18,7 @@ pub enum Format {
     Toolpath,
     Multisample,
     Subtitle,
+    Spreadsheet,
     VcvPatch,
 }
 impl Format {
@@ -44,6 +45,7 @@ impl Format {
                 Some(Self::Multisample)
             }
             "vcv" | "vcvss" => Some(Self::VcvPatch),
+            "csv" | "tsv" | "xlsx" | "xls" | "xlsb" | "ods" => Some(Self::Spreadsheet),
             _ => crate::subtitles::is_subtitle_path(path).then_some(Self::Subtitle),
         }
     }

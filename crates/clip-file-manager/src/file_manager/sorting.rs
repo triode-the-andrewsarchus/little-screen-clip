@@ -134,7 +134,7 @@ fn extension_category(entry: &Entry) -> Category {
     if entry.is_geography() {
         return Category::Geography;
     }
-    if little_clip_core::notebook::is_candidate_path(&entry.path) {
+    if entry.is_spreadsheet() || little_clip_core::notebook::is_candidate_path(&entry.path) {
         return Category::Document;
     }
     let extension = entry
@@ -143,9 +143,9 @@ fn extension_category(entry: &Entry) -> Category {
         .map(|v| v.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     match extension.as_str() {
-        "pdf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp"
-        | "epub" | "cbz" | "sfz" | "sf2" | "nki" | "gcode" | "sqlite" | "sqlite3" | "db"
-        | "db3" | "ics" | "eml" | "ipynb" => Category::Document,
+        "pdf" | "doc" | "docx" | "odt" | "ppt" | "pptx" | "odp" | "epub" | "cbz" | "sfz"
+        | "sf2" | "nki" | "gcode" | "sqlite" | "sqlite3" | "db" | "db3" | "ics" | "eml"
+        | "ipynb" => Category::Document,
         "zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "tgz" | "tbz" | "tbz2" | "txz" | "tzst"
         | "7z" | "rar" => Category::Archive,
         _ => Category::Other,

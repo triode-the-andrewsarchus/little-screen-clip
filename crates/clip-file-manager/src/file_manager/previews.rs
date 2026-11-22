@@ -337,7 +337,7 @@ impl EntryPreviews {
                         revision: entry.revision,
                     }
                 } else if let Some(format) = entry.document_format() {
-                    Source::for_document(format, entry.path.clone())
+                    Source::for_document(format, entry.path.clone(), entry.revision)
                 } else if entry.is_blend() {
                     Source::Blend(entry.path.clone())
                 } else if entry.is_brush() {
@@ -395,7 +395,10 @@ impl EntryPreviews {
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
     ) -> Option<super::DocumentPosition> {
-        if entry.is_subtitles() {
+        if entry.is_spreadsheet() {
+            self.show_spreadsheet(ui, row, entry, columns, colors, palette)
+                .map(super::DocumentPosition::SpreadsheetSheet)
+        } else if entry.is_subtitles() {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
         } else if self.is_multisample(entry) {
@@ -469,6 +472,40 @@ impl EntryPreviews {
                 .map(super::DocumentPosition::TextLine)
         }
     }
+    fn show_spreadsheet(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: egui::Rect,
+        entry: &Entry,
+        columns: super::ui::ListColumns,
+        colors: crate::ui_appearance::WorkbenchColors,
+        palette: &little_clip_core::palette::AppPalette,
+    ) -> Option<usize> {
+        let ready = self.listing(entry);
+        let detail = ready.map_or("Spreadsheet", |ready| ready.data.detail.as_str());
+        let rect = super::ui::information_strip(ui, row, entry, detail, Some(columns), colors);
+        if !rect.is_positive() || !ui.is_rect_visible(rect) {
+            return None;
+        }
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.rect_filled(rect, 3.0, colors.recessed);
+        if let Some(sheet) = ready.and_then(|ready| ready.data.spreadsheet.as_ref()) {
+            if sheet.total_rows > 0 && sheet.total_cols > 0 {
+                clip_studios::spreadsheet_view::paint_sheet_corner(ui, rect, sheet, palette);
+            } else {
+                paint_spreadsheet_status(&painter, rect, "Empty sheet", colors);
+            }
+            return Some(sheet.workbook_index);
+        }
+        let status = if ready.is_none() {
+            "Loading sheet…"
+        } else {
+            "Sheet preview unavailable"
+        };
+        paint_spreadsheet_status(&painter, rect, status, colors);
+        None
+    }
+
     pub fn show_visual(
         &mut self,
         ui: &mut egui::Ui,
@@ -1080,6 +1117,21 @@ fn raster_dimensions(ui: &egui::Ui, rect: egui::Rect) -> (u32, u32) {
     )
 }
 
+fn paint_spreadsheet_status(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    text: &str,
+    colors: crate::ui_appearance::WorkbenchColors,
+) {
+    painter.text(
+        rect.left_center() + egui::vec2(8.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(12.0),
+        colors.text_secondary,
+    );
+}
+
 fn text_candidate(entry: &Entry) -> bool {
     entry.regular_file
         && !entry.has_content_strip()
@@ -1126,6 +1178,66 @@ mod tests {
             previews.listing(entry).is_some()
         });
         previews.listing(entry).unwrap()
+    }
+
+    #[test]
+    fn spreadsheet_row_paints_table_values_and_retires_revised_sources() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("plan.CSV");
+        std::fs::write(&path, "Project,Owner\nGarden,Ada\n").unwrap();
+        let entry = single_entry(folder.path());
+        assert!(entry.has_content_strip());
+        let ctx = egui::Context::default();
+        let palette = little_clip_core::palette::AppPalette::default();
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+        let mut previews = EntryPreviews::default();
+        let ready = await_listing(&mut previews, &ctx, &entry);
+        assert_eq!(ready.data.icon, crate::icons::Icon::Spreadsheet);
+        assert!(ready.data.document.is_none());
+        assert!(ready.data.spreadsheet.is_some());
+
+        let row = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(520.0, 108.0));
+        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let position = previews.show_document(
+                        ui,
+                        row,
+                        &entry,
+                        super::super::ui::ListColumns::new(row),
+                        colors,
+                        &palette,
+                    );
+                    assert_eq!(
+                        position,
+                        Some(super::super::DocumentPosition::SpreadsheetSheet(0))
+                    );
+                });
+            });
+        });
+        let painted: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.pos.y >= row.top() + 32.0 => {
+                    Some(text.galley.text())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(painted, ["Project", "Owner", "Garden", "Ada"]);
+
+        std::fs::write(&path, "Changed,Owner\nNew project,Grace\n").unwrap();
+        let revised = single_entry(folder.path());
+        assert_ne!(entry.revision, revised.revision);
+        assert!(previews.cached(&revised).is_none());
+        let updated = await_listing(&mut previews, &ctx, &revised);
+        assert_eq!(
+            updated.data.spreadsheet.as_ref().unwrap().cell(0, 0),
+            "Changed"
+        );
+        previews.retain(&BTreeSet::new());
+        assert!(previews.cached(&revised).is_none());
     }
 
     #[test]
