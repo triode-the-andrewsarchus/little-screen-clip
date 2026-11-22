@@ -310,8 +310,9 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             let design = little_clip_core::embroidery::Design::read(path, &cancelled).ok()?;
             let thumbnail = design.thumbnail([320, 220], &cancelled).ok()?;
             Some(Preview::Page(Page {
-                width: thumbnail.width,
-                height: thumbnail.height,
+                // These dimensions describe source pixels, which stitch files lack.
+                width: 0,
+                height: 0,
                 thumbnail,
             }))
         }

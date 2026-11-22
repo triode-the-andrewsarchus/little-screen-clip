@@ -568,6 +568,10 @@ fn embroidery_cards_render_embedded_thread_colors_and_follow_replacements() {
     let mut state = SlotManager::default();
     state.push_left(item.clone());
     let preview = renderer.file_preview(&item).expect("prepared embroidery");
+    assert!(matches!(
+        preview.as_ref(),
+        Preview::Page(page) if page.width == 0 && page.height == 0
+    ));
     assert!(std::sync::Arc::ptr_eq(
         &renderer.file_preview(&item).unwrap(),
         &preview
