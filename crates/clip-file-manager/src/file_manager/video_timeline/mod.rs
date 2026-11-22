@@ -65,7 +65,7 @@ pub(super) struct Previews {
     visible_jobs: usize,
     pub(super) selection: Option<selection::Selection>,
     pub(super) copy_frame: Option<selection::FrameCopy>,
-    pub(super) copy_clip: bool,
+    pub(super) copy_clip: Option<selection::CopyKind>,
     pub subtitles_enabled: bool,
 }
 fn texture(ctx: &Context, name: String, image: ImageThumbnail) -> TextureHandle {

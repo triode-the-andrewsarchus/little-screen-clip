@@ -171,7 +171,7 @@ impl FileManager {
         } else if ctx.memory(|memory| memory.has_focus(pdf_id())) {
             self.copy_pdf_pages(ctx);
         } else if ctx.memory(|memory| memory.has_focus(timeline_id())) {
-            self.copy_video_range(ctx);
+            self.copy_video_range(ctx, super::video_timeline::selection::CopyKind::Video);
         } else {
             self.copy_music_range();
         }

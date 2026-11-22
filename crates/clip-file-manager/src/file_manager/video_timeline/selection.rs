@@ -127,6 +127,12 @@ pub(in crate::file_manager) struct Clip {
     pub end_ms: u64,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::file_manager) enum CopyKind {
+    Video,
+    Audio,
+}
+
 impl Clip {
     pub fn new(source: Source, (start, end): (f32, f32)) -> Option<Self> {
         let duration = source.metadata.duration_ms;
@@ -179,6 +185,27 @@ impl Clip {
             timestamp(start),
             timestamp(end)
         ))
+    }
+
+    pub fn export_audio(&self, cancel: &AtomicBool) -> Result<String, String> {
+        let (start, end) = (self.start_ms, self.end_ms);
+        preview_copy::copy_file(
+            &self.source.path,
+            &format!("{start}-{end}ms-audio"),
+            "wav",
+            |output| {
+                self.source.read(cancel, |input| {
+                    crate::file_manager::viewers::video_audio::render_to(
+                        input,
+                        output,
+                        Some((start, end)),
+                        Duration::MAX,
+                        cancel,
+                    )
+                })
+            },
+        )?;
+        Ok("Copied audio from clip".into())
     }
 
     fn write(&self, output: &File, cancel: &AtomicBool) -> Result<(), String> {
@@ -519,7 +546,7 @@ mod tests {
         );
         let mut browser = FileManager::new(dir.path().to_owned());
         browser.video_previews.selection = Some(Selection::new(long, 1));
-        browser.copy_video_range(&Context::default());
+        browser.copy_video_range(&Context::default(), CopyKind::Video);
         assert!(browser.large_video_copy.is_some());
         assert!(!browser.preview_copies.busy());
     }

@@ -24,7 +24,7 @@ mod escape;
 mod gallery;
 mod rename;
 mod video;
-mod video_audio;
+pub(super) mod video_audio;
 
 enum Loaded {
     Archive(super::container_preview::archive::Viewer),

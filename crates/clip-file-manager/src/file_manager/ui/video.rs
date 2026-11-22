@@ -6,7 +6,7 @@ use super::super::{
     preview_copy,
     video_timeline::{
         Ready,
-        selection::{Clip, FrameCopy, Selection, focus_id, timestamp},
+        selection::{Clip, CopyKind, FrameCopy, Selection, focus_id, timestamp},
     },
 };
 use super::*;
@@ -157,15 +157,17 @@ fn timeline_interaction(
                 .get(entry)
                 .and_then(|ready| ready.as_ref().ok())
                 .and_then(|ready| ready.texture.as_ref());
-            let (copy, edit) = show_selection(ui, &response, &mut selection, overview);
-            previews.copy_clip |= copy;
-            if edit {
-                actions.open = Some(selection.clip.source.path.clone());
-                actions.open_position = Some(super::super::DocumentPosition::VideoAudioRange {
-                    start_ms: selection.clip.start_ms,
-                    end_ms: selection.clip.end_ms,
-                    revision: selection.revision,
-                });
+            match show_selection(ui, &response, &mut selection, overview) {
+                Some(SelectionAction::Copy(kind)) => previews.copy_clip = Some(kind),
+                Some(SelectionAction::EditAudio) => {
+                    actions.open = Some(selection.clip.source.path.clone());
+                    actions.open_position = Some(super::super::DocumentPosition::VideoAudioRange {
+                        start_ms: selection.clip.start_ms,
+                        end_ms: selection.clip.end_ms,
+                        revision: selection.revision,
+                    });
+                }
+                None => {}
             }
         }
         previews.selection = Some(selection);
@@ -178,12 +180,17 @@ fn timeline_interaction(
     (dragging, click_time)
 }
 
+enum SelectionAction {
+    Copy(CopyKind),
+    EditAudio,
+}
+
 fn show_selection(
     ui: &Ui,
     response: &egui::Response,
     selection: &mut Selection,
     overview: Option<&egui::TextureHandle>,
-) -> (bool, bool) {
+) -> Option<SelectionAction> {
     let clip = &selection.clip;
     let duration = clip.source.metadata.duration_ms as f64;
     preview_copy::paint_range(
@@ -202,7 +209,8 @@ fn show_selection(
         .min((screen.width() - 24.0).max(1.0));
     let height = (width * 0.24).min(screen.height() * 0.35);
     let mut open = selection.preview_open;
-    let (copy, edit) = egui::Popup::from_response(response)
+    let has_audio = clip.source.metadata.audio_tracks > 0;
+    let action = egui::Popup::from_response(response)
         .open_bool(&mut open)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .gap(4.0)
@@ -227,21 +235,28 @@ fn show_selection(
             trim::show(ui, selection, overview);
             let copy = ui
                 .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.button("Copy clip").clicked()
+                    let video = ui.button("Copy clip");
+                    let audio = ui
+                        .add_enabled(has_audio, egui::Button::new("Copy audio from clip"))
+                        .on_disabled_hover_text("This video has no audio track");
+                    video
+                        .clicked()
+                        .then_some(CopyKind::Video)
+                        .or_else(|| audio.clicked().then_some(CopyKind::Audio))
                 })
                 .inner;
-            (copy, edit)
+            edit.then_some(SelectionAction::EditAudio)
+                .or_else(|| copy.map(SelectionAction::Copy))
         })
-        .map(|popup| popup.inner)
-        .unwrap_or_default();
+        .and_then(|popup| popup.inner);
     selection.preview_open = open;
     if !open {
         selection.close_preview();
     }
-    if copy {
+    if matches!(action, Some(SelectionAction::Copy(_))) {
         ui.memory_mut(|memory| memory.request_focus(focus_id()));
     }
-    (copy, edit)
+    action
 }
 
 fn show_endpoint(
@@ -466,7 +481,11 @@ fn video_card(
 }
 
 impl FileManager {
-    pub(in crate::file_manager) fn copy_video_range(&mut self, ctx: &egui::Context) {
+    pub(in crate::file_manager) fn copy_video_range(
+        &mut self,
+        ctx: &egui::Context,
+        kind: CopyKind,
+    ) {
         let Some(clip) = self
             .video_previews
             .selection
@@ -478,13 +497,17 @@ impl FileManager {
         if self.preview_copies.busy() {
             return;
         }
-        if let Some(bytes) = clip.large_estimate() {
+        if kind == CopyKind::Video
+            && let Some(bytes) = clip.large_estimate()
+        {
             self.large_video_copy = Some((clip, bytes));
             ctx.request_repaint();
             return;
         }
-        self.preview_copies
-            .start(ctx, move |cancel| clip.export(cancel));
+        self.preview_copies.start(ctx, move |cancel| match kind {
+            CopyKind::Video => clip.export(cancel),
+            CopyKind::Audio => clip.export_audio(cancel),
+        });
     }
 
     pub(super) fn large_video_copy_ui(&mut self, ctx: &egui::Context, palette: &AppPalette) {

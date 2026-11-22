@@ -1,7 +1,8 @@
-//! A guarded stereo snapshot for editing video sound without modifying the video.
+//! Stereo audio snapshots for video clipboard exports and Audio Studio.
 use crate::file_source::{FileSource, ReadCheck};
 use little_clip_core::{media_backend, staging::ArtifactStore};
 use std::{
+    fs::File,
     os::fd::AsRawFd,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -42,28 +43,13 @@ impl Prepared {
             .write(true)
             .open(anchor.join(name))
             .map_err(|e| e.to_string())?;
-        let mut settings = media_backend::AudioRender::new(
-            vec![media_backend::AudioInput {
-                formats: media_backend::VIDEO_FORMATS.into(),
-                stream: None,
-            }],
-            "wav",
-        );
-        settings.codec = Some("pcm_f32le".into());
-        settings.channels = Some(2);
-        settings.range = range.map(|(start, end)| (start as f64 / 1000.0, end as f64 / 1000.0));
-        let result = media_backend::render_audio_to_request(&settings, &output)?
-            .arg_owned_content_file(input.try_clone().map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?
-            .timeout(Duration::from_secs(120))
-            .run_cancellable(cancel)
-            .map_err(|e| e.to_string())?;
-        if !result.status.success() {
-            return Err(format!(
-                "Unable to extract audio: {}",
-                result.stderr_lossy()
-            ));
-        }
+        render_to(
+            input.try_clone().map_err(|e| e.to_string())?,
+            &output,
+            range,
+            Duration::from_secs(120),
+            cancel,
+        )?;
         observed.check_file(&input)?;
         // Capturing this held output also retains its registered workspace for
         // deferred studio readers and accepted exports after the viewer closes.
@@ -94,6 +80,38 @@ impl Prepared {
         studio.save_destination_dir = self.save_directory.to_string_lossy().into_owned();
         studio
     }
+}
+
+pub(in crate::file_manager) fn render_to(
+    input: File,
+    output: &File,
+    range: Option<(u64, u64)>,
+    timeout: Duration,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let mut settings = media_backend::AudioRender::new(
+        vec![media_backend::AudioInput {
+            formats: media_backend::VIDEO_FORMATS.into(),
+            stream: None,
+        }],
+        "wav",
+    );
+    settings.codec = Some("pcm_f32le".into());
+    settings.channels = Some(2);
+    settings.range = range.map(|(start, end)| (start as f64 / 1000.0, end as f64 / 1000.0));
+    let result = media_backend::render_audio_to_request(&settings, output)?
+        .arg_owned_content_file(input)
+        .map_err(|error| error.to_string())?
+        .timeout(timeout)
+        .run_cancellable(cancel)
+        .map_err(|error| error.to_string())?;
+    if !result.status.success() {
+        return Err(format!(
+            "Unable to extract audio: {}",
+            result.stderr_lossy()
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

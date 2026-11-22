@@ -495,8 +495,8 @@ impl FileManager {
     }
 
     fn list_copy_requests(&mut self, ctx: &egui::Context) {
-        if std::mem::take(&mut self.video_previews.copy_clip) {
-            self.copy_video_range(ctx);
+        if let Some(kind) = self.video_previews.copy_clip.take() {
+            self.copy_video_range(ctx, kind);
         }
         if let Some(frame) = self.video_previews.copy_frame.take() {
             self.preview_copies
