@@ -95,7 +95,7 @@ impl Previews {
         self.hover = None;
         self.frame = None;
     }
-    pub fn retain(&mut self, entries: &[&Entry]) {
+    pub fn retain(&mut self, entries: &[&Entry], keep_hover: bool) {
         self.visible_jobs = entries.len().clamp(1, *dispatch::FILE_LIMIT);
         let keys: BTreeMap<_, _> = entries
             .iter()
@@ -110,10 +110,11 @@ impl Previews {
         }) {
             self.selection = None;
         }
-        if self
-            .hover
-            .as_ref()
-            .is_some_and(|h| keys.get(&h.key.path) != Some(&h.key.revision))
+        if !keep_hover
+            || self
+                .hover
+                .as_ref()
+                .is_some_and(|h| keys.get(&h.key.path) != Some(&h.key.revision))
         {
             self.clear_hover();
         }
@@ -435,7 +436,7 @@ mod tests {
             .unwrap();
         assert_eq!(texture.id(), first);
         assert_eq!(texture.size(), [2, 64]);
-        previews.retain(&[]);
+        previews.retain(&[], false);
         assert!(previews.ready.is_empty());
         assert!(previews.pending.is_empty());
         assert!(cancelled.load(Ordering::Relaxed));
