@@ -375,7 +375,8 @@ impl Transport {
                 let time_ms = (seconds_at.unwrap_or(seconds) * 1000.0).round() as u64;
                 let frame = match (&player.image, player.frame_position_ms) {
                     (Some(image), Some(displayed_ms))
-                        if displayed_ms.abs_diff(time_ms) <= (duration * 1000.0 / width) as u64 =>
+                        if displayed_ms.abs_diff(time_ms)
+                            <= (duration * 1000.0 / f64::from(width)) as u64 =>
                     {
                         FrameCopy::Displayed(image.clone(), displayed_ms)
                     }

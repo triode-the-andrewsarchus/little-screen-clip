@@ -140,7 +140,7 @@ pub(super) fn drag_fractions(ui: &egui::Ui, response: &egui::Response) -> Option
 }
 
 pub(super) fn paint_range(
-    ui: &egui::Ui,
+    ui: &mut egui::Ui,
     rect: egui::Rect,
     (start, end): (f32, f32),
     label: &str,

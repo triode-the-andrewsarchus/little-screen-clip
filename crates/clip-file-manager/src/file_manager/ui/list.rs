@@ -98,7 +98,7 @@ impl<'a> ListPreviews<'a> {
         }
         let is_audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
         let mut response = self.response(ui, rect, entry, marked, colors);
-        let mut engaged = false;
+        let engaged;
         if entry.regular_file && super::super::midi_strip::is_midi(&entry.path) {
             self.paths.insert(entry.path.clone());
             engaged = super::super::midi_strip::show(
@@ -342,6 +342,25 @@ impl FileManager {
                 id,
                 Sense::focusable_noninteractive(),
             );
+        }
+        self.midi.render_feedback(ui, palette);
+        let scroll = self.list_scroll(ui, ROW_HEIGHT);
+        let Some(directory) = &self.directory else {
+            ui.label(if self.pending.is_some() {
+                "Loading folder…"
+            } else {
+                "Choose a folder or enter a path."
+            });
+            return;
+        };
+        if self.visible.is_empty() {
+            ui.label(if self.search.applied.is_some() {
+                "No matching files."
+            } else if directory.entries.is_empty() {
+                "This folder is empty."
+            } else {
+                "No visible items. Enable hidden files to see this folder's contents."
+            });
         }
         let selected = self
             .index
