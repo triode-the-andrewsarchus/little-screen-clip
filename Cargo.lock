@@ -6598,6 +6598,7 @@ dependencies = [
  "minedmap-render",
  "ncw",
  "oneyaml",
+ "oxideav-embroidery",
  "oxideav-pcx",
  "percent-encoding",
  "png 0.18.1",
@@ -8514,6 +8515,12 @@ checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
  "ttf-parser 0.25.1",
 ]
+
+[[package]]
+name = "oxideav-embroidery"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "002bed2e6764b582b781ceb05aaf59ba8d500f0d8e47d007e7e13008d7582828"
 
 [[package]]
 name = "oxideav-gltf"

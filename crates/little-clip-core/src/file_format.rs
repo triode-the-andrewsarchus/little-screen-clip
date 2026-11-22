@@ -16,6 +16,7 @@ pub enum Format {
     Database,
     Geography,
     Toolpath,
+    Embroidery,
     Multisample,
     Subtitle,
     Spreadsheet,
@@ -41,6 +42,7 @@ impl Format {
             "sqlite" | "sqlite3" | "db" | "db3" => Some(Self::Database),
             "gpx" | "geojson" | "rctrk" => Some(Self::Geography),
             "gcode" => Some(Self::Toolpath),
+            ext if crate::embroidery::supports_extension(ext) => Some(Self::Embroidery),
             "sfz" | "sf2" | "nki" | "dspreset" | "dslibrary" | "multisample" | "xrni" => {
                 Some(Self::Multisample)
             }
@@ -86,6 +88,8 @@ mod tests {
             ("a.GEOJSON", Format::Geography),
             ("a.RCTRK", Format::Geography),
             ("a.GCODE", Format::Toolpath),
+            ("a.PES", Format::Embroidery),
+            ("a.VIP", Format::Embroidery),
             ("a.SF2", Format::Multisample),
             ("a.SFZ", Format::Multisample),
             ("a.NKI", Format::Multisample),

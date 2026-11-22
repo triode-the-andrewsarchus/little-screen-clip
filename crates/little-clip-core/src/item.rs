@@ -574,6 +574,12 @@ impl ClipItem {
         if path.is_dir() {
             return Self::from_directory(path.to_path_buf());
         }
+        if crate::file_format::Format::for_path(path)
+            == Some(crate::file_format::Format::Embroidery)
+        {
+            // Keep the original file reference for clipboard restoration.
+            return Self::from_single_file(path);
+        }
         type MediaLoader = fn(&Path) -> Option<ClipItem>;
         let media: [(bool, MediaLoader); 8] = [
             (
