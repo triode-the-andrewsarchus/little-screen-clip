@@ -98,7 +98,9 @@ impl FrameCopy {
                 Still { png, time_ms }
             }
             Self::Position(source, time_ms) => {
-                source.frame(time_ms as f64 / 1000.0, [1920, 1920], cancel, true)?
+                let (width, height) = source.metadata.dimensions;
+                let edge = width.max(height).clamp(1, 1920);
+                source.frame(time_ms as f64 / 1000.0, [edge, edge], cancel, true)?
             }
         };
         little_clip_core::copy_bytes_to_system_clipboard(&frame.png, "image/png")
