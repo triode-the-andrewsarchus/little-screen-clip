@@ -91,6 +91,11 @@ impl SpreadsheetSheet {
             .map_or("", String::as_str)
     }
 
+    /// Returns whether the sheet has no grid cells to display.
+    pub fn is_empty(&self) -> bool {
+        self.total_rows == 0 || self.total_cols == 0
+    }
+
     /// Projects sheet cells into a visible grid, emitting each merged cell once.
     ///
     /// `rows` maps display rows to source rows in ascending order. Cell geometry
@@ -443,7 +448,7 @@ fn load_workbook(
         check_cancelled(cancelled)?;
         if let Ok(mut sheet) = sheet {
             sheet.workbook_index = index;
-            if preview.is_some() && sheet.total_rows > 0 && sheet.total_cols > 0 {
+            if preview.is_some() && !sheet.is_empty() {
                 return Ok(vec![sheet]);
             }
             sheets.push(sheet);

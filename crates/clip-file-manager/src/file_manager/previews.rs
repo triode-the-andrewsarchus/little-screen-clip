@@ -490,10 +490,10 @@ impl EntryPreviews {
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 3.0, colors.recessed);
         if let Some(sheet) = ready.and_then(|ready| ready.data.spreadsheet.as_ref()) {
-            if sheet.total_rows > 0 && sheet.total_cols > 0 {
-                clip_studios::spreadsheet_view::paint_sheet_corner(ui, rect, sheet, palette);
-            } else {
+            if sheet.is_empty() {
                 paint_spreadsheet_status(&painter, rect, "Empty sheet", colors);
+            } else {
+                clip_studios::spreadsheet_view::paint_sheet_corner(ui, rect, sheet, palette);
             }
             return Some(sheet.workbook_index);
         }

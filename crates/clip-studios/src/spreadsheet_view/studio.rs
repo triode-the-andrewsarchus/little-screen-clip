@@ -162,7 +162,7 @@ impl SpreadsheetViewerState {
                     return;
                 };
 
-                if sheet.total_rows == 0 || sheet.total_cols == 0 {
+                if sheet.is_empty() {
                     ui.label("Sheet is empty.");
                     let toast_tuple = self.status_toast.active(now).cloned();
                     shell.render_footer(ui, &toast_tuple, now);

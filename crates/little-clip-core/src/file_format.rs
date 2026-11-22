@@ -95,6 +95,12 @@ mod tests {
             ("a.VTT", Format::Subtitle),
             ("a.VCV", Format::VcvPatch),
             ("a.VCVSS", Format::VcvPatch),
+            ("budget.CSV", Format::Spreadsheet),
+            ("budget.TSV", Format::Spreadsheet),
+            ("budget.XLS", Format::Spreadsheet),
+            ("budget.XLSX", Format::Spreadsheet),
+            ("budget.XLSB", Format::Spreadsheet),
+            ("budget.ODS", Format::Spreadsheet),
         ] {
             assert_eq!(Format::for_path(Path::new(name)), Some(format));
         }
