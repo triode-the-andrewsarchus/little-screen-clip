@@ -6,7 +6,10 @@
 use crate::process::CommandRequest;
 use crate::staging::ArtifactStore;
 use lopdf::{Document, Object};
-use std::path::Path;
+use std::{
+    fs::File, ops::RangeInclusive, os::unix::fs::MetadataExt, path::Path, sync::atomic::AtomicBool,
+    time::Duration,
+};
 
 /// Metadata summary extracted from a PDF document.
 #[derive(Debug, Clone, PartialEq)]
@@ -289,6 +292,54 @@ pub fn extract_pdf_page_text(path: &Path, page: usize) -> Result<String, String>
         ));
     }
     Ok(output.stdout_lossy().trim_matches('\u{c}').to_owned())
+}
+
+/// Writes an inclusive, one-based range of PDF pages to a new staged file.
+///
+/// QPDF copies page objects and their resources into a fresh document. Both
+/// arguments are retained ordinary-file handles. The caller owns publication
+/// and cleanup of the staged result, including after a failed extraction.
+///
+/// # Errors
+/// Returns an error for an invalid range, a nonempty or aliased output,
+/// unavailable QPDF, cancellation, or a failed extraction.
+pub fn extract_pdf_pages(
+    input: &File,
+    pages: RangeInclusive<usize>,
+    output: &File,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    if *pages.start() == 0 || pages.is_empty() {
+        return Err("Select a valid PDF page range".into());
+    }
+    let source_info = input.metadata().map_err(|error| error.to_string())?;
+    let output_info = output.metadata().map_err(|error| error.to_string())?;
+    if output_info.len() != 0
+        || (source_info.dev(), source_info.ino()) == (output_info.dev(), output_info.ino())
+    {
+        return Err("PDF extraction requires a new output file".into());
+    }
+    let extractor = crate::command_available("qpdf").ok_or("Install QPDF to copy PDF pages")?;
+    let result = CommandRequest::new(extractor)
+        .die_with_parent()
+        .args(["--warning-exit-0", "--empty", "--pages"])
+        .arg_owned_content_file(input.try_clone().map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?
+        .arg(format!("{}-{}", pages.start(), pages.end()))
+        .arg("--")
+        .arg_owned_content_file(output.try_clone().map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?
+        .timeout(Duration::from_secs(120))
+        .max_output_bytes(16 * 1024)
+        .run_cancellable(cancel)
+        .map_err(|error| format!("Could not copy PDF pages: {error}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "Could not copy PDF pages: {}",
+            result.stderr_lossy().trim()
+        ));
+    }
+    Ok(())
 }
 
 /// Deletes specified pages from a PDF and writes the remaining pages to `output`
@@ -678,6 +729,34 @@ mod tests {
             .remove(b"Outlines");
         document.save(&path).unwrap();
         assert!(read_pdf_outline(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn page_extraction_keeps_only_the_requested_pages_and_their_rendering() {
+        if crate::command_available("qpdf").is_none() {
+            return;
+        }
+        let (directory, source) = navigation_fixture();
+        let output = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let input = crate::kernel_interface::open_content(&source, true).unwrap();
+        let cancel = AtomicBool::new(false);
+        extract_pdf_pages(&input, 2..=3, output.as_file(), &cancel).unwrap();
+
+        assert_eq!(get_pdf_info(output.path()).unwrap().page_count, 2);
+        let text = extract_pdf_page_text(output.path(), 1).unwrap();
+        assert!(text.contains("Amber lighthouse"));
+        assert!(!text.contains("Cobalt needle"));
+        for page in 1..=2 {
+            assert_eq!(
+                render_pdf_page_thumbnail(output.path(), page, 96).unwrap(),
+                render_pdf_page_thumbnail(&source, page + 1, 96).unwrap(),
+            );
+        }
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+        assert!(extract_pdf_pages(&input, 1..=1, output.as_file(), &cancel).is_err());
+        let invalid = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        assert!(extract_pdf_pages(&input, 2..=4, invalid.as_file(), &cancel).is_err());
     }
 
     #[test]
