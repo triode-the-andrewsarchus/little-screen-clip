@@ -165,7 +165,7 @@ impl Clip {
         preview_copy::copy_file(
             &self.source.path,
             &format!("{start}-{end}ms"),
-            Some("mp4"),
+            "mp4",
             |output| self.write(output, cancel),
         )?;
         Ok(format!(
@@ -264,12 +264,13 @@ pub(in crate::file_manager) fn timestamp(ms: u64) -> String {
     format!("{}:{:02}.{:03}", ms / 60_000, ms / 1000 % 60, ms % 1000)
 }
 
-type Endpoints = [Result<(little_clip_core::ImageThumbnail, u64), String>; 2];
+type Endpoints = [Result<little_clip_core::ImageThumbnail, String>; 2];
 pub(in crate::file_manager) struct Selection {
     pub clip: Clip,
     pub revision: u64,
+    pub preview_open: bool,
     pending: Option<Task<Endpoints>>,
-    pub frames: Option<[Result<(TextureHandle, u64), String>; 2]>,
+    pub frames: Option<[Result<TextureHandle, String>; 2]>,
 }
 
 impl Selection {
@@ -277,6 +278,7 @@ impl Selection {
         Self {
             clip,
             revision,
+            preview_open: false,
             pending: None,
             frames: None,
         }
@@ -287,6 +289,7 @@ impl Selection {
     }
 
     pub fn prepare_frames(&mut self, ctx: &Context) {
+        self.preview_open = true;
         let clip = self.clip.clone();
         let ctx = ctx.clone();
         self.pending = Some(Task::start(
@@ -296,10 +299,10 @@ impl Selection {
                 let start = clip.start_ms as f64 / 1000.0;
                 let end = clip.end_ms as f64 / 1000.0 - 0.000001;
                 let frames = [(start, false), (end, true)].map(|(time, at_or_before)| {
-                    let frame = clip.source.frame(time, [192, 108], cancel, at_or_before)?;
-                    let image = little_clip_core::ImageThumbnail::generate(&frame.png, 192, 108)
-                        .ok_or("Cannot display frame")?;
-                    Ok((image, frame.time_ms))
+                    let size = [768, 512];
+                    let frame = clip.source.frame(time, size, cancel, at_or_before)?;
+                    little_clip_core::ImageThumbnail::generate(&frame.png, size[0], size[1])
+                        .ok_or_else(|| "Cannot display frame".into())
                 });
                 ctx.request_repaint();
                 frames
@@ -313,11 +316,8 @@ impl Selection {
         };
         self.pending = None;
         self.frames = Some(match result {
-            Ok(frames) => frames.map(|frame| {
-                frame.map(|(image, time_ms)| {
-                    (texture(ctx, "video_clip_boundary".into(), image), time_ms)
-                })
-            }),
+            Ok(frames) => frames
+                .map(|frame| frame.map(|image| texture(ctx, "video_clip_boundary".into(), image))),
             Err(error) => [Err(error.to_string()), Err(error.to_string())],
         });
         ctx.request_repaint();

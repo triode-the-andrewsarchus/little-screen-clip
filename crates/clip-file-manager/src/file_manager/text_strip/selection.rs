@@ -109,10 +109,10 @@ impl Selected {
     ) -> (bool, bool) {
         let (first, last) = self.lines;
         let extent = document.display_extent(&self.bins, width);
-        let mut copy = preview_copy::paint_range(
+        preview_copy::paint_range(ui, interaction.rect, extent);
+        let mut copy = preview_copy::paint_range_footer(
             ui,
             interaction.rect,
-            extent,
             &format!("Lines {first}–{last}  ·  Ctrl+C"),
             "Copy lines",
         );
@@ -140,25 +140,31 @@ impl Selected {
     }
 
     pub fn export(&self, cancel: &AtomicBool) -> Result<String, String> {
+        let bytes = self.read(cancel)?;
+        little_clip_core::copy_text_to_system_clipboard(&String::from_utf8_lossy(&bytes))
+            .map_err(|error| error.to_string())?;
         let (first, last) = self.lines;
-        let label = format!("lines-{first}-{last}");
-        preview_copy::copy_file(&self.path, &label, None, |output| {
-            self.write(output, cancel)
-        })?;
-        Ok(format!("Copied lines {first}–{last} as a file"))
+        Ok(format!("Copied lines {first}–{last}"))
     }
-    fn write(&self, output: &mut impl std::io::Write, cancel: &AtomicBool) -> Result<(), String> {
+
+    fn read(&self, cancel: &AtomicBool) -> Result<Vec<u8>, String> {
         preview_copy::read_range(&self.context, &self.path, &self.source, cancel, |input| {
             input
                 .seek(SeekFrom::Start(self.bytes.start))
                 .map_err(|error| error.to_string())?;
             let length = self.bytes.end - self.bytes.start;
-            let copied = std::io::copy(&mut input.take(length), output)
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(length as usize)
                 .map_err(|error| error.to_string())?;
-            if copied != length {
+            let copied = input
+                .take(length)
+                .read_to_end(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            if copied as u64 != length {
                 return Err("Text source changed while copying".into());
             }
-            Ok(())
+            Ok(bytes)
         })
     }
 }
@@ -171,7 +177,7 @@ mod tests {
     fn reverse_minimap_drag_keeps_both_lines_and_copies_the_original_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lines.txt");
-        std::fs::write(&path, b"one\r\ntwo\rthree\nfour").unwrap();
+        std::fs::write(&path, "one\r\n二\rthree\nfour").unwrap();
         let cancel = AtomicBool::new(false);
         let entry = crate::file_manager::filesystem::read_directory(dir.path(), &cancel)
             .unwrap()
@@ -228,10 +234,8 @@ mod tests {
         let selected = selection.range.unwrap();
         assert_eq!(selected.lines, (2, 3));
         assert!(ctx.memory(|memory| memory.has_focus(focus_id())));
-        let mut bytes = Vec::new();
-        selected.write(&mut bytes, &cancel).unwrap();
-        assert_eq!(bytes, b"two\rthree\n");
+        assert_eq!(selected.read(&cancel).unwrap(), "二\rthree\n".as_bytes());
         std::fs::write(&path, b"changed").unwrap();
-        assert!(selected.write(&mut Vec::new(), &cancel).is_err());
+        assert!(selected.read(&cancel).is_err());
     }
 }

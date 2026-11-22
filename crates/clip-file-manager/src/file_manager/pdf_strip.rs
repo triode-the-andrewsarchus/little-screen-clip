@@ -117,12 +117,7 @@ impl Pages {
             2.0,
             colors.accent.gamma_multiply(0.35),
         );
-        if preview_copy::paint_range_footer(
-            ui,
-            layout.rect,
-            &format!("{}  ·  Ctrl+C", selected.label()),
-            "Copy pages",
-        ) {
+        if preview_copy::paint_range_footer(ui, layout.rect, &selected.label(), "Copy pages") {
             self.selection.requested = Some(selected.clone());
             ui.memory_mut(|memory| memory.request_focus(focus_id()));
         }

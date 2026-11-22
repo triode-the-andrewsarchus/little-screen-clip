@@ -141,10 +141,10 @@ fn timeline_interaction(
     }
     if let Some(selection) = previews
         .selection
-        .as_ref()
+        .as_mut()
         .filter(|selection| selection.matches(&entry.path, entry.revision))
     {
-        previews.copy_clip |= paint_selection(ui, rect, selection);
+        previews.copy_clip |= show_selection(ui, &response, selection);
     }
     let click_time = if response.clicked() {
         response.interact_pointer_pos().map(at)
@@ -154,59 +154,65 @@ fn timeline_interaction(
     (dragging, click_time)
 }
 
-fn paint_selection(ui: &mut Ui, rect: Rect, selection: &Selection) -> bool {
+fn show_selection(ui: &Ui, response: &egui::Response, selection: &mut Selection) -> bool {
     let clip = &selection.clip;
     let duration = clip.source.metadata.duration_ms as f64;
-    let copy = preview_copy::paint_range(
+    preview_copy::paint_range(
         ui,
-        rect,
+        response.rect,
         (
             (clip.start_ms as f64 / duration) as f32,
             (clip.end_ms as f64 / duration) as f32,
         ),
-        &format!(
-            "{}–{}  ·  Ctrl+C",
-            timestamp(clip.start_ms),
-            timestamp(clip.end_ms)
-        ),
-        "Copy clip",
     );
-    for (index, label) in ["Start", "End"].into_iter().enumerate() {
-        let width = (rect.width() * 0.23).clamp(1.0, 110.0);
-        let left = if index == 0 {
-            rect.left()
-        } else {
-            rect.right() - width
-        };
-        let frame = Rect::from_min_max(
-            pos2(left, rect.top()),
-            pos2(
-                left + width,
-                (rect.bottom() - preview_copy::RANGE_FOOTER_HEIGHT).max(rect.top() + 1.0),
-            ),
-        );
-        paint_endpoint(
-            ui,
-            frame,
-            label,
-            selection.frames.as_ref().map(|frames| &frames[index]),
-        );
-    }
+    let screen = ui.ctx().content_rect();
+    let width = response
+        .rect
+        .width()
+        .clamp(320.0, 720.0)
+        .min((screen.width() - 24.0).max(1.0));
+    let height = (width * 0.32).min(screen.height() * 0.35);
+    let copy = egui::Popup::from_response(response)
+        .open_bool(&mut selection.preview_open)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .gap(4.0)
+        .show(|ui| {
+            ui.set_width(width);
+            ui.columns_const(|[left, right]| {
+                for (index, (column, label)) in
+                    [(left, "Start"), (right, "End")].into_iter().enumerate()
+                {
+                    show_endpoint(
+                        column,
+                        height,
+                        label,
+                        selection.frames.as_ref().map(|frames| &frames[index]),
+                    );
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.button("Copy clip").clicked()
+            })
+            .inner
+        })
+        .is_some_and(|popup| popup.inner);
     if copy {
         ui.memory_mut(|memory| memory.request_focus(focus_id()));
     }
     copy
 }
 
-fn paint_endpoint(
+fn show_endpoint(
     ui: &mut Ui,
-    rect: Rect,
+    height: f32,
     label: &str,
-    frame: Option<&Result<(egui::TextureHandle, u64), String>>,
+    frame: Option<&Result<egui::TextureHandle, String>>,
 ) {
+    ui.label(label);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, egui::Color32::from_black_alpha(210));
-    if let Some(Ok((texture, _))) = frame {
+    painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+    if let Some(Ok(texture)) = frame {
         let size = texture.size_vec2();
         let scale = (rect.width() / size.x).min(rect.height() / size.y);
         painter.image(
@@ -215,19 +221,19 @@ fn paint_endpoint(
             unit_uv(),
             Color32::WHITE,
         );
+    } else {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            if frame.is_some() {
+                "Unavailable"
+            } else {
+                "Loading…"
+            },
+            FontId::proportional(13.0),
+            ui.visuals().text_color(),
+        );
     }
-    let label = match frame {
-        Some(Ok((_, time))) => format!("{label} {}", timestamp(*time)),
-        Some(Err(_)) => format!("{label} unavailable"),
-        None => format!("{label}…"),
-    };
-    painter.text(
-        rect.left_bottom() - vec2(-2.0, 1.0),
-        egui::Align2::LEFT_BOTTOM,
-        label,
-        FontId::monospace(10.0),
-        Color32::WHITE,
-    );
 }
 
 pub(in crate::file_manager) fn paint_timelens(ui: &Ui, rect: Rect, texture: &egui::TextureHandle) {

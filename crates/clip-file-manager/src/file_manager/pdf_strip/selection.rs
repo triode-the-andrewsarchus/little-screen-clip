@@ -94,7 +94,7 @@ impl Pages {
 
     pub fn export(self, context: &PreviewContext, cancel: &AtomicBool) -> Result<String, String> {
         let name = format!("pages-{}-{}", self.range.start(), self.range.end());
-        preview_copy::copy_file(&self.path, &name, Some("pdf"), |output| {
+        preview_copy::copy_file(&self.path, &name, "pdf", |output| {
             self.write(context, output, cancel)
         })?;
         Ok(format!("Copied {} as PDF", self.label().to_lowercase()))

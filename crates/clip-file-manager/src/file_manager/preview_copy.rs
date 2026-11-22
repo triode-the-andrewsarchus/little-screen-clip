@@ -74,7 +74,7 @@ pub(super) fn read_range<T>(
 pub(super) fn copy_file(
     source: &Path,
     range_name: &str,
-    extension: Option<&str>,
+    extension: &str,
     write: impl FnOnce(&mut File) -> Result<(), String>,
 ) -> Result<(), String> {
     let staging =
@@ -90,13 +90,9 @@ pub(super) fn copy_file(
         .unwrap_or("segment");
     let stem = &stem[..stem.floor_char_boundary(stem.len().min(120))];
     let prefix = format!("{stem}-{range_name}-");
-    let suffix = extension
-        .or_else(|| source.extension().and_then(|ext| ext.to_str()))
-        .filter(|ext| ext.len() <= 32)
-        .map_or_else(String::new, |ext| format!(".{ext}"));
     let mut output = tempfile::Builder::new()
         .prefix(&prefix)
-        .suffix(&suffix)
+        .suffix(&format!(".{extension}"))
         .tempfile_in(&anchor)
         .map_err(|error| error.to_string())?;
     write(output.as_file_mut())?;
@@ -157,13 +153,7 @@ fn drag_fractions(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)
 
 pub(super) const RANGE_FOOTER_HEIGHT: f32 = 24.0;
 
-pub(super) fn paint_range(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    (start, end): (f32, f32),
-    label: &str,
-    action: &str,
-) -> bool {
+pub(super) fn paint_range(ui: &egui::Ui, rect: egui::Rect, (start, end): (f32, f32)) {
     use egui::{Rect, Stroke, pos2};
     let painter = ui.painter_at(rect);
     let selection = Rect::from_min_max(
@@ -178,7 +168,6 @@ pub(super) fn paint_range(
             Stroke::new(2.0, accent),
         );
     }
-    paint_range_footer(ui, rect, label, action)
 }
 
 pub(super) fn paint_range_footer(
