@@ -714,7 +714,7 @@ impl ImagePreviewState {
             self.film_sim_state.cancel_thumbnail_batch();
         }
         if prev_mode == ImageToolMode::CreativeFx && target_mode != ImageToolMode::CreativeFx {
-            self.creative_fx_state.clear_byte_bend_audition();
+            self.creative_fx_state.clear_byte_bend_interaction();
             self.creative_fx_state.cancel_render();
             self.cancel_creative_fx_thumbnail_batch();
         }

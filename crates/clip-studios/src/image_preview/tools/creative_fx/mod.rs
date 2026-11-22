@@ -293,8 +293,8 @@ impl CreativeFxState {
         self.byte_bend.params.profile = ByteBendProfile::from_bytes(bytes);
     }
 
-    pub(in crate::image_preview) fn clear_byte_bend_audition(&mut self) {
-        self.byte_bend.audition = None;
+    pub(in crate::image_preview) fn clear_byte_bend_interaction(&mut self) {
+        self.byte_bend.clear_interaction();
     }
 
     fn show_full_effect(&self) -> bool {
@@ -331,7 +331,7 @@ impl CreativeFxState {
     pub(in crate::image_preview) fn select_fx(&mut self, fx_type: CreativeFxType) {
         if self.selected_fx != fx_type {
             self.selected_fx = fx_type;
-            self.byte_bend.audition = None;
+            self.byte_bend.clear_interaction();
             self.selection_revision = self.selection_revision.wrapping_add(1);
             self.mark_dirty();
         }

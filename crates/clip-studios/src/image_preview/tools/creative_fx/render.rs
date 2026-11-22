@@ -245,6 +245,24 @@ impl ImagePreviewState {
             && self.creative_fx_preview_is_current()
     }
 
+    pub(super) fn render_creative_fx_apply_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        width: f32,
+    ) {
+        let button = clip_ui::buttons::ButtonRole::Primary
+            .button_with_icon(Some(crate::icons::Icon::Check), "Apply to Image", palette)
+            .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT));
+        if ui
+            .add_enabled(self.can_apply_creative_fx(), button)
+            .on_hover_text("Commit Creative FX result to image (pushes to undo stack)")
+            .clicked()
+        {
+            self.apply_creative_fx();
+        }
+    }
+
     /// Commit creative FX result into current_rgba and push to undo stack.
     pub fn apply_creative_fx(&mut self) {
         self.invalidate_stale_creative_fx_masks();

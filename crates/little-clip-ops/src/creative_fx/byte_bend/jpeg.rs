@@ -46,6 +46,10 @@ impl<'a> BlockImage<'a> {
     }
 }
 
+pub(super) fn stream_len(image: &RgbaImage) -> usize {
+    BlockImage::new(image).len()
+}
+
 pub(super) fn sample(image: &RgbaImage, address: u16) -> (usize, u8) {
     let blocks = BlockImage::new(image);
     let index = address_offset(address, blocks.len());

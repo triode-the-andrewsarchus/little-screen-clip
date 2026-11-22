@@ -1683,6 +1683,7 @@ dependencies = [
  "clip-ui",
  "egui",
  "egui_extras",
+ "fastrand",
  "filmr 0.13.2",
  "filmr 0.13.2 (git+https://github.com/W-Mai/filmr?rev=fee388e213dd77bfe6977b63071b1c136213373a)",
  "fontdue",

@@ -84,6 +84,23 @@ pub struct ByteBendParams {
     pub depth_mask: DepthMaskConfig,
 }
 
+impl ByteBendParams {
+    /// Removes every edit whose byte window covers this address.
+    pub fn restore_at(&mut self, image: &RgbaImage, address: u16) -> bool {
+        if image.is_empty() {
+            return false;
+        }
+        let len = match self.profile {
+            ByteBendProfile::Jpeg => jpeg::stream_len(image),
+            _ => image.as_raw().len() / 4 * 3,
+        };
+        let index = address_offset(address, len);
+        let before = self.edits.len();
+        self.edits.retain(|edit| !edit.window(len).contains(&index));
+        self.edits.len() != before
+    }
+}
+
 fn address_offset(address: u16, len: usize) -> usize {
     (u64::from(address) * len as u64 / ADDRESS_SPACE) as usize
 }
@@ -304,6 +321,38 @@ mod tests {
                 variation,
             }],
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn restoring_an_address_removes_all_covering_edits_and_keeps_other_edits() {
+        let source = RgbaImage::new(64, 64);
+        for profile in [
+            ByteBendProfile::Png,
+            ByteBendProfile::Jpeg,
+            ByteBendProfile::WebP,
+        ] {
+            let edit = ByteBendEdit {
+                address: 20_000,
+                span: 4_096,
+                mode: ByteBendMode::FlipBits,
+                variation: 0,
+            };
+            let neighbor = ByteBendEdit {
+                address: 20_200,
+                ..edit
+            };
+            let untouched = ByteBendEdit {
+                address: 40_000,
+                ..edit
+            };
+            let mut params = ByteBendParams {
+                profile,
+                edits: vec![edit, neighbor, untouched],
+                ..Default::default()
+            };
+            assert!(params.restore_at(&source, edit.address));
+            assert_eq!(params.edits, [untouched]);
         }
     }
 

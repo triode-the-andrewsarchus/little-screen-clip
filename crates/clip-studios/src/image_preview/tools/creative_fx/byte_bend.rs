@@ -1,22 +1,29 @@
 use super::*;
+use egui::scroll_area::{DragScroll, ScrollSource};
 use little_clip_ops::creative_fx::byte_bend_sample;
 
 const MAP_COLUMNS: usize = 28;
-const MAP_ROWS: usize = 9;
+const MAP_ROWS: usize = 96;
 const MAP_CELLS: usize = MAP_COLUMNS * MAP_ROWS;
-const ADDRESS_SPACE: u32 = 65_536;
+const MIN_MAP_HEIGHT: f32 = 96.0;
+const DEFAULT_SPAN: u16 = 600;
+const MIN_SPAN: u16 = 13;
+const MAX_SPAN: u16 = 4_096;
+const HOLD_SECONDS: f64 = 0.18;
+
+struct HeldEdit {
+    edit: ByteBendEdit,
+    started: f64,
+    adjusting: bool,
+}
 
 pub(in crate::image_preview) struct ByteBendEditor {
     pub(super) params: ByteBendParams,
     pub(super) audition: Option<ByteBendEdit>,
     pub(super) full_preview: bool,
-    mode: ByteBendMode,
-    span: u16,
-    variation: u8,
-    zoom: u32,
-    location: u32,
-    wheel: f32,
-    map: Option<(u64, u32, u32, egui::TextureHandle)>,
+    held: Option<HeldEdit>,
+    suppressed_hover: Option<u16>,
+    map: Option<(u64, egui::TextureHandle)>,
 }
 
 impl Default for ByteBendEditor {
@@ -25,43 +32,71 @@ impl Default for ByteBendEditor {
             params: ByteBendParams::default(),
             audition: None,
             full_preview: true,
-            mode: ByteBendMode::FlipBits,
-            span: 600,
-            variation: 4,
-            zoom: 1,
-            location: ADDRESS_SPACE / 2,
-            wheel: 0.0,
+            held: None,
+            suppressed_hover: None,
             map: None,
         }
     }
 }
 
 impl ByteBendEditor {
-    pub(super) fn reset(&mut self) {
-        let profile = self.params.profile;
-        *self = Self::default();
-        self.params.profile = profile;
+    pub(super) fn clear_interaction(&mut self) {
+        self.audition = None;
+        self.held = None;
+        self.suppressed_hover = None;
     }
 
     pub(in crate::image_preview) fn clear_source(&mut self) {
         self.params.edits.clear();
-        self.audition = None;
+        self.clear_interaction();
         self.map = None;
     }
 
     pub(super) fn preview_params(&self) -> ByteBendParams {
         let mut params = self.params.clone();
-        params.edits.extend(self.audition);
+        if let Some(edit) = self.audition {
+            params.edits.retain(|staged| staged.address != edit.address);
+            params.edits.push(edit);
+        }
         params
     }
 
-    fn range(&self) -> (u32, u32) {
-        let length = ADDRESS_SPACE / self.zoom;
-        let start = self
-            .location
-            .saturating_sub(length / 2)
-            .min(ADDRESS_SPACE - length);
-        (start, length)
+    fn stage(&mut self, edit: ByteBendEdit) {
+        self.params
+            .edits
+            .retain(|staged| staged.address != edit.address);
+        self.params.edits.push(edit);
+    }
+
+    fn edit_at(&self, address: u16) -> Option<ByteBendEdit> {
+        let previous = self
+            .params
+            .edits
+            .iter()
+            .find(|edit| edit.address == address);
+        if self.params.edits.len() >= MAX_BYTE_BEND_EDITS && previous.is_none() {
+            return None;
+        }
+        let mut modes = [
+            ByteBendMode::FlipBits,
+            ByteBendMode::Repeat,
+            ByteBendMode::Dropout,
+        ];
+        fastrand::shuffle(&mut modes);
+        let mode = modes
+            .into_iter()
+            .find(|mode| previous.is_none_or(|edit| *mode != edit.mode))?;
+        let variation = if let Some(edit) = previous {
+            (edit.variation + fastrand::u8(1..8)) % 8
+        } else {
+            fastrand::u8(0..8)
+        };
+        Some(ByteBendEdit {
+            address,
+            span: previous.map_or(DEFAULT_SPAN, |edit| edit.span),
+            mode,
+            variation,
+        })
     }
 
     fn map_texture(
@@ -70,16 +105,14 @@ impl ByteBendEditor {
         image: &RgbaImage,
         revision: u64,
     ) -> egui::TextureId {
-        let (start, length) = self.range();
-        if let Some((cached_revision, cached_start, cached_length, texture)) = &self.map
-            && (*cached_revision, *cached_start, *cached_length) == (revision, start, length)
+        if let Some((cached_revision, texture)) = &self.map
+            && *cached_revision == revision
         {
             return texture.id();
         }
         let pixels = (0..MAP_CELLS)
             .map(|cell| {
-                let address = cell_address(start, length, cell);
-                let sample = byte_bend_sample(image, self.params.profile, address)
+                let sample = byte_bend_sample(image, self.params.profile, cell_address(cell))
                     .map_or(0, |(_, value)| value);
                 let signal = (sample as i8).unsigned_abs();
                 Color32::from_rgb(24 + signal / 2, 33 + signal, 47 + signal)
@@ -91,17 +124,8 @@ impl ByteBendEditor {
             egui::TextureOptions::NEAREST,
         );
         let id = texture.id();
-        self.map = Some((revision, start, length, texture));
+        self.map = Some((revision, texture));
         id
-    }
-
-    fn edit_at(&self, address: u16) -> ByteBendEdit {
-        ByteBendEdit {
-            address,
-            span: self.span,
-            mode: self.mode,
-            variation: self.variation,
-        }
     }
 
     fn show_map(
@@ -110,29 +134,40 @@ impl ByteBendEditor {
         image: &RgbaImage,
         revision: u64,
         accent: Color32,
-    ) -> (Option<ByteBendEdit>, bool) {
-        ui.label("Hover to preview. Click to stage. Scroll to vary.");
-        ui.horizontal(|ui| {
-            ui.label("Map");
-            for (zoom, label) in [(1, "Full"), (4, "4×"), (16, "16×")] {
-                if ui.selectable_label(self.zoom == zoom, label).clicked() {
-                    self.zoom = zoom;
-                }
-            }
-        });
-        if self.zoom > 1 {
-            ui.add(
-                egui::Slider::new(&mut self.location, 0..=ADDRESS_SPACE - 1)
-                    .show_value(false)
-                    .text("Browse"),
-            );
-        }
-        let (start, length) = self.range();
+    ) -> bool {
+        let height = ui.available_height().max(1.0);
+        let edit_before = self.audition;
+        let changed = egui::ScrollArea::vertical()
+            .id_salt("byte_bend_scroll")
+            .max_height(height)
+            .min_scrolled_height(MIN_MAP_HEIGHT.min(height))
+            .auto_shrink([false, false])
+            .scroll_source(ScrollSource {
+                drag: DragScroll::Never,
+                mouse_wheel: self.held.is_none(),
+                ..Default::default()
+            })
+            .show(ui, |ui| {
+                self.show_map_grid(ui, image, revision, accent, height)
+            })
+            .inner;
+        changed || edit_before != self.audition
+    }
+
+    fn show_map_grid(
+        &mut self,
+        ui: &mut egui::Ui,
+        image: &RgbaImage,
+        revision: u64,
+        accent: Color32,
+        height: f32,
+    ) -> bool {
+        let width = ui.available_width().max(1.0);
+        let grid_height = MAP_ROWS as f32 * (width / MAP_COLUMNS as f32).max(8.0);
+        let size = Vec2::new(width, grid_height.max(height));
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        let response = response.on_hover_cursor(egui::CursorIcon::Crosshair);
         let map = self.map_texture(ui.ctx(), image, revision);
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width().max(1.0), 82.0),
-            egui::Sense::click(),
-        );
         let painter = ui.painter_at(rect);
         painter.image(
             map,
@@ -140,165 +175,266 @@ impl ByteBendEditor {
             Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
             Color32::WHITE,
         );
-        paint_staged_bytes(&painter, rect, start, length, &self.params.edits, accent);
-        self.change_variation(ui, &response);
-        let hovered = response.hover_pos().map(|point| hovered_cell(rect, point));
-        let candidate = hovered.map(|cell| self.edit_at(cell_address(start, length, cell)));
-        if let Some(edit) = candidate
-            && self.zoom == 1
+        let hover = response.hover_pos().map(|point| map_cell(rect, point));
+        let visible = rect.intersect(ui.clip_rect());
+        let changed = self.interact(ui, &response, visible, image, hover.map(cell_address));
+        for edit in &self.params.edits {
+            outline_cell(&painter, rect, address_cell(edit.address), accent);
+        }
+        if let Some(cell) = self
+            .held
+            .as_ref()
+            .map(|hold| address_cell(hold.edit.address))
+            .or(hover)
         {
-            self.location = u32::from(edit.address);
+            outline_cell(&painter, rect, cell, Color32::WHITE);
         }
-        if let Some(cell) = hovered {
-            let outline = map_cell_rect(rect, cell);
-            painter.rect_stroke(
-                outline,
-                0,
-                Stroke::new(1.25, Color32::WHITE),
-                egui::StrokeKind::Inside,
-            );
-        }
-        (candidate, response.clicked())
+        changed
     }
 
-    fn change_variation(&mut self, ui: &egui::Ui, response: &egui::Response) {
-        if !response.hovered() {
-            self.wheel = 0.0;
-            return;
+    fn interact(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        visible: Rect,
+        image: &RgbaImage,
+        hovered: Option<u16>,
+    ) -> bool {
+        if self.suppressed_hover != hovered {
+            self.suppressed_hover = None;
         }
-        let scroll = ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta.y));
-        self.wheel += scroll;
-        let steps = (self.wheel / 32.0).trunc() as i32;
-        self.wheel -= steps as f32 * 32.0;
-        self.variation = (i32::from(self.variation) + steps).rem_euclid(8) as u8;
+        if response.secondary_clicked()
+            && let Some(address) = hovered
+        {
+            self.suppressed_hover = Some(address);
+            self.audition = None;
+            self.held = None;
+            return self.params.restore_at(image, address);
+        }
+
+        if self.held.is_none() {
+            self.held = self.begin_hold(ui, response, visible);
+        }
+        if let Some(hold) = self.held.take() {
+            self.suppressed_hover = None;
+            let staged = self.update_hold(ui, response, visible, hold);
+            if staged {
+                self.suppressed_hover = hovered;
+            }
+            return staged;
+        }
+
+        self.audition = hovered
+            .filter(|address| self.suppressed_hover != Some(*address))
+            .filter(|address| {
+                !self
+                    .params
+                    .edits
+                    .iter()
+                    .any(|edit| edit.address == *address)
+            })
+            .filter(|_| self.params.edits.len() < MAX_BYTE_BEND_EDITS)
+            .map(|address| ByteBendEdit {
+                address,
+                span: DEFAULT_SPAN,
+                mode: ByteBendMode::FlipBits,
+                variation: 4,
+            });
+        false
+    }
+
+    fn begin_hold(
+        &self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        visible: Rect,
+    ) -> Option<HeldEdit> {
+        let primary = egui::PointerButton::Primary;
+        let (pressed_here, pointer, started) = ui.input(|input| {
+            (
+                input.pointer.button_pressed(primary) && response.is_pointer_button_down_on(),
+                input.pointer.press_origin().or(input.pointer.latest_pos()),
+                input.time,
+            )
+        });
+        if !pressed_here && !response.clicked_by(primary) {
+            return None;
+        }
+        let point = pointer.filter(|point| visible.contains(*point))?;
+        let edit = self.edit_at(cell_address(map_cell(response.rect, point)))?;
+        Some(HeldEdit {
+            edit,
+            started,
+            adjusting: false,
+        })
+    }
+
+    fn update_hold(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        visible: Rect,
+        mut hold: HeldEdit,
+    ) -> bool {
+        let primary = egui::PointerButton::Primary;
+        let (now, down, released, point) = ui.input(|input| {
+            (
+                input.time,
+                input.pointer.button_down(primary),
+                input.pointer.button_released(primary),
+                input.pointer.latest_pos().filter(|_| input.focused),
+            )
+        });
+        let Some(point) = point else {
+            self.audition = None;
+            return false;
+        };
+        let until_adjusting = HOLD_SECONDS - (now - hold.started);
+        hold.adjusting |= until_adjusting <= 0.0 || response.dragged_by(primary);
+        if hold.adjusting {
+            adjust_edit(&mut hold.edit, visible, point);
+        }
+        if down {
+            if !hold.adjusting {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(until_adjusting));
+            }
+            self.audition = Some(hold.edit);
+            self.held = Some(hold);
+            return false;
+        }
+        self.audition = None;
+        let stage = response.clicked_by(primary) || (released && hold.adjusting);
+        if stage {
+            self.stage(hold.edit);
+        }
+        stage
     }
 }
 
-fn cell_address(start: u32, length: u32, cell: usize) -> u16 {
-    (start + length * (2 * cell as u32 + 1) / (2 * MAP_CELLS as u32)) as u16
+fn adjust_edit(edit: &mut ByteBendEdit, rect: Rect, point: Pos2) {
+    let x = ((point.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
+    let y = ((rect.bottom() - point.y) / rect.height().max(1.0)).clamp(0.0, 1.0);
+    edit.span = egui::lerp(f32::from(MIN_SPAN)..=f32::from(MAX_SPAN), x).round() as u16;
+    edit.variation = (7.0 * y).round() as u8;
 }
 
-fn hovered_cell(rect: Rect, pointer: Pos2) -> usize {
-    let col = ((pointer.x - rect.left()) / rect.width() * MAP_COLUMNS as f32) as usize;
-    let row = ((pointer.y - rect.top()) / rect.height() * MAP_ROWS as f32) as usize;
+fn cell_address(cell: usize) -> u16 {
+    ((2 * cell + 1) * 65_536 / (2 * MAP_CELLS)) as u16
+}
+
+fn address_cell(address: u16) -> usize {
+    usize::from(address) * MAP_CELLS / 65_536
+}
+
+fn map_cell(rect: Rect, point: Pos2) -> usize {
+    let col = ((point.x - rect.left()) / rect.width() * MAP_COLUMNS as f32) as usize;
+    let row = ((point.y - rect.top()) / rect.height() * MAP_ROWS as f32) as usize;
     row.min(MAP_ROWS - 1) * MAP_COLUMNS + col.min(MAP_COLUMNS - 1)
 }
 
-impl ImagePreviewState {
-    pub(super) fn render_byte_bend_controls(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let editor = &mut self.creative_fx_state.byte_bend;
-        let mut staged_changed = false;
-        let (candidate, clicked) = editor.show_map(
-            ui,
-            &self.current_rgba,
-            self.pixel_revision,
-            hex_to_c32(&palette.harmonies.base),
-        );
-        if clicked
-            && let Some(edit) = candidate
-            && editor.params.edits.len() < MAX_BYTE_BEND_EDITS
-        {
-            editor.params.edits.push(edit);
-            staged_changed = true;
-        }
-        let audition = candidate.filter(|candidate| editor.params.edits.last() != Some(candidate));
-        let audition_changed = editor.audition != audition;
-        editor.audition = audition;
-
-        ui.horizontal(|ui| {
-            ui.label(editor.params.profile.label())
-                .on_hover_text("The map models the source format using the current image pixels.");
-            if let Some((offset, byte)) = candidate.and_then(|edit| {
-                byte_bend_sample(&self.current_rgba, editor.params.profile, edit.address)
-            }) {
-                ui.monospace(format!("{offset:08X}  {byte:02X}"));
-            } else {
-                ui.label(format!("{} staged", editor.params.edits.len()));
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Mutation");
-            egui::ComboBox::from_id_salt("byte_bend_mode")
-                .selected_text(editor.mode.label())
-                .show_ui(ui, |ui| {
-                    for mode in [
-                        ByteBendMode::FlipBits,
-                        ByteBendMode::Repeat,
-                        ByteBendMode::Dropout,
-                    ] {
-                        ui.selectable_value(&mut editor.mode, mode, mode.label());
-                    }
-                });
-        });
-        let mut percent = f32::from(editor.span) * 100.0 / ADDRESS_SPACE as f32;
-        if ui
-            .add(
-                egui::Slider::new(&mut percent, 0.02..=6.25)
-                    .text("Span")
-                    .suffix("%")
-                    .fixed_decimals(2),
-            )
-            .changed()
-        {
-            editor.span = (percent * ADDRESS_SPACE as f32 / 100.0).round() as u16;
-        }
-        ui.add(egui::Slider::new(&mut editor.variation, 0..=7).text("Variation"));
-        ui.checkbox(&mut editor.full_preview, "Show full effect");
-        ui.horizontal(|ui| {
-            let staged = !editor.params.edits.is_empty();
-            if ui
-                .add_enabled(staged, egui::Button::new("Undo edit"))
-                .clicked()
-            {
-                editor.params.edits.pop();
-                staged_changed = true;
-            }
-            if ui.add_enabled(staged, egui::Button::new("Clear")).clicked() {
-                editor.params.edits.clear();
-                staged_changed = true;
-            }
-        });
-        if editor.params.edits.len() == MAX_BYTE_BEND_EDITS {
-            ui.label("Apply or undo an edit to stage more.");
-        }
-        if staged_changed {
-            self.creative_fx_state.mark_custom();
-        } else if audition_changed {
-            self.creative_fx_state.mark_dirty();
-        }
-    }
-}
-
-fn map_cell_rect(rect: Rect, cell: usize) -> Rect {
+fn outline_cell(painter: &egui::Painter, rect: Rect, cell: usize, color: Color32) {
     let size = Vec2::new(
         rect.width() / MAP_COLUMNS as f32,
         rect.height() / MAP_ROWS as f32,
     );
-    let offset = Vec2::new(
-        (cell % MAP_COLUMNS) as f32 * size.x,
-        (cell / MAP_COLUMNS) as f32 * size.y,
+    let corner =
+        rect.min + size * Vec2::new((cell % MAP_COLUMNS) as f32, (cell / MAP_COLUMNS) as f32);
+    painter.rect_stroke(
+        Rect::from_min_size(corner, size),
+        0,
+        Stroke::new(1.25, color),
+        egui::StrokeKind::Inside,
     );
-    Rect::from_min_size(rect.min + offset, size)
 }
 
-fn paint_staged_bytes(
-    painter: &egui::Painter,
-    rect: Rect,
-    start: u32,
-    length: u32,
-    edits: &[ByteBendEdit],
-    accent: Color32,
-) {
-    for edit in edits {
-        let address = u32::from(edit.address);
-        if (start..start + length).contains(&address) {
-            let cell = ((address - start) * MAP_CELLS as u32 / length) as usize;
-            painter.rect_stroke(
-                map_cell_rect(rect, cell),
-                0,
-                Stroke::new(1.5, accent),
-                egui::StrokeKind::Inside,
-            );
-        }
+impl ImagePreviewState {
+    pub(super) fn render_byte_bend_controls(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let accent = hex_to_c32(&palette.harmonies.base);
+        ui.horizontal_wrapped(|ui| {
+            creative_fx_icon(CreativeFxType::ByteBend).ui(ui, 16.0, accent);
+            ui.label(egui::RichText::new("Byte Bend").strong().color(accent));
+            ui.label(self.creative_fx_state.byte_bend.params.profile.label());
+        });
+
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            self.render_creative_fx_apply_button(ui, palette, ui.available_width());
+
+            let editor = &mut self.creative_fx_state.byte_bend;
+            let staged = !editor.params.edits.is_empty();
+            let mut changed = false;
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(staged, egui::Button::new("Undo edit"))
+                    .clicked()
+                {
+                    editor.params.edits.pop();
+                    changed = true;
+                }
+                if ui.add_enabled(staged, egui::Button::new("Clear")).clicked() {
+                    editor.params.edits.clear();
+                    changed = true;
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(
+                    &mut self.creative_fx_state.byte_bend.full_preview,
+                    "Show full effect",
+                );
+                self.show_byte_bend_mask(ui, palette);
+            });
+            ui.horizontal(|ui| {
+                let editor = &self.creative_fx_state.byte_bend;
+                if let Some(hold) = &editor.held {
+                    let edit = hold.edit;
+                    let span = f32::from(edit.span) * 100.0 / 65_536.0;
+                    ui.monospace(format!(
+                        "{}  {span:.2}%  {}",
+                        edit.mode.label(),
+                        edit.variation
+                    ));
+                } else {
+                    ui.monospace(format!(
+                        "{}/{} edits",
+                        editor.params.edits.len(),
+                        MAX_BYTE_BEND_EDITS
+                    ));
+                }
+            });
+
+            changed |= ui
+                .with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    self.creative_fx_state.byte_bend.show_map(
+                        ui,
+                        &self.current_rgba,
+                        self.pixel_revision,
+                        accent,
+                    )
+                })
+                .inner;
+            if changed {
+                self.creative_fx_state.mark_dirty();
+                ui.ctx().request_repaint();
+            }
+        });
+    }
+
+    fn show_byte_bend_mask(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        ui.menu_button("Mask", |ui| {
+            let ctx = ui.ctx().clone();
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    ui.set_width(230.0);
+                    self.render_creative_fx_mask_sources(ui, &ctx, palette, 230.0);
+                    self.render_creative_fx_mask_options(
+                        ui,
+                        palette,
+                        CreativeFxType::ByteBend,
+                        230.0,
+                        162.0,
+                    );
+                });
+        });
     }
 }

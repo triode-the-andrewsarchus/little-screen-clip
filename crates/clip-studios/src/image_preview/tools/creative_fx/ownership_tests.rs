@@ -38,7 +38,7 @@ fn wait_render(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
 }
 
 #[test]
-fn byte_bend_uses_the_encoded_format_for_preview_even_after_reset() {
+fn byte_bend_keeps_the_encoded_format_when_clearing_the_map() {
     for (format, expected) in [
         (image::ImageFormat::Png, ByteBendProfile::Png),
         (image::ImageFormat::Jpeg, ByteBendProfile::Jpeg),
@@ -52,7 +52,7 @@ fn byte_bend_uses_the_encoded_format_for_preview_even_after_reset() {
         state.creative_fx_state.select_fx(CreativeFxType::ByteBend);
         assert_eq!(state.creative_fx_state.byte_bend.params.profile, expected);
 
-        state.creative_fx_state.byte_bend.reset();
+        state.creative_fx_state.byte_bend.clear_source();
         let CreativeFxParams::ByteBend(params) = state.creative_fx_state.current_params() else {
             panic!("Byte Bend preview params");
         };
@@ -61,7 +61,8 @@ fn byte_bend_uses_the_encoded_format_for_preview_even_after_reset() {
 }
 
 #[test]
-fn byte_map_hover_previews_and_click_stages_an_undoable_effect() {
+fn byte_map_scrolls_rerolls_adjusts_and_restores_in_place() {
+    assert!(presets_for_fx(CreativeFxType::ByteBend).is_empty());
     let jobs = BackgroundJobs::new(1, 4);
     let mut state = state();
     let source = Arc::new(RgbaImage::from_pixel(
@@ -73,9 +74,12 @@ fn byte_map_hover_previews_and_click_stages_an_undoable_effect() {
     state.creative_fx_state.select_fx(CreativeFxType::ByteBend);
     let ctx = egui::Context::default();
     let palette = AppPalette::default();
+    let time = std::cell::Cell::new(0.0);
     let frame = |state: &mut ImagePreviewState, events| {
+        time.set(time.get() + 1.0 / 60.0);
         let input = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, 512.0))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(270.0, 250.0))),
+            time: Some(time.get()),
             events,
             ..Default::default()
         };
@@ -84,18 +88,21 @@ fn byte_map_hover_previews_and_click_stages_an_undoable_effect() {
         })
     };
     let output = frame(&mut state, Vec::new());
-    let point = output
+    let map = output
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::Mesh(mesh) if mesh.calc_bounds().height() == 82.0 => {
-                Some(mesh.calc_bounds().center())
+            egui::Shape::Mesh(mesh) if mesh.calc_bounds().height() > 400.0 => {
+                Some(mesh.calc_bounds().intersect(shape.clip_rect))
             }
             _ => None,
         })
-        .expect("byte map should be visible");
+        .expect("scrollable byte map");
+    assert!((96.0..220.0).contains(&map.height()));
+
+    let point = map.center();
     frame(&mut state, vec![egui::Event::PointerMoved(point)]);
-    let audition = state.creative_fx_state.byte_bend.audition.unwrap();
+    let initial_address = state.creative_fx_state.byte_bend.audition.unwrap().address;
     state.run_creative_fx_render_on(&jobs);
     wait_render(&mut state, &jobs);
     assert_ne!(
@@ -105,24 +112,71 @@ fn byte_map_hover_previews_and_click_stages_an_undoable_effect() {
     state.apply_creative_fx();
     assert!(Arc::ptr_eq(&state.current_rgba, &source));
 
-    for pressed in [true, false] {
-        frame(
-            &mut state,
-            vec![egui::Event::PointerButton {
-                pos: point,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
-            }],
-        );
+    frame(
+        &mut state,
+        vec![clip_ui::test_support::scroll(Vec2::new(0.0, -140.0))],
+    );
+    frame(&mut state, Vec::new());
+    let address = state.creative_fx_state.byte_bend.audition.unwrap().address;
+    assert!(
+        address > initial_address,
+        "wheel should browse a later part of the map"
+    );
+    for _ in 0..6 {
+        frame(&mut state, Vec::new());
     }
-    assert_eq!(state.creative_fx_state.byte_bend.params.edits, [audition]);
+
+    let button = |pos, button, pressed| {
+        vec![egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }]
+    };
+    let click = |state: &mut ImagePreviewState, button_kind| {
+        for pressed in [true, false] {
+            frame(state, button(point, button_kind, pressed));
+        }
+    };
+    let primary = egui::PointerButton::Primary;
+    click(&mut state, primary);
+    let first = state.creative_fx_state.byte_bend.params.edits[0];
+    click(&mut state, primary);
+    let [second] = state.creative_fx_state.byte_bend.params.edits.as_slice() else {
+        panic!("clicking again should replace the edit");
+    };
+    assert_eq!(first.address, second.address);
+    assert_ne!(first.mode, second.mode);
+    assert_ne!(first.variation, second.variation);
+
+    click(&mut state, egui::PointerButton::Secondary);
+    assert!(state.creative_fx_state.byte_bend.params.edits.is_empty());
     assert!(state.creative_fx_state.byte_bend.audition.is_none());
+
+    frame(&mut state, button(point, primary, true));
+    let held_address = state.creative_fx_state.byte_bend.audition.unwrap().address;
+    time.set(time.get() + 0.2);
+    frame(&mut state, Vec::new());
+    let held = state.creative_fx_state.byte_bend.audition.unwrap();
+    assert_eq!(held.address, held_address);
+    assert!((1_700..2_400).contains(&held.span));
+    let upper_right = map.right_top() - Vec2::new(16.0, -3.0);
+    frame(&mut state, vec![egui::Event::PointerMoved(upper_right)]);
+    let adjusted = state.creative_fx_state.byte_bend.audition.unwrap();
+    assert_eq!(adjusted.address, held_address);
+    assert!(adjusted.span > 3_500);
+    assert_eq!(adjusted.variation, 7);
+    assert!(state.creative_fx_state.byte_bend.params.edits.is_empty());
+    frame(&mut state, button(upper_right, primary, false));
+    assert_eq!(state.creative_fx_state.byte_bend.params.edits, [adjusted]);
+    frame(&mut state, Vec::new());
+    assert!(state.creative_fx_state.byte_bend.audition.is_none());
+
     state.run_creative_fx_render_on(&jobs);
     wait_render(&mut state, &jobs);
     assert!(state.can_apply_creative_fx());
     state.apply_creative_fx();
-    assert_ne!(state.current_rgba, source);
     assert_eq!(state.undo_stack.last(), Some(&source));
     assert!(state.creative_fx_state.byte_bend.params.edits.is_empty());
 }

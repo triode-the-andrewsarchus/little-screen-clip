@@ -944,7 +944,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                 }),
             },
         ],
-        CreativeFxType::ByteBend => vec![default_preset_for_fx(fx_type)],
+        CreativeFxType::ByteBend => Vec::new(),
         CreativeFxType::Structure => vec![
             CreativeFxPreset {
                 name: "Natural Texture",

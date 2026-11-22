@@ -329,6 +329,11 @@ impl ImagePreviewState {
                     ui.set_width(controls_w - 16.0);
                     ui.set_height((controls_h - 16.0).max(1.0));
 
+                    if self.creative_fx_state.selected_fx == CreativeFxType::ByteBend {
+                        self.render_byte_bend_controls(ui, palette);
+                        return;
+                    }
+
                     egui::ScrollArea::vertical()
                         .id_salt("creative_fx_controls_scroll")
                         .auto_shrink([false, false])
@@ -393,14 +398,7 @@ impl ImagePreviewState {
                                         CreativeFxParams::Ntsc(p) => {
                                             self.creative_fx_state.ntsc_params = *p;
                                         }
-                                        CreativeFxParams::ByteBend(p) => {
-                                            let params =
-                                                &mut self.creative_fx_state.byte_bend.params;
-                                            *params = ByteBendParams {
-                                                profile: params.profile,
-                                                ..p.clone()
-                                            };
-                                        }
+                                        CreativeFxParams::ByteBend(_) => {}
                                         CreativeFxParams::Structure(p) => {
                                             self.creative_fx_state.structure_params = *p;
                                         }
@@ -447,9 +445,7 @@ impl ImagePreviewState {
                                 CreativeFxType::Ntsc => {
                                     self.render_ntsc_controls(ui, palette, slider_w)
                                 }
-                                CreativeFxType::ByteBend => {
-                                    self.render_byte_bend_controls(ui, palette)
-                                }
+                                CreativeFxType::ByteBend => {}
                                 CreativeFxType::Structure => {
                                     self.render_structure_controls(ui, palette, slider_w)
                                 }
@@ -459,41 +455,17 @@ impl ImagePreviewState {
                             ui.add_space(crate::ui_ext::SPACE_SM);
                             ui.separator();
                             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-                            let mut mask_controls = |ui: &mut egui::Ui| {
-                                self.render_creative_fx_mask_sources(ui, ctx, palette, full_w);
-                                self.render_creative_fx_mask_options(
-                                    ui, palette, cur_fx, full_w, slider_w,
-                                );
-                            };
-                            if cur_fx == CreativeFxType::ByteBend {
-                                ui.collapsing("Mask", mask_controls);
-                            } else {
-                                mask_controls(ui);
-                            }
+                            self.render_creative_fx_mask_sources(ui, ctx, palette, full_w);
+                            self.render_creative_fx_mask_options(
+                                ui, palette, cur_fx, full_w, slider_w,
+                            );
 
                             ui.add_space(crate::ui_ext::SPACE_SM);
                             ui.separator();
                             ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                             // ── Action Buttons ──
-                            let apply_btn = clip_ui::buttons::ButtonRole::Primary
-                                .button_with_icon(
-                                    Some(crate::icons::Icon::Check),
-                                    "Apply to Image",
-                                    palette,
-                                )
-                                .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
-
-                            let apply_enabled = self.can_apply_creative_fx();
-                            if ui
-                                .add_enabled(apply_enabled, apply_btn)
-                                .on_hover_text(
-                                    "Commit Creative FX result to image (pushes to undo stack)",
-                                )
-                                .clicked()
-                            {
-                                self.apply_creative_fx();
-                            }
+                            self.render_creative_fx_apply_button(ui, palette, full_w);
 
                             ui.add_space(crate::ui_ext::SPACE_XS);
 
@@ -538,9 +510,7 @@ impl ImagePreviewState {
                                     CreativeFxType::Ntsc => {
                                         self.creative_fx_state.ntsc_params = NtscParams::default();
                                     }
-                                    CreativeFxType::ByteBend => {
-                                        self.creative_fx_state.byte_bend.reset();
-                                    }
+                                    CreativeFxType::ByteBend => {}
                                     CreativeFxType::Structure => {
                                         self.creative_fx_state.structure_params =
                                             StructureParams::default();
