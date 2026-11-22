@@ -15,7 +15,7 @@ pub(in crate::file_manager) struct Hover {
     seen: bool,
     segment_hovered: bool,
     veil_texture: Option<(uuid::Uuid, usize, TextureHandle)>,
-    dimmed_color: Option<[f32; 3]>,
+    veil_tint: Option<[f32; 4]>,
 }
 impl Hover {
     #[cfg(test)]
@@ -23,8 +23,8 @@ impl Hover {
         self.veil_texture.is_some()
     }
     #[cfg(test)]
-    pub fn current_dimmed_color(&self) -> Option<[f32; 3]> {
-        self.dimmed_color
+    pub fn current_veil_tint(&self) -> Option<[f32; 4]> {
+        self.veil_tint
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
@@ -42,7 +42,7 @@ impl Hover {
         self.seen = false;
         self.segment_hovered = false;
         self.veil_texture = None;
-        self.dimmed_color = None;
+        self.veil_tint = None;
     }
     pub fn retain(&mut self, paths: &BTreeSet<PathBuf>) {
         if !self.seen || self.key.as_ref().is_some_and(|key| !paths.contains(&key.0)) {
@@ -108,32 +108,31 @@ impl Hover {
             .or(fallback);
 
         if let Some(seg) = segment {
-            let (tr, tg, tb) = analysis.hilbert_strip.dimmed_color_for_segment(seg);
-            let target = [tr as f32, tg as f32, tb as f32];
-            let current = match self.dimmed_color {
+            let target = analysis
+                .hilbert_strip
+                .veil_tint_for_segment(seg)
+                .map(f32::from);
+            let current = match self.veil_tint {
                 Some(prev) => {
                     let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.1);
                     // Smooth transition over ~5-6 frames (~80-100ms at 60fps)
                     let rate = 14.0;
                     let factor = 1.0 - (-rate * dt).exp();
-                    let new_color = [
-                        prev[0] + (target[0] - prev[0]) * factor,
-                        prev[1] + (target[1] - prev[1]) * factor,
-                        prev[2] + (target[2] - prev[2]) * factor,
-                    ];
-                    if (target[0] - new_color[0]).abs() > 1.0
-                        || (target[1] - new_color[1]).abs() > 1.0
-                        || (target[2] - new_color[2]).abs() > 1.0
+                    let tint = std::array::from_fn(|i| prev[i] + (target[i] - prev[i]) * factor);
+                    if tint
+                        .iter()
+                        .zip(target)
+                        .any(|(value, target)| (target - value).abs() > 1.0)
                     {
                         ui.ctx().request_repaint();
-                        new_color
+                        tint
                     } else {
                         target
                     }
                 }
                 None => target,
             };
-            self.dimmed_color = Some(current);
+            self.veil_tint = Some(current);
 
             if !self
                 .veil_texture
@@ -150,20 +149,17 @@ impl Hover {
             }
         } else {
             self.veil_texture = None;
-            self.dimmed_color = None;
+            self.veil_tint = None;
         }
 
-        let overlay = self.veil_texture.as_ref().map(|(_, _, handle)| {
-            let tint = match self.dimmed_color {
-                Some(c) => egui::Color32::from_rgb(
-                    c[0].round().clamp(0.0, 255.0) as u8,
-                    c[1].round().clamp(0.0, 255.0) as u8,
-                    c[2].round().clamp(0.0, 255.0) as u8,
-                ),
-                None => egui::Color32::WHITE,
-            };
-            (handle, tint)
-        });
+        let overlay =
+            self.veil_texture
+                .as_ref()
+                .zip(self.veil_tint)
+                .map(|((_, _, handle), tint)| {
+                    let [r, g, b, a] = tint.map(|value| value.round() as u8);
+                    (handle, egui::Color32::from_rgba_unmultiplied(r, g, b, a))
+                });
 
         super::super::ui::preview_popup_with_overlay(
             ui,

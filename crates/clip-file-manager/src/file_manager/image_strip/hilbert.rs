@@ -14,12 +14,9 @@ pub const TRANSPARENT_THRESHOLD: f64 = 0.90;
 /// Segments with OKLab L >= 0.6 use dark ink veil; darker ones use light paper veil.
 const LIGHT_SEGMENT: f64 = 0.6;
 
-/// Veil opacity (82% opacity: round(0.82 * 255) = 209).
-const VEIL_OPACITY: u8 = 209;
-
-/// The page's ink and paper colors from PaletteAtlas.
-const INK: (u8, u8, u8) = (0x18, 0x14, 0x0f);
-const PAPER: (u8, u8, u8) = (0xf7, 0xf1, 0xe6);
+/// The page's ink and paper colors from PaletteAtlas, with 50% and 30% veil opacity.
+const INK: [u8; 4] = [0x18, 0x14, 0x0f, 128];
+const PAPER: [u8; 4] = [0xf7, 0xf1, 0xe6, 77];
 
 /// Color channels (RGB) for linear accumulation.
 const COLOR_CHANNELS: usize = 3;
@@ -339,11 +336,10 @@ impl HilbertStrip {
     }
 
     /// Creates a mask image for the given segment where pixels belonging to `segment` are
-    /// uncovered (transparent) and all other pixels are white with 82% opacity.
+    /// uncovered (transparent) and all other pixels take the tint applied by the hover.
     pub fn create_veil_mask(&self, segment: usize) -> egui::ColorImage {
         let width = self.source_map.width as usize;
         let height = self.source_map.height as usize;
-        let veil_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, VEIL_OPACITY);
 
         let mut pixels = Vec::with_capacity(width * height);
         let target_seg = segment as i32;
@@ -351,38 +347,17 @@ impl HilbertStrip {
             if seg == target_seg {
                 pixels.push(egui::Color32::TRANSPARENT);
             } else {
-                pixels.push(veil_color);
+                pixels.push(egui::Color32::WHITE);
             }
         }
         egui::ColorImage::new([width, height], pixels)
     }
 
-    /// Returns the target dimmed color (INK or PAPER) for the given segment based on OKLab lightness.
-    pub fn dimmed_color_for_segment(&self, segment: usize) -> (u8, u8, u8) {
+    /// Returns the unmultiplied veil tint and opacity based on the focused segment's OKLab lightness.
+    pub fn veil_tint_for_segment(&self, segment: usize) -> [u8; 4] {
         let color = self.color_at(segment).unwrap_or(egui::Color32::TRANSPARENT);
         let l = oklab_l(color.r(), color.g(), color.b());
         if l >= LIGHT_SEGMENT { INK } else { PAPER }
-    }
-
-    /// Creates a veil image for the given segment where pixels belonging to `segment` are
-    /// uncovered (transparent) and all other pixels are covered in INK or PAPER with 82% opacity.
-    #[cfg(test)]
-    pub fn create_veil_image(&self, segment: usize) -> egui::ColorImage {
-        let (vr, vg, vb) = self.dimmed_color_for_segment(segment);
-        let width = self.source_map.width as usize;
-        let height = self.source_map.height as usize;
-        let veil_color = egui::Color32::from_rgba_unmultiplied(vr, vg, vb, VEIL_OPACITY);
-
-        let mut pixels = Vec::with_capacity(width * height);
-        let target_seg = segment as i32;
-        for &seg in &self.source_map.segments {
-            if seg == target_seg {
-                pixels.push(egui::Color32::TRANSPARENT);
-            } else {
-                pixels.push(veil_color);
-            }
-        }
-        egui::ColorImage::new([width, height], pixels)
     }
 
     /// Returns the color of the given source segment, if valid and not omitted.
@@ -498,7 +473,7 @@ mod tests {
             assert_eq!(seg.color.b(), 50);
         }
 
-        let veil = strip.create_veil_image(0);
+        let veil = strip.create_veil_mask(0);
         assert_eq!(veil.size, [4, 4]);
         let mut uncovered = 0;
         let mut veiled = 0;
@@ -507,7 +482,7 @@ mod tests {
                 uncovered += 1;
             } else {
                 veiled += 1;
-                assert_eq!(px.a(), VEIL_OPACITY);
+                assert_eq!(px, egui::Color32::WHITE);
             }
         }
         assert_eq!(uncovered, 4);
@@ -528,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn veil_uses_ink_for_light_segment_and_paper_for_dark_segment() {
+    fn veil_is_stronger_around_light_segments() {
         let mut img = image::RgbaImage::new(2, 2);
         // Left column white ((0,0) and (0,1))
         img.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
@@ -540,38 +515,8 @@ mod tests {
         let cancelled = AtomicBool::new(false);
         let strip = HilbertStrip::read(&img, 2, &cancelled).unwrap();
 
-        let l0 = oklab_l(
-            strip.visible_segments[0].color.r(),
-            strip.visible_segments[0].color.g(),
-            strip.visible_segments[0].color.b(),
-        );
-        let l1 = oklab_l(
-            strip.visible_segments[1].color.r(),
-            strip.visible_segments[1].color.g(),
-            strip.visible_segments[1].color.b(),
-        );
-        assert!(l0 >= LIGHT_SEGMENT);
-        assert!(l1 < LIGHT_SEGMENT);
-
-        let expected_ink = egui::Color32::from_rgba_unmultiplied(INK.0, INK.1, INK.2, VEIL_OPACITY);
-        let expected_paper =
-            egui::Color32::from_rgba_unmultiplied(PAPER.0, PAPER.1, PAPER.2, VEIL_OPACITY);
-
-        let veil_light = strip.create_veil_image(0);
-        let veiled_px_light = veil_light
-            .pixels
-            .iter()
-            .find(|&&p| p != egui::Color32::TRANSPARENT)
-            .unwrap();
-        assert_eq!(*veiled_px_light, expected_ink);
-
-        let veil_dark = strip.create_veil_image(1);
-        let veiled_px_dark = veil_dark
-            .pixels
-            .iter()
-            .find(|&&p| p != egui::Color32::TRANSPARENT)
-            .unwrap();
-        assert_eq!(*veiled_px_dark, expected_paper);
+        assert_eq!(strip.veil_tint_for_segment(0), [24, 20, 15, 128]);
+        assert_eq!(strip.veil_tint_for_segment(1), [247, 241, 230, 77]);
     }
 
     #[test]

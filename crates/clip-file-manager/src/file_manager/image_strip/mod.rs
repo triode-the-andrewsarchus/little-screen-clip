@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    fn dimmed_color_transitions_across_frames_when_switching_segment_lightness() {
+    fn veil_tint_transitions_across_frames_when_switching_segment_lightness() {
         let ctx = egui::Context::default();
         let mut img = image::RgbaImage::new(10, 2);
         // Left half (segment 0) is white (OKLab L >= 0.6 -> INK: [24, 20, 15])
@@ -367,8 +367,8 @@ mod tests {
             });
         });
 
-        let c1 = hover.current_dimmed_color().expect("dimmed color active");
-        assert_eq!(c1, [24.0, 20.0, 15.0]);
+        let c1 = hover.current_veil_tint().expect("veil active");
+        assert_eq!(c1, [24.0, 20.0, 15.0, 128.0]);
 
         // Frame 2: Switch preview to right segment (PAPER: [247, 241, 230])
         let right_pos = pos2(palette.left() + palette.width() * 0.75, palette.center().y);
@@ -395,13 +395,14 @@ mod tests {
             });
         });
 
-        let c2 = hover.current_dimmed_color().expect("dimmed color active");
+        let c2 = hover.current_veil_tint().expect("veil active");
         // Must NOT snap immediately to 247! Should transition smoothly over ~5-6 frames.
         assert!(
             c2[0] > 30.0 && c2[0] < 120.0,
             "Frame 2 should make moderate progress, got {:?}",
             c2
         );
+        assert!((77.0..128.0).contains(&c2[3]));
 
         let mut prev_c = c2;
         // Verify progressive smoothing across frames 3 through 6
@@ -431,13 +432,14 @@ mod tests {
                     });
                 },
             );
-            let curr_c = hover.current_dimmed_color().expect("dimmed color active");
+            let curr_c = hover.current_veil_tint().expect("veil active");
             assert!(
                 curr_c[0] > prev_c[0],
                 "Frame {frame} should increase towards target: prev {:?}, curr {:?}",
                 prev_c,
                 curr_c
             );
+            assert!(curr_c[3] < prev_c[3]);
             prev_c = curr_c;
         }
         // At frame 6, color is well into the transition towards 247
