@@ -1,10 +1,14 @@
-//! Dated heliocentric positions from JPL Horizons vector tables.
+//! Dated heliocentric positions for the Solar System view.
+mod oem;
+
 use super::AU_KM;
 use crate::file_source::ReadCheck;
 use chrono::{DateTime, Utc};
 use hifitime::{Epoch, TimeScale};
+use serde::Deserialize;
 use std::{
     io::Read,
+    ops::RangeInclusive,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -12,11 +16,14 @@ use std::{
 const HEADER_BYTES: usize = 16 * 1024;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const CANCELLED: &str = "Trajectory opening cancelled";
+const CSV_MARKER: &str = "# Sun-centered J2000 ecliptic";
 
+/// Sampled positions in AU along the J2000 ecliptic axes, relative to the Sun.
 pub struct Trajectory {
     pub name: String,
     pub radius_au: f64,
     samples: Vec<Sample>,
+    format: Format,
 }
 
 struct Sample {
@@ -24,48 +31,101 @@ struct Sample {
     au: [f64; 3],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Format {
+    Horizons,
+    HorizonsJson,
+    OemKvn,
+    OemXml,
+    Csv,
+}
+
+impl Format {
+    fn detect(header: &str) -> Option<Self> {
+        let header = header.trim_start_matches('\u{feff}').trim_start();
+        if header.starts_with('<') {
+            return oem::has_xml_header(header).then_some(Self::OemXml);
+        }
+        if oem::version_line(header.lines().next()?).is_some() {
+            return Some(Self::OemKvn);
+        }
+        if header.lines().next()?.trim_end() == CSV_MARKER {
+            return Some(Self::Csv);
+        }
+        let vector_report = header.contains("/ Horizons")
+            && header.contains("Target body name:")
+            && header.contains("cartesian states");
+        if header.starts_with('{') {
+            (vector_report && header.contains("\"NASA/JPL Horizons API\""))
+                .then_some(Self::HorizonsJson)
+        } else {
+            vector_report.then_some(Self::Horizons)
+        }
+    }
+}
+
 impl Trajectory {
+    /// Returns whether a file can be probed for a trajectory signature.
     pub fn is_candidate(path: &Path) -> bool {
         path.extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| {
-                ["txt", "csv", "dat", "eph", "horizons"]
-                    .iter()
-                    .any(|suffix| ext.eq_ignore_ascii_case(suffix))
+                [
+                    "txt", "csv", "dat", "eph", "horizons", "json", "oem", "kvn", "xml",
+                ]
+                .iter()
+                .any(|suffix| ext.eq_ignore_ascii_case(suffix))
             })
     }
 
+    /// Opens a recognized trajectory through a guarded file handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on failed reads, cancellation, or invalid or unsupported
+    /// data in an identified trajectory.
     pub fn read_if_identified(path: &Path, cancel: &AtomicBool) -> Result<Option<Self>, String> {
         if !Self::is_candidate(path) {
             return Ok(None);
         }
-        let check_cancel = || {
-            if cancel.load(Ordering::Acquire) {
-                Err(CANCELLED.to_owned())
-            } else {
-                Ok(())
-            }
-        };
-        check_cancel()?;
+        check_cancel(cancel)?;
         let (mut file, source) = ReadCheck::default().open(path, None, cancel)?;
         let mut bytes = read_header(&mut file)?;
-        if !Self::has_header(&String::from_utf8_lossy(&bytes)) {
+        let Some(format) = Format::detect(&String::from_utf8_lossy(&bytes)) else {
+            source.check_file(&file)?;
             return Ok(None);
-        }
+        };
 
-        check_cancel()?;
+        check_cancel(cancel)?;
         file.by_ref()
             .take((MAX_BYTES + 1 - bytes.len()) as u64)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         source.check_file(&file)?;
         if bytes.len() > MAX_BYTES {
-            return Err("Horizons trajectory exceeds the 16 MiB opening limit".into());
+            return Err("Trajectory exceeds the 16 MiB opening limit".into());
         }
+        check_cancel(cancel)?;
         let text = String::from_utf8_lossy(&bytes);
-        Self::parse(&text, cancel).map(Some)
+        let text = text.trim_start_matches('\u{feff}');
+        let trajectory = match format {
+            Format::Horizons => Self::parse_horizons(text, format, cancel),
+            Format::HorizonsJson => {
+                let reply: HorizonsReply = serde_json::from_str(text)
+                    .map_err(|error| format!("Invalid Horizons API response: {error}"))?;
+                if reply.signature.source != "NASA/JPL Horizons API" {
+                    return Ok(None);
+                }
+                Self::parse_horizons(&reply.result, format, cancel)
+            }
+            Format::OemKvn => oem::read_kvn(text, cancel),
+            Format::OemXml => oem::read_xml(text, cancel),
+            Format::Csv => Self::parse_csv(text, path, cancel),
+        }?;
+        Ok(Some(trajectory))
     }
 
+    /// Probes a bounded prefix for an orbital trajectory signature.
     pub fn has_file_header(path: &Path, cancel: &AtomicBool) -> Result<bool, String> {
         if !Self::is_candidate(path) {
             return Ok(false);
@@ -73,31 +133,105 @@ impl Trajectory {
         let (mut file, source) = ReadCheck::default().open(path, None, cancel)?;
         let header = read_header(&mut file)?;
         source.check_file(&file)?;
-        Ok(Self::has_header(&String::from_utf8_lossy(&header)))
+        Ok(Format::detect(&String::from_utf8_lossy(&header)).is_some())
     }
 
-    fn has_header(header: &str) -> bool {
-        header.contains("/ Horizons")
-            && header.contains("Target body name:")
-            && header.contains("cartesian states")
+    /// Returns the file format used to load this path.
+    pub fn source_label(&self) -> &'static str {
+        match self.format {
+            Format::Horizons => "JPL Horizons",
+            Format::HorizonsJson => "JPL Horizons JSON",
+            Format::OemKvn => "CCSDS OEM (KVN)",
+            Format::OemXml => "CCSDS OEM (XML)",
+            Format::Csv => "Heliocentric CSV",
+        }
     }
 
-    fn parse(text: &str, cancel: &AtomicBool) -> Result<Self, String> {
+    fn parse_horizons(text: &str, format: Format, cancel: &AtomicBool) -> Result<Self, String> {
         let (header, data) = text
             .split_once("$$SOE")
             .and_then(|(header, data)| data.split_once("$$EOE").map(|(data, _)| (header, data)))
             .ok_or("Horizons vector table is missing its start or end marker")?;
         let (metadata, name) = Metadata::parse(header)?;
-        let samples = metadata.samples(data, cancel)?;
-        let radius_au = samples
-            .iter()
-            .map(|sample| sample.au.into_iter().map(|axis| axis * axis).sum::<f64>())
-            .fold(0.0, f64::max)
-            .sqrt();
+        Self::from_samples(name, format, metadata.samples(data), None, cancel)
+    }
+
+    fn parse_csv(text: &str, path: &Path, cancel: &AtomicBool) -> Result<Self, String> {
+        let mut lines = text.trim_start().lines();
+        lines.next(); // Coordinate frame marker, already verified by detection.
+        let units_per_au = match lines.next() {
+            Some(line) if csv_fields(line).eq(["utc", "x_au", "y_au", "z_au"]) => 1.0,
+            Some(line) if csv_fields(line).eq(["utc", "x_km", "y_km", "z_km"]) => AU_KM,
+            _ => return Err("Use CSV columns utc,x_au,y_au,z_au or utc,x_km,y_km,z_km".into()),
+        };
+        let rows = lines
+            .enumerate()
+            .filter(|(_, line)| !line.trim().is_empty())
+            .map(|(index, line)| {
+                let mut columns = csv_fields(line);
+                let time = columns
+                    .next()
+                    .and_then(|stamp| stamp.parse::<DateTime<Utc>>().ok());
+                let position = xyz(&mut columns);
+                match (time, position, columns.next()) {
+                    (Some(time), Some(position), None) => Ok(Sample {
+                        time,
+                        au: position.map(|axis| axis / units_per_au),
+                    }),
+                    _ => Err(format!("Invalid trajectory CSV row {}", index + 3)),
+                }
+            });
+        let name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        Self::from_samples(name, Format::Csv, rows, None, cancel)
+    }
+
+    fn from_samples(
+        name: String,
+        format: Format,
+        rows: impl IntoIterator<Item = Result<Sample, String>>,
+        usable: Option<RangeInclusive<DateTime<Utc>>>,
+        cancel: &AtomicBool,
+    ) -> Result<Self, String> {
+        let mut samples: Vec<Sample> = Vec::new();
+        let mut radius_squared: f64 = 0.0;
+        let mut previous_time = None;
+        let mut rows = rows.into_iter();
+        loop {
+            check_cancel(cancel)?;
+            let Some(row) = rows.next() else { break };
+            let sample = row?;
+            if previous_time.is_some_and(|previous| previous >= sample.time) {
+                return Err("Trajectory timestamps must increase strictly".into());
+            }
+            previous_time = Some(sample.time);
+            if !sample
+                .au
+                .iter()
+                .all(|value| value.is_finite() && value.abs() <= 1e6)
+            {
+                return Err("Trajectory position is outside the supported range".into());
+            }
+            if usable
+                .as_ref()
+                .is_some_and(|range| !range.contains(&sample.time))
+            {
+                continue;
+            }
+            radius_squared = radius_squared.max(sample.au.iter().map(|axis| axis * axis).sum());
+            samples.push(sample);
+        }
+        if samples.len() < 2 {
+            return Err("A trajectory needs at least two dated positions".into());
+        }
         Ok(Self {
             name,
-            radius_au,
+            radius_au: radius_squared.sqrt(),
             samples,
+            format,
         })
     }
 
@@ -131,6 +265,31 @@ impl Trajectory {
     }
 }
 
+#[derive(Deserialize)]
+struct HorizonsReply {
+    signature: HorizonsSignature,
+    result: String,
+}
+
+#[derive(Deserialize)]
+struct HorizonsSignature {
+    source: String,
+}
+
+fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) {
+        Err(CANCELLED.into())
+    } else {
+        Ok(())
+    }
+}
+
+fn icrf_to_ecliptic([x, y, z]: [f64; 3]) -> [f64; 3] {
+    // Horizons uses the IAU 1976 fixed obliquity to define its J2000 ecliptic.
+    let (sine, cosine) = (84_381.448_f64 / 3600.0).to_radians().sin_cos();
+    [x, cosine * y + sine * z, -sine * y + cosine * z]
+}
+
 fn read_header(file: &mut std::fs::File) -> Result<Vec<u8>, String> {
     let mut bytes = Vec::with_capacity(HEADER_BYTES);
     file.take(HEADER_BYTES as u64)
@@ -142,6 +301,7 @@ fn read_header(file: &mut std::fs::File) -> Result<Vec<u8>, String> {
 struct Metadata {
     units_per_au: f64,
     time_scale: TimeScale,
+    icrf: bool,
 }
 
 impl Metadata {
@@ -162,9 +322,11 @@ impl Metadata {
         {
             return Err("Export the Horizons vector table with Sun center (500@10)".into());
         }
-        if field("Reference frame") != Some("Ecliptic of J2000.0") {
-            return Err("Export the Horizons vector table in the J2000 ecliptic frame".into());
-        }
+        let icrf = match field("Reference frame") {
+            Some("ICRF") => true,
+            Some("Ecliptic of J2000.0") => false,
+            _ => return Err("Export the Horizons vector table in ICRF or J2000 ecliptic".into()),
+        };
         if field("Output type") != Some("GEOMETRIC cartesian states") {
             return Err(
                 "Export the Horizons vector table with geometric positions (no corrections)".into(),
@@ -190,18 +352,16 @@ impl Metadata {
             Self {
                 units_per_au,
                 time_scale,
+                icrf,
             },
             name.to_owned(),
         ))
     }
 
-    fn samples(&self, data: &str, cancel: &AtomicBool) -> Result<Vec<Sample>, String> {
-        let mut samples = Vec::<Sample>::new();
+    fn samples<'a>(&'a self, data: &'a str) -> impl Iterator<Item = Result<Sample, String>> + 'a {
         let mut lines = data.lines().filter(|line| !line.trim().is_empty());
-        while let Some(line) = lines.next() {
-            if cancel.load(Ordering::Acquire) {
-                return Err(CANCELLED.into());
-            }
+        std::iter::from_fn(move || {
+            let line = lines.next()?;
             let read = if line.contains(',') {
                 csv_row(line)
             } else {
@@ -213,26 +373,17 @@ impl Metadata {
                 }
                 result
             };
-            let (jd, position) = read.ok_or_else(|| {
-                format!("Invalid Horizons position at sample {}", samples.len() + 1)
-            })?;
+            Some(read)
+        })
+        .enumerate()
+        .map(|(index, row)| {
+            let (jd, position) =
+                row.ok_or_else(|| format!("Invalid Horizons position at sample {}", index + 1))?;
             let time = self.timestamp(jd)?;
-            if samples.last().is_some_and(|previous| previous.time >= time) {
-                return Err("Horizons timestamps must increase strictly".into());
-            }
             let au = position.map(|axis| axis / self.units_per_au);
-            if !au
-                .iter()
-                .all(|value| value.is_finite() && value.abs() <= 1e6)
-            {
-                return Err("Horizons position is outside the supported range".into());
-            }
-            samples.push(Sample { time, au });
-        }
-        if samples.len() < 2 {
-            return Err("A Horizons trajectory needs at least two dated positions".into());
-        }
-        Ok(samples)
+            let au = if self.icrf { icrf_to_ecliptic(au) } else { au };
+            Ok(Sample { time, au })
+        })
     }
 
     fn timestamp(&self, jd: f64) -> Result<DateTime<Utc>, String> {
@@ -240,8 +391,7 @@ impl Metadata {
         if !(1_000_000.0..=4_000_000.0).contains(&jd) {
             return Err("Horizons Julian date is outside the supported range".into());
         }
-        let seconds = Epoch::from_jde_in_time_scale(jd, self.time_scale).to_unix_seconds();
-        DateTime::from_timestamp_micros((seconds * 1e6).round() as i64)
+        epoch_utc(Epoch::from_jde_in_time_scale(jd, self.time_scale))
             .ok_or_else(|| "Invalid Horizons timestamp".into())
     }
 }
@@ -250,14 +400,33 @@ fn csv_row(line: &str) -> Option<(f64, [f64; 3])> {
     let mut columns = line.split(',');
     let jd = columns.next()?.trim().parse().ok()?;
     columns.next()?; // Horizons repeats the same epoch as a human-readable calendar date.
-    Some((
-        jd,
-        [
-            number(columns.next()?)?,
-            number(columns.next()?)?,
-            number(columns.next()?)?,
-        ],
-    ))
+    Some((jd, xyz(&mut columns)?))
+}
+
+fn csv_fields(line: &str) -> impl Iterator<Item = &str> {
+    line.split(',').map(|value| {
+        let value = value.trim();
+        value
+            .strip_prefix('"')
+            .and_then(|quoted| quoted.strip_suffix('"'))
+            .unwrap_or(value)
+    })
+}
+
+fn xyz<'a>(columns: &mut impl Iterator<Item = &'a str>) -> Option<[f64; 3]> {
+    Some([
+        number(columns.next()?)?,
+        number(columns.next()?)?,
+        number(columns.next()?)?,
+    ])
+}
+
+fn epoch_utc(epoch: Epoch) -> Option<DateTime<Utc>> {
+    let nanos = epoch.to_unix_duration().total_nanoseconds();
+    DateTime::from_timestamp(
+        nanos.div_euclid(1_000_000_000).try_into().ok()?,
+        nanos.rem_euclid(1_000_000_000) as u32,
+    )
 }
 
 fn epoch_line(line: &str) -> bool {
@@ -299,8 +468,9 @@ Output format : 2 (position and velocity)\n\
 Reference frame : Ecliptic of J2000.0\n";
 
     fn parse_rows(rows: &str) -> Trajectory {
-        Trajectory::parse(
+        Trajectory::parse_horizons(
             &format!("{HEADER}$$SOE\n{rows}\n$$EOE"),
+            Format::Horizons,
             &AtomicBool::new(false),
         )
         .unwrap()
@@ -323,6 +493,123 @@ Reference frame : Ecliptic of J2000.0\n";
             assert!(path.positions().count() >= minimum_samples);
             assert!(path.range()[0] < path.range()[1]);
         }
+    }
+
+    #[test]
+    fn horizons_json_and_oem_match_jpl_ecliptic_vectors() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
+        let cancel = AtomicBool::new(false);
+        let expected_km = [
+            -4.388_577_457_378_983e7,
+            -2.170_849_264_747_524e8,
+            -3.473_007_284_583_181e6,
+        ];
+        let mut start = None;
+        for (file, format) in [
+            ("horizons/Mars-ICRF.json", Format::HorizonsJson),
+            ("solar-system/Mars-ICRF.oem", Format::OemKvn),
+            ("solar-system/Mars-ICRF.xml", Format::OemXml),
+        ] {
+            let path = examples.join(file);
+            assert!(Trajectory::has_file_header(&path, &cancel).unwrap());
+            let trajectory = Trajectory::read_if_identified(&path, &cancel)
+                .unwrap()
+                .unwrap();
+            assert_eq!(trajectory.format, format);
+            assert_eq!(trajectory.positions().count(), 3);
+            for (au, km) in trajectory
+                .positions()
+                .next()
+                .unwrap()
+                .into_iter()
+                .zip(expected_km)
+            {
+                assert!((au * AU_KM - km).abs() < 1e-5);
+            }
+            let epoch = trajectory.range()[0];
+            let first = start.get_or_insert(epoch);
+            assert!((epoch - *first).abs() < chrono::Duration::microseconds(5));
+        }
+    }
+
+    #[test]
+    fn explicit_csv_supports_kilometers_and_leaves_ordinary_tables_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("Notebook output.csv");
+        let rows = "utc,x_km,y_km,z_km\n2024-01-01T00:00:00Z,149597870.7,0,0\n2024-01-02T00:00:00Z,0,149597870.7,0";
+        let cancel = AtomicBool::new(false);
+        std::fs::write(&file, rows).unwrap();
+        assert!(!Trajectory::has_file_header(&file, &cancel).unwrap());
+        assert!(
+            Trajectory::read_if_identified(&file, &cancel)
+                .unwrap()
+                .is_none()
+        );
+
+        std::fs::write(&file, format!("\u{feff}{CSV_MARKER}\r\n{rows}")).unwrap();
+        let trajectory = Trajectory::read_if_identified(&file, &cancel)
+            .unwrap()
+            .unwrap();
+        assert_eq!(trajectory.name, "Notebook output");
+        assert_eq!(
+            trajectory.positions().collect::<Vec<_>>(),
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        );
+        assert_eq!(
+            trajectory.range()[0].to_rfc3339(),
+            "2024-01-01T00:00:00+00:00"
+        );
+
+        std::fs::write(
+            &file,
+            format!("{CSV_MARKER}\n{rows}\n2024-01-02T00:00:00Z,1,1,1"),
+        )
+        .unwrap();
+        let err = Trajectory::read_if_identified(&file, &cancel)
+            .err()
+            .unwrap();
+        assert!(err.contains("increase strictly"));
+    }
+
+    #[test]
+    fn non_trajectory_xml_and_json_keep_their_default_route() {
+        for header in [
+            "<instrument><oem id=\"CCSDS_OEM_VERS\" version=\"3.0\"/></instrument>",
+            r#"{"result": "cartesian states / Horizons Target body name:"}"#,
+        ] {
+            assert_eq!(Format::detect(header), None);
+        }
+    }
+
+    #[test]
+    fn oem_rejects_other_origins_and_segment_boundaries_and_honors_usable_time() {
+        let cancel = AtomicBool::new(false);
+        let data = include_str!("../../../../docs/examples/solar-system/Mars-ICRF.oem");
+        let earth = data.replace("CENTER_NAME = SUN", "CENTER_NAME = EARTH");
+        assert!(
+            oem::read_kvn(&earth, &cancel)
+                .err()
+                .unwrap()
+                .contains("SUN center")
+        );
+        let second_segment = data.find("META_START").unwrap();
+        let multiple = format!("{data}\n{}", &data[second_segment..]);
+        assert!(
+            oem::read_kvn(&multiple, &cancel)
+                .err()
+                .unwrap()
+                .contains("single CCSDS OEM segment")
+        );
+        let with_usable_range = data.replace(
+            "START_TIME = 2024-01-01T00:00:00",
+            "START_TIME = 2024-001T00:00:00\nUSEABLE_START_TIME = 2024-001T22:00:00",
+        );
+        let trajectory = oem::read_kvn(&with_usable_range, &cancel).unwrap();
+        assert_eq!(trajectory.positions().count(), 2);
+        assert_eq!(
+            trajectory.range()[0].format("%F %H:%M").to_string(),
+            "2024-01-01 23:58"
+        );
     }
 
     #[test]
@@ -350,9 +637,9 @@ Reference frame : Ecliptic of J2000.0\n";
 
     #[test]
     fn unrelated_csv_and_non_heliocentric_vectors_are_distinguished() {
-        assert!(!Trajectory::has_header("JD,X,Y,Z\n1,2,3,4"));
+        assert_eq!(Format::detect("JD,X,Y,Z\n1,2,3,4"), None);
         let header = HEADER.replace("Sun (10)", "Earth (399)");
-        assert!(Trajectory::has_header(&header));
+        assert_eq!(Format::detect(&header), Some(Format::Horizons));
         assert!(
             Metadata::parse(&header)
                 .err()

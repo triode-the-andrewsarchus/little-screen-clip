@@ -396,16 +396,13 @@ impl EntryPreviews {
         palette: &little_clip_core::palette::AppPalette,
     ) -> Option<super::DocumentPosition> {
         if entry.is_spreadsheet() {
-            super::spreadsheet_strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                palette,
-                self.listing(entry),
-            )
-            .map(super::DocumentPosition::SpreadsheetSheet)
+            let ready = self.listing(entry);
+            if let Some(trajectory) = ready.filter(|ready| ready.data.solar_trajectory) {
+                show_trajectory_strip(ui, row, entry, Some(columns), colors, trajectory);
+                return None;
+            }
+            super::spreadsheet_strip::show(ui, row, entry, columns, colors, palette, ready)
+                .map(super::DocumentPosition::SpreadsheetSheet)
         } else if entry.is_subtitles() {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
@@ -1139,6 +1136,55 @@ mod tests {
         previews.listing(entry).unwrap()
     }
 
+    const DOCUMENT_ROW_TOP: f32 = 20.0;
+
+    fn paint_document_row(
+        ctx: &egui::Context,
+        previews: &mut EntryPreviews,
+        entry: &Entry,
+        expected: Option<super::super::DocumentPosition>,
+    ) -> egui::FullOutput {
+        let palette = little_clip_core::palette::AppPalette::default();
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+        let row =
+            egui::Rect::from_min_size(egui::pos2(20.0, DOCUMENT_ROW_TOP), egui::vec2(520.0, 108.0));
+        clip_ui::test_support::run_frame(ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                let position = previews.show_document(
+                    ui,
+                    row,
+                    entry,
+                    super::super::ui::ListColumns::new(row),
+                    colors,
+                    &palette,
+                );
+                assert_eq!(position, expected);
+            });
+        })
+    }
+
+    #[test]
+    fn trajectory_csv_row_paints_an_orbit_instead_of_a_sheet() {
+        let folder = tempfile::tempdir().unwrap();
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/examples/solar-system/Example-orbit.csv");
+        std::fs::copy(example, folder.path().join("orbit.csv")).unwrap();
+        let entry = single_entry(folder.path());
+        assert!(entry.is_spreadsheet());
+        let ctx = egui::Context::default();
+        let mut previews = EntryPreviews::default();
+        assert!(
+            await_listing(&mut previews, &ctx, &entry)
+                .data
+                .solar_trajectory
+        );
+
+        let frame = paint_document_row(&ctx, &mut previews, &entry, None);
+        assert!(frame.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("Heliocentric CSV"))
+        }));
+    }
+
     #[test]
     fn spreadsheet_row_paints_table_values_and_retires_revised_sources() {
         let folder = tempfile::tempdir().unwrap();
@@ -1147,36 +1193,23 @@ mod tests {
         let entry = single_entry(folder.path());
         assert!(entry.has_content_strip());
         let ctx = egui::Context::default();
-        let palette = little_clip_core::palette::AppPalette::default();
-        let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
         let mut previews = EntryPreviews::default();
         let ready = await_listing(&mut previews, &ctx, &entry);
         assert_eq!(ready.data.icon, crate::icons::Icon::Spreadsheet);
         assert!(ready.data.document.is_none());
         assert!(ready.data.spreadsheet.is_some());
 
-        let row = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(520.0, 108.0));
-        let output = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
-            ctx.root_ui(|ui| {
-                let position = previews.show_document(
-                    ui,
-                    row,
-                    &entry,
-                    super::super::ui::ListColumns::new(row),
-                    colors,
-                    &palette,
-                );
-                assert_eq!(
-                    position,
-                    Some(super::super::DocumentPosition::SpreadsheetSheet(0))
-                );
-            });
-        });
+        let output = paint_document_row(
+            &ctx,
+            &mut previews,
+            &entry,
+            Some(super::super::DocumentPosition::SpreadsheetSheet(0)),
+        );
         let painted: Vec<_> = output
             .shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.pos.y >= row.top() + 32.0 => {
+                egui::Shape::Text(text) if text.pos.y >= DOCUMENT_ROW_TOP + 32.0 => {
                     Some(text.galley.text())
                 }
                 _ => None,

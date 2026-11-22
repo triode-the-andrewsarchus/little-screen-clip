@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<oem id="CCSDS_OEM_VERS" version="3.0">
+  <header>
+    <COMMENT>Mars positions and velocities sampled from NASA/JPL Horizons.</COMMENT>
+    <CREATION_DATE>2024-01-03T00:00:00</CREATION_DATE>
+    <ORIGINATOR>EXAMPLE</ORIGINATOR>
+  </header>
+  <body>
+    <segment>
+      <metadata>
+        <OBJECT_NAME>Mars</OBJECT_NAME>
+        <OBJECT_ID>499</OBJECT_ID>
+        <CENTER_NAME>SUN</CENTER_NAME>
+        <REF_FRAME>ICRF</REF_FRAME>
+        <TIME_SYSTEM>TDB</TIME_SYSTEM>
+        <START_TIME>2024-01-01T00:00:00</START_TIME>
+        <STOP_TIME>2024-01-03T00:00:00</STOP_TIME>
+        <INTERPOLATION>LINEAR</INTERPOLATION>
+        <INTERPOLATION_DEGREE>1</INTERPOLATION_DEGREE>
+      </metadata>
+      <data>
+        <stateVector>
+          <EPOCH>2024-01-01T00:00:00</EPOCH>
+          <X units="km">-4.388577457378983E+07</X>
+          <Y>-1.977900430260003E+08</Y>
+          <Z>-8.953784653385627E+07</Z>
+          <X_DOT>2.466191455129204E+01</X_DOT>
+          <Y_DOT>-2.234211837103381E+00</Y_DOT>
+          <Z_DOT>-1.690169655402774E+00</Z_DOT>
+        </stateVector>
+        <stateVector>
+          <EPOCH>2024-01-02T00:00:00</EPOCH>
+          <X>-4.175301572002084E+07</X>
+          <Y>-1.979740533818281E+08</Y>
+          <Z>-8.967979050738409E+07</Z>
+          <X_DOT>2.470714728466921E+01</X_DOT>
+          <Y_DOT>-2.025164717212617E+00</Y_DOT>
+          <Z_DOT>-1.595504695357043E+00</Z_DOT>
+        </stateVector>
+        <stateVector>
+          <EPOCH>2024-01-03T00:00:00</EPOCH>
+          <X>-3.961644126821825E+07</X>
+          <Y>-1.981399705938651E+08</Y>
+          <Z>-8.981353849754345E+07</Z>
+          <X_DOT>2.475023595271728E+01</X_DOT>
+          <Y_DOT>-1.815392027077601E+00</Y_DOT>
+          <Z_DOT>-1.500449091780500E+00</Z_DOT>
+        </stateVector>
+      </data>
+    </segment>
+  </body>
+</oem>

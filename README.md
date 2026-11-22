@@ -59,6 +59,9 @@ smallest-first, Modified starts newest-first, and unavailable metadata stays las
 Sorting preserves selection and lasts for the current window, including refreshes
 and folder changes. The Type header is a sorting control; preview rows continue
 to identify their types through their existing names, icons and previews.
+Files can plot dated heliocentric paths in its Solar System view. The
+[Solar System import guide](docs/examples/solar-system/README.md) has supported
+formats, working sample files, and coverage by workflow.
 Phase 1 provides folder browsing, Back/Forward/Up, an editable address bar, a lazy
 folder tree, refresh, and hidden-file visibility. Phase 2 adds multi-selection, create/rename, queued copy/move, conflict decisions,
 Trash/restore, permanent deletion, clipboard file references, external-change refresh, and native Wayland drag-and-drop. See [Phase 2 delivery](docs/File%20Manager/phase2.md).

@@ -1123,18 +1123,28 @@ mod tests {
     }
 
     #[test]
-    fn horizons_vector_exports_open_as_geography() {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/horizons/4-Vesta.txt");
-        assert!(matches!(
-            load(
-                &path,
-                &AppConfig::default(),
-                &std::sync::atomic::AtomicBool::new(false)
-            )
-            .unwrap(),
-            Loaded::Geography(_)
-        ));
+    fn trajectory_files_open_as_geography() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
+        let config = AppConfig::default();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let open = |path: &Path| load(path, &config, &cancelled).unwrap();
+        for file in [
+            "horizons/4-Vesta.txt",
+            "horizons/Mars-ICRF.json",
+            "solar-system/Mars-ICRF.oem",
+            "solar-system/Mars-ICRF.xml",
+            "solar-system/Example-orbit.csv",
+        ] {
+            assert!(
+                matches!(open(&examples.join(file)), Loaded::Geography(_)),
+                "{file}"
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("measurements.csv");
+        std::fs::write(&path, "date,x,y,z\n2024-01-01,1,2,3\n2024-01-02,4,5,6\n").unwrap();
+        assert!(matches!(open(&path), Loaded::Sheet(_)));
     }
 
     #[test]

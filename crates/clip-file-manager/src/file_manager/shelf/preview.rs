@@ -295,7 +295,16 @@ impl Source {
             Source::VcvRaster(request) => request.load(token),
             Source::Geography(path) => super::super::geography::load(&path, token),
             Source::Spreadsheet(path, revision) => {
-                super::super::spreadsheet_strip::load(&path, revision, token)
+                use little_clip_core::geography::trajectory::Trajectory;
+                if Trajectory::is_candidate(&path)
+                    && super::super::filesystem::check_revision(&path, revision).is_ok()
+                    && let Some(trajectory) = trajectory_preview(&path, token)
+                    && super::super::filesystem::check_revision(&path, revision).is_ok()
+                {
+                    trajectory
+                } else {
+                    super::super::spreadsheet_strip::load(&path, revision, token)
+                }
             }
             Source::Database(path) => super::super::database::load(&path, token),
             Source::Calendar(path) => super::super::calendar::load(&path, token),
@@ -1090,15 +1099,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn horizons_text_uses_orbit_preview_while_plain_text_keeps_its_summary() {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/horizons/4-Vesta.txt");
+    fn trajectory_sources_use_orbit_previews_while_plain_text_keeps_its_summary() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
         let token = AtomicBool::new(false);
-        let orbit = Source::Text(path).load(&token);
-        assert!(orbit.solar_trajectory);
-        assert!(orbit.image.is_some());
-        assert!(orbit.document.is_none());
-        assert!(orbit.detail.contains("Vesta"));
+        for (file, target) in [
+            ("horizons/4-Vesta.txt", "Vesta"),
+            ("horizons/Mars-ICRF.json", "Mars"),
+            ("solar-system/Mars-ICRF.oem", "Mars"),
+            ("solar-system/Mars-ICRF.xml", "Mars"),
+            ("solar-system/Example-orbit.csv", "Example-orbit"),
+        ] {
+            let orbit = Source::Text(examples.join(file)).load(&token);
+            assert!(orbit.solar_trajectory, "{file}");
+            assert!(orbit.image.is_some(), "{file}");
+            assert!(orbit.document.is_none(), "{file}");
+            assert!(orbit.detail.contains(target), "{file}");
+        }
 
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("ordinary.txt");
@@ -1320,18 +1336,28 @@ mod gallery_completion_tests {
     }
 }
 
+fn trajectory_preview(path: &Path, token: &AtomicBool) -> Option<Data> {
+    let trajectory =
+        little_clip_core::geography::trajectory::Trajectory::read_if_identified(path, token)
+            .ok()??;
+    let [start, end] = trajectory.range();
+    let mut data = Data::new(display_path(path), trajectory.name.clone(), Icon::Globe);
+    data.text = format!(
+        "{} to {} UTC · {}",
+        start.date_naive(),
+        end.date_naive(),
+        trajectory.source_label()
+    );
+    data.image = little_clip_render::render_trajectory_thumbnail(&trajectory);
+    data.solar_trajectory = true;
+    Some(data)
+}
+
 fn document_preview(path: &Path, token: &AtomicBool) -> Data {
     if let Some(document) = super::super::multisample::read_if_identified(path, token) {
         return super::super::multisample::preview(document);
     }
-    if let Ok(Some(trajectory)) =
-        little_clip_core::geography::trajectory::Trajectory::read_if_identified(path, token)
-    {
-        let [start, end] = trajectory.range();
-        let mut data = Data::new(display_path(path), trajectory.name.clone(), Icon::Globe);
-        data.text = format!("{} to {} UTC", start.date_naive(), end.date_naive());
-        data.image = little_clip_render::render_trajectory_thumbnail(&trajectory);
-        data.solar_trajectory = true;
+    if let Some(data) = trajectory_preview(path, token) {
         return data;
     }
     if little_clip_core::document::is_office_document(path) {

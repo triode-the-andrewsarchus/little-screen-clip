@@ -124,6 +124,17 @@ impl Calendar {
 }
 
 fn earth_ticks(range: [f64; 2], target: f64) -> Vec<Tick> {
+    if target <= 30.0 {
+        let step = nice_step(target);
+        let format = if step < 1.0 {
+            "%H:%M:%S%.3f"
+        } else {
+            "%H:%M:%S"
+        };
+        return regular_ticks(range, 0.0, step, |time, _| {
+            instant(time).format(format).to_string()
+        });
+    }
     if target < 18.0 * HOUR {
         return regular_ticks(range, 0.0, intraday_step(target), |time, _| {
             let date = instant(time);

@@ -105,7 +105,7 @@ impl WorkbenchApp {
         };
         let job = BackgroundJobs::global().submit(Duration::from_secs(30), move || match source {
             SpreadsheetLoadSource::File(path) => {
-                if is_horizons_file(&path)? {
+                if is_trajectory_file(&path)? {
                     return Ok(SpreadsheetLoadResult::OpenMap(path));
                 }
                 load_spreadsheet(&path).map(|data| SpreadsheetLoadResult::Sheet(data, Some(path)))

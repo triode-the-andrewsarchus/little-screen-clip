@@ -354,7 +354,7 @@ impl Viewer {
 
     pub fn from_trajectory(trajectory: solar::trajectory::Trajectory) -> Result<Self, String> {
         let document = Document::geojson(br#"{"type":"FeatureCollection","features":[]}"#)?;
-        let timeline = timeline::Timeline::with_range(Some(trajectory.range()));
+        let timeline = timeline::Timeline::for_trajectory(trajectory.range());
         let mut viewer = Self::from_document(document, timeline, false);
         let trajectory = Arc::new(trajectory);
         let mut system = solar::System::new(solar::SUN);
@@ -1538,7 +1538,11 @@ impl Viewer {
                 && let (Some(trajectory), Some(system)) = (&self.trajectory, &mut self.solar_system)
             {
                 ui.separator();
-                ui.strong(&trajectory.name);
+                ui.strong(&trajectory.name).on_hover_ui(|ui| {
+                    ui.label(trajectory.source_label());
+                    ui.label("Sun-centered J2000 ecliptic");
+                    ui.label("Linear interpolation between recorded positions");
+                });
                 if ui.button("Fit trajectory").clicked() {
                     system.fit_trajectory();
                 }

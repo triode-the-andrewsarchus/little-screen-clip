@@ -592,7 +592,7 @@ impl TextPreviewLoadJob {
     fn from_file(path: PathBuf, config: AppConfig, allow_map: bool) -> Self {
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(30), move || {
-                if allow_map && is_horizons_file(&path)? {
+                if allow_map && is_trajectory_file(&path)? {
                     return Ok(TextPreviewLoadResult::OpenMap(path));
                 }
                 let failure_path = path.display().to_string();
@@ -628,7 +628,7 @@ impl TextPreviewLoadJob {
     }
 }
 
-fn is_horizons_file(path: &std::path::Path) -> Result<bool, String> {
+fn is_trajectory_file(path: &std::path::Path) -> Result<bool, String> {
     little_clip_core::geography::trajectory::Trajectory::has_file_header(
         path,
         &std::sync::atomic::AtomicBool::new(false),

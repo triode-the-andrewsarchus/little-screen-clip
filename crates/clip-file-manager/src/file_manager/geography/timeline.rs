@@ -10,6 +10,7 @@ pub(super) use scrub::Preview;
 
 pub(super) const HEIGHT: f32 = 63.0;
 const MIN_SCALE: f64 = 0.5;
+const MIN_TRAJECTORY_SCALE: f64 = 0.001;
 const DEFAULT_SCALE: f64 = 200.0;
 const MAX_SCALE: f64 = scale::EARTH_YEAR;
 const FILE_RANGE: Color32 = Color32::from_rgb(108, 222, 183);
@@ -19,6 +20,7 @@ pub(super) struct Timeline {
     fixed: Option<DateTime<Utc>>,
     preview: Option<DateTime<Utc>>,
     recorded: Option<[DateTime<Utc>; 2]>,
+    trajectory: bool,
     seconds_per_point: f64,
     drag_time: Option<f64>,
     scrub: Option<scrub::Scrub>,
@@ -26,14 +28,28 @@ pub(super) struct Timeline {
 
 impl Timeline {
     pub fn new(document: &Document) -> Self {
-        Self::with_range(document.recorded_range())
+        Self::with_range(document.recorded_range(), false)
     }
 
-    pub fn with_range(recorded: Option<[DateTime<Utc>; 2]>) -> Self {
+    pub fn for_trajectory(recorded: [DateTime<Utc>; 2]) -> Self {
+        Self::with_range(Some(recorded), true)
+    }
+
+    fn with_range(recorded: Option<[DateTime<Utc>; 2]>, trajectory: bool) -> Self {
         let seconds_per_point = recorded.map_or(DEFAULT_SCALE, |[first, last]| {
-            let span = (last - first).num_seconds() as f64;
+            let duration = last - first;
+            let span = if trajectory {
+                duration.as_seconds_f64()
+            } else {
+                duration.num_seconds() as f64
+            };
             if span > 0.0 {
-                (span / 300.0).clamp(MIN_SCALE, MAX_SCALE)
+                let minimum = if trajectory {
+                    MIN_TRAJECTORY_SCALE
+                } else {
+                    MIN_SCALE
+                };
+                (span / 300.0).clamp(minimum, MAX_SCALE)
             } else {
                 DEFAULT_SCALE
             }
@@ -42,6 +58,7 @@ impl Timeline {
             fixed: None,
             preview: None,
             recorded,
+            trajectory,
             seconds_per_point,
             drag_time: None,
             scrub: None,
@@ -63,6 +80,17 @@ impl Timeline {
 
     pub fn time(&self) -> Option<DateTime<Utc>> {
         self.fixed.or_else(|| self.contextual_time())
+    }
+
+    fn bounds(&self, now: DateTime<Utc>) -> [f64; 2] {
+        let limit = Months::new(6_000);
+        let mut bounds = [now - limit, now + limit];
+        if self.trajectory
+            && let Some([first, last]) = self.recorded
+        {
+            bounds = [bounds[0].min(first), bounds[1].max(last)];
+        }
+        bounds.map(scale::seconds)
     }
 
     pub fn rendered_time(&mut self, ctx: &egui::Context) -> Option<Preview> {
@@ -98,10 +126,15 @@ impl Timeline {
                 ui.label("Drag left for later or right for earlier. Scroll to change scale.");
                 ui.label("Double-click to return to the start of the file or to the live clock.");
                 if let Some([first, last]) = self.recorded {
+                    let format = if self.trajectory {
+                        "%F %H:%M:%S%.3f"
+                    } else {
+                        "%F %H:%M"
+                    };
                     ui.label(format!(
                         "Recorded time   {} – {} UTC",
-                        first.format("%Y-%m-%d %H:%M"),
-                        last.format("%Y-%m-%d %H:%M")
+                        first.format(format),
+                        last.format(format)
                     ));
                 }
                 if let Some(source) = source {
@@ -111,8 +144,7 @@ impl Timeline {
                     ui.label("Cycle numbers are relative to J2000.");
                 }
             });
-        let limit = Months::new(6_000);
-        let bounds = [now - limit, now + limit].map(scale::seconds);
+        let bounds = self.bounds(now);
         let time = self.navigate(&response, now, bounds);
         if self.time().is_none() {
             let millis = 60_000 - now.timestamp_millis().rem_euclid(60_000);
@@ -134,7 +166,7 @@ impl Timeline {
         painter.text(
             rect.center_top() + vec2(0.0, 6.0),
             Align2::CENTER_TOP,
-            time.format("%Y-%m-%d  %H:%M UTC").to_string(),
+            time.format(self.scrub_precision().1).to_string(),
             FontId::monospace(13.0),
             ui.visuals().strong_text_color(),
         );
@@ -167,21 +199,27 @@ impl Timeline {
         let current = self.time().unwrap_or(now);
         let previous_fixed = self.fixed;
         let scroll = map_camera::scroll_zoom(response);
+        let minimum = if self.trajectory {
+            MIN_TRAJECTORY_SCALE
+        } else {
+            MIN_SCALE
+        };
         self.seconds_per_point =
-            (self.seconds_per_point / scroll.powf(2.5)).clamp(MIN_SCALE, MAX_SCALE);
+            (self.seconds_per_point / scroll.powf(2.5)).clamp(minimum, MAX_SCALE);
 
         if response.double_clicked() {
             self.fixed = None;
             self.drag_time = None;
             response.ctx.request_repaint();
         } else if response.dragged_by(egui::PointerButton::Primary) {
+            let quantum = self.scrub_precision().0;
             let raw = self
                 .drag_time
                 .get_or_insert_with(|| scale::seconds(current));
             *raw = (*raw - f64::from(response.drag_delta().x) * self.seconds_per_point)
                 .clamp(bounds[0], bounds[1]);
             self.fixed = Some(scale::instant(
-                ((*raw / 60.0).round() * 60.0).clamp(bounds[0], bounds[1]),
+                ((*raw / quantum).round() * quantum).clamp(bounds[0], bounds[1]),
             ));
             response.ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
             response.ctx.request_repaint();
@@ -200,12 +238,56 @@ impl Timeline {
         }
         time
     }
+
+    fn scrub_precision(&self) -> (f64, &'static str) {
+        match self.seconds_per_point {
+            scale if self.trajectory && scale < 1.0 => (0.001, "%F  %H:%M:%S%.3f UTC"),
+            scale if self.trajectory && scale < 60.0 => (1.0, "%F  %H:%M:%S UTC"),
+            _ => (60.0, "%F  %H:%M UTC"),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui::{Context, Event, Modifiers, PointerButton, RawInput};
+
+    #[test]
+    fn trajectory_timeline_scrubs_subsecond_samples_outside_live_clock_bounds() {
+        let start = "1456-06-09T00:00:00Z".parse().unwrap();
+        let end = start + chrono::TimeDelta::milliseconds(600);
+        let mut timeline = Timeline::for_trajectory([start, end]);
+        let now = "2026-11-21T17:00:00Z".parse().unwrap();
+        let ctx = Context::default();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(720.0, 80.0));
+        let middle = rect.center();
+        let event = Event::PointerButton {
+            pos: middle,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        };
+        for (time, events) in [
+            (0.0, vec![]),
+            (0.1, vec![Event::PointerMoved(middle), event]),
+            (0.2, vec![Event::PointerMoved(middle - vec2(100.0, 0.0))]),
+        ] {
+            let mut output = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(rect),
+                    time: Some(time),
+                    events,
+                    ..RawInput::default()
+                },
+                |ui| timeline.show(ui, rect.shrink(7.0), solar::EARTH, now, None),
+            );
+            output.textures_delta.clear();
+        }
+        let time = timeline.time().unwrap();
+        assert!(time > start && time < end, "{time}");
+        assert_eq!((time - start).num_milliseconds(), 200);
+    }
 
     #[test]
     fn dragging_and_double_clicking_share_the_file_or_live_clock() {
