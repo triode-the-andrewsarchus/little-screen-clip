@@ -1,4 +1,4 @@
-use super::{Bytes, Move, Plot, Result, palettes};
+use super::{Bytes, Move, Plot, Record, Result, palettes};
 
 pub(super) fn pec(data: &[u8], plot: &mut Plot<'_>) -> Result {
     let block = data
@@ -142,33 +142,43 @@ fn indexed_palette(mut header: Bytes<'_>) -> Result<Vec<Option<[u8; 3]>>> {
 }
 
 fn stitches(mut input: Bytes<'_>, plot: &mut Plot<'_>) -> Result {
-    while let Some(&lead) = input.0.first() {
+    while !input.0.is_empty() {
         plot.record()?;
-        if lead == 0xff && input.0.get(1).is_none_or(|&next| next == 0) {
-            break;
-        }
-        if input.0.starts_with(&[0xfe, 0xb0]) {
-            input.skip(3)?;
-            let next = plot.color_index + 1;
-            let current = plot.color(plot.color_index);
-            if plot.sewn_in_block && current.is_some() && current == plot.color(next) {
-                // The same thread can appear twice to encode a stop.
-                plot.color_index = next;
-            } else {
-                plot.change();
+        match pec_record(&mut input)? {
+            Record::Move(motion, x, y) => plot.relative(motion, x, y),
+            Record::ThreadChange => {
+                let next = plot.color_index + 1;
+                let current = plot.color(plot.color_index);
+                if plot.sewn_in_block && current.is_some() && current == plot.color(next) {
+                    // The same thread can appear twice to encode a stop.
+                    plot.color_index = next;
+                } else {
+                    plot.change();
+                }
             }
-            continue;
+            Record::End => break,
+            Record::Skip => {}
         }
-        let (x, x_flags) = pec_axis(&mut input)?;
-        let (y, y_flags) = pec_axis(&mut input)?;
-        let motion = if x_flags | y_flags != 0 {
-            Move::Jump
-        } else {
-            Move::Sew
-        };
-        plot.relative(motion, x, y);
     }
     Ok(())
+}
+
+fn pec_record(input: &mut Bytes<'_>) -> Result<Record> {
+    if input.0.first() == Some(&0xff) && input.0.get(1).is_none_or(|&next| next == 0) {
+        return Ok(Record::End);
+    }
+    if input.0.starts_with(&[0xfe, 0xb0]) {
+        input.skip(3)?;
+        return Ok(Record::ThreadChange);
+    }
+    let (x, x_flags) = pec_axis(input)?;
+    let (y, y_flags) = pec_axis(input)?;
+    let motion = if x_flags | y_flags != 0 {
+        Move::Jump
+    } else {
+        Move::Sew
+    };
+    Ok(Record::Move(motion, x, y))
 }
 
 fn pec_axis(input: &mut Bytes<'_>) -> Result<(i32, u8)> {

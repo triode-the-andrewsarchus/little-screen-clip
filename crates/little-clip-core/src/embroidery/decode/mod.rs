@@ -70,6 +70,13 @@ enum Move {
     Shift,
 }
 
+enum Record {
+    Move(Move, i32, i32),
+    ThreadChange,
+    End,
+    Skip,
+}
+
 const FALLBACK_COLORS: [[u8; 3]; 6] = [
     [19, 123, 117],
     [181, 55, 84],

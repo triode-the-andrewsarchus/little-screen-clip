@@ -1,4 +1,4 @@
-use super::{Bytes, Move, Plot, Result, inverted_delta, palettes, signed};
+use super::{Bytes, Move, Plot, Record, Result, inverted_delta, palettes, signed};
 
 pub(super) fn vp3(data: &[u8], plot: &mut Plot<'_>) -> Result {
     let (mut file, center, colors) = vp3_design(data)?;
@@ -107,30 +107,37 @@ fn xxx_stitches(
 ) -> Result<bool> {
     while !input.0.is_empty() {
         plot.record()?;
-        let lead = input.u8()?;
-        if matches!(lead, 0x7d | 0x7e) {
-            let x = i32::from(i16::from_le_bytes(input.array()?));
-            let y = -i32::from(i16::from_le_bytes(input.array()?));
-            plot.relative(Move::Jump, x, y);
-            continue;
-        }
-        let next = input.u8()?;
-        if lead != 0x7f {
-            plot.relative(Move::Sew, signed(lead), -signed(next));
-            continue;
-        }
-        let (x, y) = inverted_delta(input.array()?);
-        match next {
-            1 | 3 => plot.relative(Move::Jump, x, y),
-            8 | 0x0a..=0x17 => {
+        match xxx_record(input)? {
+            Record::Move(motion, x, y) => plot.relative(motion, x, y),
+            Record::ThreadChange => {
                 starts.push(plot.stitches.len());
                 plot.change();
             }
-            0x7f | 0x18 => return Ok(true),
-            _ => {}
+            Record::End => return Ok(true),
+            Record::Skip => {}
         }
     }
     Ok(false)
+}
+
+fn xxx_record(input: &mut Bytes<'_>) -> Result<Record> {
+    let lead = input.u8()?;
+    if matches!(lead, 0x7d | 0x7e) {
+        let x = i32::from(i16::from_le_bytes(input.array()?));
+        let y = -i32::from(i16::from_le_bytes(input.array()?));
+        return Ok(Record::Move(Move::Jump, x, y));
+    }
+    let next = input.u8()?;
+    if lead != 0x7f {
+        return Ok(Record::Move(Move::Sew, signed(lead), -signed(next)));
+    }
+    let (x, y) = inverted_delta(input.array()?);
+    Ok(match next {
+        1 | 3 => Record::Move(Move::Jump, x, y),
+        8 | 0x0a..=0x17 => Record::ThreadChange,
+        0x7f | 0x18 => Record::End,
+        _ => Record::Skip,
+    })
 }
 
 pub(super) fn tbf(data: &[u8], plot: &mut Plot<'_>) -> Result {
