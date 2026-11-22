@@ -104,6 +104,9 @@ pub struct VideoFrame {
     pub seconds: f64,
     /// Select the first frame at/after the requested time; otherwise use the seek point.
     pub accurate: bool,
+    /// Select the last decoded frame at or before the requested time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub at_or_before: bool,
     /// Maximum output width.
     pub width: u32,
     /// Maximum output height.
@@ -121,6 +124,7 @@ impl VideoFrame {
             stream: VideoStream::FirstNonCover,
             seconds: 0.0,
             accurate: true,
+            at_or_before: false,
             width,
             height,
             max_source_pixels: 8192 * 8192,

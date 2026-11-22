@@ -301,6 +301,7 @@ pub(super) struct VideoMetadata {
     pub(super) frame_interval_ms: u64,
     pub(super) description: String,
     pub(super) audio_description: String,
+    pub(super) audio_tracks: u32,
 }
 
 pub(super) fn inspect_video(path: &std::path::Path) -> Result<VideoMetadata, String> {
@@ -351,6 +352,12 @@ pub(super) fn inspect_video_header(
             .unwrap_or(40),
         description,
         audio_description,
+        audio_tracks: value["streams"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|stream| stream["codec_type"].as_str() == Some("audio"))
+            .count() as u32,
     })
 }
 

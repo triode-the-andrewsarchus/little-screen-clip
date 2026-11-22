@@ -41,6 +41,7 @@ mod pdf_strip;
 mod photo_ratings;
 use little_clip_core::jobs::task as preview_job;
 mod metadata;
+mod preview_copy;
 mod previews;
 mod scene_strip;
 pub(crate) mod search;
@@ -288,6 +289,8 @@ pub(crate) struct FileManager {
     midi: midi_strip::Preview,
     audio_entries: Vec<PathBuf>,
     music_selection: Option<ui::music::MusicRange>,
+    preview_copies: preview_copy::Copies,
+    large_video_copy: Option<(video_timeline::selection::Clip, u64)>,
     fuse_mounts: fuse_binwalk::MountManager,
     mounts: mounts::Mounts,
     pub(crate) constellation: constellation::ConstellationState,
@@ -375,6 +378,8 @@ impl FileManager {
             midi: midi_strip::Preview::default(),
             audio_entries: Vec::new(),
             music_selection: None,
+            preview_copies: Default::default(),
+            large_video_copy: None,
             fuse_mounts: Default::default(),
             mounts: mounts::Mounts::new(),
             constellation: constellation::ConstellationState::new(),
@@ -448,6 +453,7 @@ impl FileManager {
             self.video_previews.clear();
             self.video_start = None;
             self.music_selection = None;
+            self.previews.text_selection = Default::default();
             self.midi.selection = None;
             self.stop_previews();
         }

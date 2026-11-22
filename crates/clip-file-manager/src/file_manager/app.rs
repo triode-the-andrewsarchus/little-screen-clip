@@ -668,6 +668,7 @@ impl FileManagerApp {
             || self.browser.view_preferences.writing()
             || self.browser.music.copying()
             || self.browser.midi.copying()
+            || self.browser.preview_copies.busy()
             || self.browser.shelf.sending()
             || self.native.as_ref().is_some_and(|native| native.busy())
         {
@@ -764,6 +765,14 @@ impl eframe::App for FileManagerApp {
                 .tick(ctx, &mut self.browser.music_selection);
         }
         self.browser.midi.tick(ctx);
+        if let Some(result) = self.browser.preview_copies.poll() {
+            match result {
+                Ok(text) => self
+                    .browser
+                    .set_status(crate::icons::Icon::Copy, text, false),
+                Err(error) => self.browser.set_error(error),
+            }
+        }
         self.browser.schedule_repaints(ctx);
 
         if ctx.input(|input| input.viewport().close_requested()) {
@@ -813,7 +822,7 @@ impl eframe::App for FileManagerApp {
                             ui.add(
                                 egui::Label::new(self.browser.selection_summary()).truncate(),
                             );
-                            if self.browser.music.busy() || self.browser.music.copying() { ui.spinner(); }
+                            if self.browser.music.busy() || self.browser.music.copying() || self.browser.preview_copies.busy() { ui.spinner(); }
                             if let Some(error) = &self.browser.music.error {
                                 ui.separator();
                                 ui.add(egui::Label::new(egui::RichText::new(error).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate()).on_hover_text(error);

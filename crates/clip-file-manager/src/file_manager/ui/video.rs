@@ -1,5 +1,12 @@
 //! Timelens rows use ordinary file selection/actions and a playing hover preview.
-use super::super::{filesystem::Entry, video_timeline::Ready};
+use super::super::{
+    filesystem::Entry,
+    preview_copy,
+    video_timeline::{
+        Ready,
+        selection::{Clip, FrameCopy, Selection, focus_id, timestamp},
+    },
+};
 use super::*;
 
 impl ListActions {
@@ -35,7 +42,8 @@ pub(super) fn preview_row(
     decimation: u8,
     can_request: bool,
     colors: WorkbenchColors,
-) -> Option<u64> {
+    row_response: &mut egui::Response,
+) -> (Option<u64>, bool) {
     let thumbnail = if entry.is_video() {
         let thumbnail = previews.show_video(
             ui,
@@ -60,7 +68,21 @@ pub(super) fn preview_row(
     let metadata = ready
         .and_then(|ready| ready.as_ref().ok())
         .map(|ready| ready.metadata.clone());
-    video_hover(
+    let (active, click_time) = match (timeline, &metadata) {
+        (Some(timeline), Some(metadata)) => timeline_interaction(
+            ui,
+            timeline,
+            entry,
+            video_previews.source(entry, metadata.clone()),
+            video_previews,
+            row_response,
+        ),
+        _ => (false, None),
+    };
+    if active {
+        return (None, true);
+    }
+    let time = video_hover(
         ui,
         entry,
         thumbnail,
@@ -68,7 +90,161 @@ pub(super) fn preview_row(
         metadata,
         video_previews,
         colors,
-    )
+    );
+    (click_time.or(time), false)
+}
+
+fn timeline_interaction(
+    ui: &mut Ui,
+    rect: Rect,
+    entry: &Entry,
+    source: super::super::video_timeline::selection::Source,
+    previews: &mut super::super::video_timeline::Previews,
+    row: &mut egui::Response,
+) -> (bool, Option<u64>) {
+    if rect.width() <= 0.0 || source.metadata.duration_ms == 0 {
+        return (false, None);
+    }
+    let response = ui.interact(
+        rect,
+        Id::unique(("video_timeline", &entry.path)),
+        Sense::click_and_drag(),
+    );
+    let duration = source.metadata.duration_ms;
+    let at = |point: egui::Pos2| {
+        let x = ((point.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        (f64::from(x) * duration as f64).round() as u64
+    };
+    if response.secondary_clicked() {
+        if let Some(point) = response.interact_pointer_pos() {
+            let time = at(point).min(duration.saturating_sub(1));
+            previews.copy_frame = Some(
+                previews
+                    .displayed_frame(entry, time)
+                    .unwrap_or(FrameCopy::Position(source, time)),
+            );
+        }
+        return (true, None);
+    }
+    let modified =
+        ui.input(|input| input.modifiers.ctrl || input.modifiers.command || input.modifiers.shift);
+    let dragging = !modified
+        && (response.dragged_by(egui::PointerButton::Primary)
+            || response.drag_stopped_by(egui::PointerButton::Primary));
+    if dragging {
+        ui.memory_mut(|memory| memory.request_focus(focus_id()));
+        if let Some(clip) =
+            preview_copy::drag_fractions(ui, &response).and_then(|range| Clip::new(source, range))
+        {
+            let mut selection = Selection::new(clip, entry.revision);
+            if response.drag_stopped() {
+                selection.prepare_frames(ui.ctx());
+            }
+            previews.selection = Some(selection);
+        }
+    } else {
+        *row = row.union(response.clone());
+    }
+    if let Some(selection) = previews
+        .selection
+        .as_ref()
+        .filter(|selection| selection.matches(&entry.path, entry.revision))
+    {
+        previews.copy_clip |= paint_selection(ui, rect, selection);
+    }
+    let click_time = if response.clicked() {
+        response.interact_pointer_pos().map(at)
+    } else {
+        None
+    };
+    (dragging, click_time)
+}
+
+fn paint_selection(ui: &mut Ui, rect: Rect, selection: &Selection) -> bool {
+    let clip = &selection.clip;
+    let duration = clip.source.metadata.duration_ms as f64;
+    let label = preview_copy::paint_range(
+        ui,
+        rect,
+        (
+            (clip.start_ms as f64 / duration) as f32,
+            (clip.end_ms as f64 / duration) as f32,
+        ),
+        &format!(
+            "{}–{}  ·  Ctrl+C",
+            timestamp(clip.start_ms),
+            timestamp(clip.end_ms)
+        ),
+    );
+    for (index, label) in ["Start", "End"].into_iter().enumerate() {
+        let width = (rect.width() * 0.23).clamp(1.0, 110.0);
+        let left = if index == 0 {
+            rect.left()
+        } else {
+            rect.right() - width
+        };
+        let frame = Rect::from_min_max(
+            pos2(left, rect.top()),
+            pos2(left + width, (rect.bottom() - 21.0).max(rect.top() + 1.0)),
+        );
+        paint_endpoint(
+            ui,
+            frame,
+            label,
+            selection.frames.as_ref().map(|frames| &frames[index]),
+        );
+    }
+    label.width() >= 290.0
+        && ui
+            .put(
+                Rect::from_min_max(
+                    pos2(label.right() - 66.0, label.top() + 1.0),
+                    label.right_bottom(),
+                ),
+                egui::Button::new("Copy clip").small(),
+            )
+            .clicked()
+}
+
+fn paint_endpoint(
+    ui: &mut Ui,
+    rect: Rect,
+    label: &str,
+    frame: Option<&Result<(egui::TextureHandle, u64), String>>,
+) {
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, egui::Color32::from_black_alpha(210));
+    if let Some(Ok((texture, _))) = frame {
+        let size = texture.size_vec2();
+        let scale = (rect.width() / size.x).min(rect.height() / size.y);
+        painter.image(
+            texture.id(),
+            Rect::from_center_size(rect.center(), size * scale),
+            unit_uv(),
+            Color32::WHITE,
+        );
+    }
+    let label = match frame {
+        Some(Ok((_, time))) => format!("{label} {}", timestamp(*time)),
+        Some(Err(_)) => format!("{label} unavailable"),
+        None => format!("{label}…"),
+    };
+    painter.text(
+        rect.left_bottom() - vec2(-2.0, 1.0),
+        egui::Align2::LEFT_BOTTOM,
+        label,
+        FontId::monospace(10.0),
+        Color32::WHITE,
+    );
+}
+
+pub(in crate::file_manager) fn paint_timelens(ui: &Ui, rect: Rect, texture: &egui::TextureHandle) {
+    ui.painter()
+        .image(texture.id(), rect, unit_uv(), Color32::WHITE);
+}
+
+fn unit_uv() -> Rect {
+    Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0))
 }
 
 fn video_hover(
@@ -105,7 +281,12 @@ fn video_hover(
         Id::unique(("video_timeline_hover", &entry.path)),
         egui::PopupAnchor::Pointer,
     )
-    .show(|ui| previews.hover_ui(ui));
+    .show(|ui| {
+        previews.hover_ui(ui);
+        if timeline.is_some_and(|rect| rect.contains(point)) {
+            ui.small("Drag to select a clip · Right-click to copy the frame");
+        }
+    });
     Some(time)
 }
 
@@ -152,12 +333,7 @@ fn video_card(
     match ready {
         Some(Ok(ready)) => {
             if let Some(texture) = &ready.texture {
-                ui.painter().image(
-                    texture.id(),
-                    timeline,
-                    Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)),
-                    Color32::WHITE,
-                );
+                paint_timelens(ui, timeline, texture);
                 if ready.refining {
                     let label = Rect::from_min_size(
                         timeline.left_bottom() - vec2(0.0, 20.0),
@@ -208,4 +384,62 @@ fn video_card(
         }
     }
     Some(timeline)
+}
+
+impl FileManager {
+    pub(in crate::file_manager) fn copy_video_range(&mut self, ctx: &egui::Context) {
+        let Some(clip) = self
+            .video_previews
+            .selection
+            .as_ref()
+            .map(|selection| selection.clip.clone())
+        else {
+            return;
+        };
+        if self.preview_copies.busy() {
+            return;
+        }
+        if let Some(bytes) = clip.large_estimate() {
+            self.large_video_copy = Some((clip, bytes));
+            ctx.request_repaint();
+            return;
+        }
+        self.preview_copies
+            .start(ctx, move |cancel| clip.export(cancel));
+    }
+
+    pub(super) fn large_video_copy_ui(&mut self, ctx: &egui::Context, palette: &AppPalette) {
+        use clip_ui::buttons::ButtonRole;
+        let Some((clip, bytes)) = &self.large_video_copy else {
+            return;
+        };
+        let dialog = egui::Modal::new(Id::unique("copy_large_video_clip")).show(ctx, |ui| {
+            ui.set_width(350.0);
+            ui.heading("Copy a large video clip?");
+            ui.label(format!(
+                "The selected clip from {} to {} is estimated at {:.2} GB.",
+                timestamp(clip.start_ms),
+                timestamp(clip.end_ms),
+                *bytes as f64 / 1_000_000_000.0,
+            ));
+            ui.horizontal(|ui| {
+                let cancel = ui
+                    .add(ButtonRole::Secondary.button("Cancel", palette))
+                    .clicked();
+                let copy = ui
+                    .add(ButtonRole::Primary.button("Copy clip", palette))
+                    .clicked();
+                (cancel, copy)
+            })
+            .inner
+        });
+        if dialog.inner.1 {
+            if let Some((clip, _)) = self.large_video_copy.take() {
+                self.preview_copies
+                    .start(ctx, move |cancel| clip.export(cancel));
+            }
+        } else if dialog.inner.0 || dialog.should_close() {
+            self.large_video_copy = None;
+        }
+    }
 }

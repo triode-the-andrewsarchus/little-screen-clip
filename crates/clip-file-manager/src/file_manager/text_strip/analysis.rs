@@ -21,7 +21,8 @@ pub(in crate::file_manager) fn load(
     cancelled: &AtomicBool,
 ) -> Result<Arc<Document>, String> {
     let source = FileSource::capture(path)?;
-    let mut file = crate::file_source::open_regular_file(path, true).map_err(|e| e.to_string())?;
+    let (mut file, _) =
+        crate::file_source::ReadCheck::default().open(path, Some(&source), cancelled)?;
     let bytes = file.metadata().map_err(|e| e.to_string())?.len();
     if bytes > 256 * 1024 * 1024 {
         return Err("Structural preview limited to 256 MiB; open to inspect".into());
@@ -42,6 +43,7 @@ pub(in crate::file_manager) fn load(
         shape.lossy,
         &mut document.note,
     )?;
+    document.source = Some(source.clone());
     document.markdown = (markdown && document.diagram.is_none()).then(|| source.clone());
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     summarize(&mut document, file, syntax, neutral, cancelled)?;
@@ -112,6 +114,7 @@ fn prepare(
         },
         diagram: None,
         markdown: None,
+        source: None,
         metadata: markdown
             .then(|| super::metadata::Summary::parse(&shape.prefix))
             .flatten(),
@@ -120,6 +123,8 @@ fn prepare(
             .map(|_| Bin {
                 start: 0,
                 end: 0,
+                bytes: 0..0,
+                last_line: String::new(),
                 cells: vec![[0; COLORS.len()]; COLUMNS],
                 excerpt: Vec::new(),
             })
@@ -139,6 +144,7 @@ fn summarize(
     let mut highlighter = HighlightLines::new(syntax, &THEME_SET.themes["base16-eighties.dark"]);
     let mut reader = Lines::new(BufReader::with_capacity(64 * 1024, file));
     let mut number = 0;
+    let mut line_offset = 0;
     while let Some(line) = reader.next(cancelled).map_err(|e| e.to_string())? {
         if number >= document.lines {
             return Err("Source changed while reading".into());
@@ -146,8 +152,11 @@ fn summarize(
         let bin = &mut document.bins[(number * bins as u64 / document.lines.max(1)) as usize];
         if bin.end == 0 {
             bin.start = number;
+            bin.bytes.start = line_offset;
         }
         bin.end = number + 1;
+        bin.bytes.end = reader.offset;
+        line_offset = reader.offset;
         let expanded = expand_tabs(&line);
         let tokens = if neutral {
             vec![(COLORS[0], expanded.as_str())]
@@ -163,6 +172,14 @@ fn summarize(
         let excerpt = add_line(bin, &tokens, number + 1, keep_excerpt);
         if keep_excerpt {
             bin.excerpt.push(excerpt);
+        }
+        if number + 1 == document.lines
+            || (number + 1) * bins as u64 / document.lines != number * bins as u64 / document.lines
+        {
+            bin.last_line = expanded.chars().take(EXCERPT_COLUMNS).collect::<String>();
+            if bin.last_line.ends_with('\n') {
+                bin.last_line.pop();
+            }
         }
         number += 1;
     }

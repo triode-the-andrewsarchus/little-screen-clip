@@ -134,7 +134,7 @@ impl<'a> ListPreviews<'a> {
         } else if entry.is_video() {
             self.visible_videos.push(entry);
             self.paths.insert(entry.path.clone());
-            let time = video::preview_row(
+            let (time, active) = video::preview_row(
                 ui,
                 rect,
                 entry,
@@ -144,11 +144,15 @@ impl<'a> ListPreviews<'a> {
                 self.decimation,
                 self.can_request,
                 colors,
+                &mut response,
             );
+            engaged = active;
             self.hovered_video |= time.is_some();
             actions.video_click(ui, &response, entry, time, self.video_start);
         } else {
-            let position = self.passive_row(ui, rect, entry, colors, palette);
+            let (position, active) =
+                self.passive_row(ui, rect, entry, colors, palette, &mut response);
+            engaged = active;
             if response.double_clicked() {
                 actions.open_position = position;
             }
@@ -245,7 +249,8 @@ impl<'a> ListPreviews<'a> {
         entry: &Entry,
         colors: WorkbenchColors,
         palette: &AppPalette,
-    ) -> Option<super::super::DocumentPosition> {
+        response: &mut egui::Response,
+    ) -> (Option<super::super::DocumentPosition>, bool) {
         if entry.system.is_some() {
             self.paths.insert(entry.path.clone());
             self.files
@@ -265,11 +270,17 @@ impl<'a> ListPreviews<'a> {
                 .show_visual(ui, rect, entry, Some(self.columns), colors, palette);
         } else if !entry.directory && self.paths.len() < 128 {
             self.paths.insert(entry.path.clone());
-            return self
-                .files
-                .show_document(ui, rect, entry, self.columns, colors, palette);
+            return self.files.show_document(
+                ui,
+                rect,
+                entry,
+                self.columns,
+                colors,
+                palette,
+                response,
+            );
         }
-        None
+        (None, false)
     }
 }
 
@@ -358,6 +369,16 @@ impl FileManager {
             .index
             .and_then(|index| self.history.get(index))
             .map(|location| &location.selection);
+        ui.interact(
+            ui.available_rect_before_wrap(),
+            minimap_id(),
+            Sense::focusable_noninteractive(),
+        );
+        ui.interact(
+            ui.available_rect_before_wrap(),
+            timeline_id(),
+            Sense::focusable_noninteractive(),
+        );
         let mut actions = ListActions::for_browser(self);
         let can_edit = self.can_edit();
         let selection_count = self.selection_count();
@@ -467,7 +488,7 @@ impl FileManager {
         }
         previews.music.retain(&previews.music_paths);
         previews.videos.retain(&previews.visible_videos);
-        if !previews.hovered_video {
+        if !previews.hovered_video && !ui.input(|input| input.pointer.secondary_down()) {
             previews.videos.clear_hover();
         }
         previews
@@ -479,6 +500,16 @@ impl FileManager {
         self.drop_targets.extend(targets);
         self.finish_listing(ui, actions, output.state.clamped_offset().y, &background);
         self.list_audio(play);
+        if std::mem::take(&mut self.video_previews.copy_clip) {
+            self.copy_video_range(ui.ctx());
+        }
+        if let Some(frame) = self.video_previews.copy_frame.take() {
+            self.preview_copies
+                .start(ui.ctx(), move |cancel| frame.copy(cancel));
+        }
+        if std::mem::take(&mut self.previews.text_selection.copy) {
+            self.copy_text_range(ui.ctx());
+        }
         if let Some(column) = output.inner {
             column.apply(self);
             self.focus_list = true;

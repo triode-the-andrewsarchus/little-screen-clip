@@ -1,6 +1,7 @@
 //! Visible-only timelines and one owned, muted hover player.
 mod backend;
 mod dispatch;
+pub(super) mod selection;
 use super::{filesystem::Entry, media::VideoMetadata};
 use egui::{Context, TextureHandle};
 use little_clip_core::{BackgroundJobs, ImageThumbnail, JobError};
@@ -47,6 +48,7 @@ impl FrameKey {
 }
 struct Hover {
     key: FrameKey,
+    displayed: Option<selection::FrameCopy>,
 }
 #[derive(Default)]
 pub(super) struct Previews {
@@ -56,6 +58,9 @@ pub(super) struct Previews {
     hover: Option<Hover>,
     frame: Option<super::video_playback::Session>,
     visible_jobs: usize,
+    pub(super) selection: Option<selection::Selection>,
+    pub(super) copy_frame: Option<selection::FrameCopy>,
+    pub(super) copy_clip: bool,
     pub subtitles_enabled: bool,
 }
 fn texture(ctx: &Context, name: String, image: ImageThumbnail) -> TextureHandle {
@@ -78,6 +83,7 @@ impl Previews {
     pub fn clear(&mut self) {
         self.ready.clear();
         self.pending.clear();
+        self.selection = None;
         self.clear_hover();
     }
     pub fn clear_hover(&mut self) {
@@ -230,6 +236,9 @@ impl Previews {
             ctx.request_repaint();
         }
         self.poll_frame(ctx);
+        if let Some(selection) = &mut self.selection {
+            selection.poll(ctx);
+        }
         if !self.pending.is_empty() || self.frame.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
@@ -270,15 +279,42 @@ impl Previews {
         {
             player.seek(key.time_ms);
         }
-        self.hover = Some(Hover { key });
+        if let Some(hover) = &mut self.hover {
+            hover.key = key;
+        } else {
+            self.hover = Some(Hover {
+                key,
+                displayed: None,
+            });
+        }
     }
     fn poll_frame(&mut self, ctx: &Context) {
         if let Some(player) = &mut self.frame {
             player.poll(ctx);
         }
     }
-    pub fn hover_ui(&self, ui: &mut egui::Ui) {
-        if let (Some(hover), Some(player)) = (&self.hover, &self.frame) {
+    pub fn source(&self, entry: &Entry, metadata: Arc<VideoMetadata>) -> selection::Source {
+        selection::Source {
+            path: entry.path.clone(),
+            metadata,
+            context: self.context.clone(),
+        }
+    }
+
+    pub fn displayed_frame(&self, entry: &Entry, time_ms: u64) -> Option<selection::FrameCopy> {
+        let hover = self.hover.as_ref()?;
+        if hover.key.path == entry.path
+            && hover.key.revision == entry.revision
+            && hover.key.time_ms == time_ms / 50 * 50
+        {
+            hover.displayed.clone()
+        } else {
+            None
+        }
+    }
+
+    pub fn hover_ui(&mut self, ui: &mut egui::Ui) {
+        if let (Some(hover), Some(player)) = (&mut self.hover, &self.frame) {
             ui.label(format!(
                 "From {:.2} s · {:.2} s",
                 hover.key.time_ms as f64 / 1000.0,
@@ -288,6 +324,9 @@ impl Previews {
                 let image = texture.size_vec2();
                 let scale = (320.0 / image.x).min(240.0 / image.y).min(1.0);
                 ui.image((texture.id(), image * scale));
+                if let (Some(pixels), Some(time)) = (&player.image, player.frame_position_ms) {
+                    hover.displayed = Some(selection::FrameCopy::Displayed(pixels.clone(), time));
+                }
             } else if player.error.is_none() {
                 ui.spinner();
                 ui.label("Opening preview…");
@@ -319,6 +358,7 @@ mod tests {
             frame_interval_ms: 33,
             description: String::new(),
             audio_description: String::new(),
+            audio_tracks: 0,
         });
         let pool = BackgroundJobs::new(1, 1);
         let (gate, wait) = mpsc::sync_channel::<()>(1);

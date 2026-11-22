@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+use super::{
+    text_strip::selection::focus_id as minimap_id,
+    video_timeline::selection::focus_id as timeline_id,
+};
 use egui::{Color32, FontId, Id, Key, Modifiers, Rect, Sense, Ui, pos2, vec2};
 use little_clip_core::palette::AppPalette;
 
@@ -14,7 +18,7 @@ pub(crate) mod gallery;
 mod list;
 mod mounts;
 pub(super) mod music;
-mod video;
+pub(super) mod video;
 
 const ROW_HEIGHT: f32 = 28.0;
 pub(super) const GROUP_HEADER_HEIGHT: f32 = 52.0;
@@ -82,6 +86,8 @@ impl FileManager {
                 tree_id(),
                 list_id(),
                 music::waveform_id(),
+                minimap_id(),
+                timeline_id(),
                 super::midi_strip::focus_id(),
             ] {
                 memory.set_focus_lock_filter(
@@ -98,10 +104,13 @@ impl FileManager {
         self.naming_ui(ui.ctx(), palette);
         self.transfer_windows(ui.ctx(), palette);
         self.search_settings_ui(ui.ctx(), palette);
+        self.large_video_copy_ui(ui.ctx(), palette);
         let file_clipboard = ui.memory(|memory| {
             [
                 list_id(),
                 music::waveform_id(),
+                minimap_id(),
+                timeline_id(),
                 super::midi_strip::focus_id(),
             ]
             .into_iter()
@@ -145,6 +154,7 @@ impl FileManager {
             || self.fuse_mounts.busy()
             || self.transfers.needs_repaint()
             || self.shelf.busy()
+            || self.preview_copies.busy()
             || self.archives.busy()
             || self.watch.is_some()
             || self.tree.branches.values().any(|branch| {
@@ -158,10 +168,21 @@ impl FileManager {
     fn copy_strip_selection(&mut self, ctx: &egui::Context) {
         if ctx.memory(|memory| memory.has_focus(super::midi_strip::focus_id())) {
             self.midi.copy_selection(ctx.input(|input| input.time));
+        } else if ctx.memory(|memory| memory.has_focus(minimap_id())) {
+            self.copy_text_range(ctx);
+        } else if ctx.memory(|memory| memory.has_focus(timeline_id())) {
+            self.copy_video_range(ctx);
         } else {
             self.copy_music_range();
         }
     }
+    fn copy_text_range(&mut self, ctx: &egui::Context) {
+        if let Some(selection) = self.previews.text_selection.range.clone() {
+            self.preview_copies
+                .start(ctx, move |cancel| selection.export(cancel));
+        }
+    }
+
     fn docked_panels(&mut self, ui: &mut Ui, palette: &AppPalette) {
         let colors = WorkbenchColors::from_palette(palette);
         if self.shelf.open {
@@ -275,7 +296,10 @@ impl FileManager {
     }
 
     fn browser_modal(&self) -> bool {
-        self.edits.dialog.is_some() || self.transfers_modal() || self.search.preferences.open
+        self.edits.dialog.is_some()
+            || self.transfers_modal()
+            || self.search.preferences.open
+            || self.large_video_copy.is_some()
     }
 
     fn sync_browser_focus(&mut self, ctx: &egui::Context) -> bool {
@@ -290,6 +314,8 @@ impl FileManager {
         let owns_arrows = [
             Some(tree_id()),
             Some(music::waveform_id()),
+            Some(minimap_id()),
+            Some(timeline_id()),
             Some(super::midi_strip::focus_id()),
         ]
         .contains(&focused);
@@ -356,10 +382,23 @@ impl FileManager {
         if ctx.memory(|memory| memory.has_focus(tree_id())) {
             self.tree_shortcuts(ctx);
         } else if ctx.memory(|memory| {
-            [super::midi_strip::focus_id(), music::waveform_id()]
-                .into_iter()
-                .any(|id| memory.has_focus(id))
+            [
+                super::midi_strip::focus_id(),
+                music::waveform_id(),
+                minimap_id(),
+                timeline_id(),
+            ]
+            .into_iter()
+            .any(|id| memory.has_focus(id))
         }) {
+            let focused = ctx.memory(|memory| memory.focused());
+            if [Some(minimap_id()), Some(timeline_id())].contains(&focused)
+                && key(ctx, Modifiers::NONE, Key::Escape)
+            {
+                self.previews.text_selection.range = None;
+                self.video_previews.selection = None;
+                self.focus_list = true;
+            }
             if key(ctx, Modifiers::CTRL, Key::C) {
                 self.copy_strip_selection(ctx);
             }

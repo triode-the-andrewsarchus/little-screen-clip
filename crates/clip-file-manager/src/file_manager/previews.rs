@@ -42,6 +42,7 @@ pub(super) struct EntryPreviews {
     pdf_pages: super::pdf_strip::Pages,
     pub(super) geography: super::geography::Strips,
     system_refresh: BTreeMap<uuid::Uuid, (u64, std::time::Instant, u32)>,
+    pub(super) text_selection: super::text_strip::selection::Selection,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
 impl EntryPreviews {
@@ -49,6 +50,7 @@ impl EntryPreviews {
         if self.context.replace(context) {
             self.retire();
             self.text_status.clear();
+            self.text_selection = Default::default();
             self.multisample.context = context.clone();
             self.pdf_pages.context = context.clone();
             self.image_hover.context = context.clone();
@@ -394,8 +396,9 @@ impl EntryPreviews {
         columns: super::ui::ListColumns,
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
-    ) -> Option<super::DocumentPosition> {
-        if entry.is_subtitles() {
+        response: &mut egui::Response,
+    ) -> (Option<super::DocumentPosition>, bool) {
+        let position = if entry.is_subtitles() {
             super::subtitle_strip::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::SubtitleCue)
         } else if self.is_multisample(entry) {
@@ -465,9 +468,11 @@ impl EntryPreviews {
                 self.show_pdf(ui, row, entry, colors, palette).unwrap_or(1),
             ))
         } else {
-            self.show_listing(ui, row, entry, Some(columns), colors, palette)
-                .map(super::DocumentPosition::TextLine)
-        }
+            let (line, engaged) =
+                self.show_listing(ui, row, entry, Some(columns), colors, palette, response);
+            return (line.map(super::DocumentPosition::TextLine), engaged);
+        };
+        (position, false)
     }
     pub fn show_visual(
         &mut self,
@@ -639,12 +644,13 @@ impl EntryPreviews {
         columns: Option<super::ui::ListColumns>,
         colors: crate::ui_appearance::WorkbenchColors,
         palette: &little_clip_core::palette::AppPalette,
-    ) -> Option<usize> {
+        response: &mut egui::Response,
+    ) -> (Option<usize>, bool) {
         let id = self.identity(entry);
         self.listing(entry);
         if let Some(ready) = self.solar_trajectory(entry) {
             show_trajectory_strip(ui, row, entry, columns, colors, ready);
-            return None;
+            return (None, false);
         }
         if self.is_binary(entry) {
             let document = self
@@ -662,7 +668,7 @@ impl EntryPreviews {
                 };
                 self.paint_raster(ui, strip, id, (width, height, Vec::new()), source);
             }
-            return None;
+            return (None, false);
         }
         if row.height() <= 28.0 {
             self.show(
@@ -670,7 +676,7 @@ impl EntryPreviews {
                 egui::Rect::from_min_size(row.min + egui::vec2(6.0, 4.0), egui::vec2(20.0, 20.0)),
                 entry,
             );
-            return None;
+            return (None, false);
         }
         let badge = self
             .listing(entry)
@@ -709,7 +715,7 @@ impl EntryPreviews {
         );
         ui.painter().rect_filled(strip, 3.0, colors.recessed);
         let preview_rect = strip;
-        let strip = self.text_strip(ui, strip, entry, palette);
+        let (strip, engaged) = self.text_strip(ui, strip, entry, palette, response);
         let clicked_line = ui
             .ctx()
             .pointer_interact_pos()
@@ -744,15 +750,16 @@ impl EntryPreviews {
             )
             .show(|ui| self.text_hover(ui, id, 0.0, usize::MAX, palette));
         }
-        clicked_line
+        (clicked_line, engaged)
     }
-    pub fn text_strip(
+    fn text_strip(
         &mut self,
         ui: &mut egui::Ui,
         rect: egui::Rect,
         entry: &Entry,
         palette: &little_clip_core::palette::AppPalette,
-    ) -> egui::Rect {
+        response: &mut egui::Response,
+    ) -> (egui::Rect, bool) {
         let id = self.identity(entry);
         let Some(document) = self
             .cache
@@ -770,12 +777,12 @@ impl EntryPreviews {
                 egui::FontId::proportional(14.0),
                 ui.visuals().weak_text_color(),
             );
-            return rect;
+            return (rect, false);
         };
         if let Some(ready) = self.cache.get(id)
             && super::diagram_strip::show(ui, rect, id, ready)
         {
-            return rect;
+            return (rect, false);
         }
         let rect = document.metadata.as_ref().map_or(rect, |metadata| {
             metadata.show(
@@ -804,7 +811,17 @@ impl EntryPreviews {
                 ui.visuals().error_fg_color,
             );
         }
-        let hovered = super::ui::preview_hovered(ui, rect);
+        let engaged = document.diagram.is_none()
+            && self.text_selection.show(
+                ui,
+                rect,
+                width as usize,
+                entry,
+                &document,
+                response,
+                &self.context,
+            );
+        let hovered = !engaged && super::ui::preview_hovered(ui, rect);
         if hovered {
             let point = ui.ctx().pointer_hover_pos().unwrap_or(rect.min);
             let fraction = ((point.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
@@ -821,9 +838,14 @@ impl EntryPreviews {
                 egui::Id::unique(("text_strip_hover", id)),
                 egui::PopupAnchor::Pointer,
             )
-            .show(|ui| self.text_hover(ui, id, fraction, width as usize, palette));
+            .show(|ui| {
+                self.text_hover(ui, id, fraction, width as usize, palette);
+                if document.diagram.is_none() && document.lines > 0 {
+                    ui.small("Drag the minimap to select lines");
+                }
+            });
         }
-        rect
+        (rect, engaged)
     }
     fn text_hover(
         &mut self,
@@ -1508,15 +1530,16 @@ mod tests {
             let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
                 ctx.root_ui(|ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        previews.text_strip(
-                            ui,
-                            egui::Rect::from_min_size(
-                                egui::pos2(20.0, 20.0),
-                                egui::vec2(width, 66.0),
-                            ),
-                            &entry,
-                            &palette,
+                        let rect = egui::Rect::from_min_size(
+                            egui::pos2(20.0, 20.0),
+                            egui::vec2(width, 66.0),
                         );
+                        let mut response = ui.interact(
+                            rect,
+                            egui::Id::unique("test_text_row"),
+                            egui::Sense::click(),
+                        );
+                        previews.text_strip(ui, rect, &entry, &palette, &mut response);
                     })
                 });
             });

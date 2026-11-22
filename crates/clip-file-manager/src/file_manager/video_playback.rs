@@ -35,6 +35,7 @@ pub(super) struct Session {
     delivery: Arc<Mutex<Delivery>>,
     source: Arc<Mutex<FileSource>>,
     pub texture: Option<egui::TextureHandle>,
+    pub image: Option<Arc<egui::ColorImage>>,
     pub position_ms: u64,
     pub frame_position_ms: Option<u64>,
     frame_epoch: Option<u64>,
@@ -98,6 +99,7 @@ impl Session {
             delivery,
             source,
             texture: None,
+            image: None,
             position_ms: start_ms,
             frame_position_ms: None,
             frame_epoch: None,
@@ -159,10 +161,11 @@ impl Session {
         {
             self.frame_position_ms = Some(frame.position_ms);
             self.frame_epoch = Some(frame.epoch);
-            let image = egui::ColorImage::from_rgba_unmultiplied(
+            let image = Arc::new(egui::ColorImage::from_rgba_unmultiplied(
                 [frame.width as usize, frame.height as usize],
                 &pixels,
-            );
+            ));
+            self.image = Some(image.clone());
             if let Some(texture) = &mut self.texture {
                 texture.set(image, egui::TextureOptions::LINEAR);
             } else {
