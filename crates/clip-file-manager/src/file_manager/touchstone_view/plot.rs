@@ -209,20 +209,41 @@ fn paint_trace(
     projection: Projection,
     color: Color32,
 ) {
+    let points = data
+        .iter()
+        .map(|point| (point.frequency_hz, projection.coordinate(point.value)));
+    paint_curve(
+        inside,
+        rect,
+        band,
+        points,
+        values,
+        projection == Projection::Phase,
+        color,
+    );
+}
+
+pub(super) fn paint_curve(
+    inside: &Painter,
+    rect: Rect,
+    band: Band,
+    data: impl ExactSizeIterator<Item = (f64, f64)>,
+    values: Band,
+    wrap_phase: bool,
+    color: Color32,
+) {
     let mut segment = Vec::with_capacity(data.len());
     let mut previous: Option<f64> = None;
-    for point in data {
-        let value = projection.coordinate(point.value);
+    for (frequency_hz, value) in data {
         if !value.is_finite()
-            || (projection == Projection::Phase
-                && previous.is_some_and(|previous| (value - previous).abs() > 180.0))
+            || (wrap_phase && previous.is_some_and(|previous| (value - previous).abs() > 180.0))
         {
             draw_line(inside, std::mem::take(&mut segment), color);
         }
         if value.is_finite() {
             let height = fraction(values, value).clamp(-10.0, 11.0);
             segment.push(pos2(
-                x_at(rect, band, point.frequency_hz),
+                x_at(rect, band, frequency_hz),
                 rect.bottom() - rect.height() * height,
             ));
             previous = Some(value);

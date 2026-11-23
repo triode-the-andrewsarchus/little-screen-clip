@@ -1,6 +1,7 @@
 //! Plots and exact source inspection for offline Touchstone sweeps.
 
 mod capture;
+mod group_delay;
 mod markers;
 mod plot;
 pub(super) mod strip;
@@ -36,6 +37,7 @@ enum Panel {
     None,
     Matrix,
     Impulse,
+    Delay,
 }
 
 pub(super) struct Viewer {
@@ -58,6 +60,7 @@ pub(super) struct Viewer {
     draft: Option<(usize, f64)>,
     panel: Panel,
     time_domain: time_domain::TimeDomain,
+    group_delay: group_delay::DelayView,
     error: Option<String>,
 }
 
@@ -92,6 +95,7 @@ impl Viewer {
             draft: None,
             panel: Panel::None,
             time_domain: time_domain::TimeDomain::default(),
+            group_delay: group_delay::DelayView::default(),
             error: None,
         })
     }
@@ -130,7 +134,7 @@ impl Viewer {
         self.status(ui);
         self.draw_marker_tools(ui, copies, colors);
         let height = match self.panel {
-            Panel::Impulse => ui.available_height() * 0.41,
+            Panel::Impulse | Panel::Delay => ui.available_height() * 0.41,
             Panel::Matrix => ui.available_height() - 284.0,
             Panel::None => ui.available_height() - 52.0,
         };
@@ -192,6 +196,9 @@ impl Viewer {
     }
 
     fn draw_panel(&mut self, ui: &mut Ui, copies: &mut Copies, colors: WorkbenchColors) {
+        if self.panel != Panel::Delay {
+            self.group_delay.suspend();
+        }
         if self.panel == Panel::Impulse {
             let index = self.matching_index().map(|indexed| indexed.index.clone());
             self.time_domain.content(
@@ -207,6 +214,10 @@ impl Viewer {
             return;
         }
         self.time_domain.suspend();
+        if self.panel == Panel::Delay {
+            self.draw_group_delay(ui, copies, colors);
+            return;
+        }
         let rows = self.row_count();
         if self.panel == Panel::Matrix
             && let Some(trace) = self
@@ -217,8 +228,30 @@ impl Viewer {
         }
     }
 
+    fn draw_group_delay(&mut self, ui: &mut Ui, copies: &mut Copies, colors: WorkbenchColors) {
+        let index = self.matching_index().map(|indexed| indexed.index.clone());
+        let gated = self.time_domain.gated_points().cloned();
+        let selected = self.markers.band(self.draft);
+        let (rect, response) = self.group_delay.content(
+            ui,
+            &self.capture,
+            index.as_ref(),
+            group_delay::Inputs {
+                trace: self.trace,
+                band: self.viewport,
+                gated,
+                selected,
+            },
+            colors,
+            copies,
+        );
+        self.navigate(ui, rect, &response);
+        self.place_markers(ui, rect, &response);
+        self.draw_frequency_markers(ui.painter(), rect, colors);
+    }
+
     fn gated_trace(&self) -> Option<&[TracePoint]> {
-        (self.panel == Panel::Impulse)
+        matches!(self.panel, Panel::Impulse | Panel::Delay)
             .then(|| self.time_domain.gated())
             .flatten()
     }
@@ -320,6 +353,10 @@ impl Viewer {
                 true,
             );
         }
+        self.draw_frequency_markers(painter, rect, colors);
+    }
+
+    fn draw_frequency_markers(&self, painter: &egui::Painter, rect: Rect, colors: WorkbenchColors) {
         for (index, hz) in self.markers.positions(self.draft) {
             plot::marker(
                 painter,
@@ -637,15 +674,17 @@ impl Viewer {
             || self.detail_job.is_some()
             || self.markers.pending()
             || self.time_domain.pending()
+            || self.group_delay.pending()
     }
 }
 
 fn choose_panel(ui: &mut Ui, panel: &mut Panel, s_parameters: bool) {
     for (option, label) in [
         (Panel::Impulse, "Impulse response"),
+        (Panel::Delay, "Group delay"),
         (Panel::Matrix, "Matrix"),
     ] {
-        if option == Panel::Impulse && !s_parameters {
+        if matches!(option, Panel::Impulse | Panel::Delay) && !s_parameters {
             continue;
         }
         let open = *panel == option;
