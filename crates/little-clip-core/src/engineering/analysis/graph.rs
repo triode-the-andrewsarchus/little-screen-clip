@@ -83,16 +83,7 @@ impl SignalGraph {
                     format!("Choose at most {MAX_LANES} equations"),
                 ));
             }
-            let (label, source) = text
-                .split_once('=')
-                .ok_or_else(|| problem(line, "Expected name = expression"))?;
-            let (name, declared) = declaration(label, line)?;
-            if !valid_name(name) || !names.insert(name.to_lowercase()) {
-                return Err(problem(
-                    line,
-                    format!("Invalid or duplicate lane name {name}"),
-                ));
-            }
+            let (name, declared, source) = assignment(text, line, &mut names)?;
             let output = bindings.len();
             depths.push(0);
             if let Some(signal_type) = declared {
@@ -211,6 +202,24 @@ impl Evaluator<'_> {
         }
         &self.values[self.graph.inputs..]
     }
+}
+
+fn assignment<'a>(
+    text: &'a str,
+    line: usize,
+    names: &mut BTreeSet<String>,
+) -> Result<(&'a str, Option<SignalType>, &'a str), GraphError> {
+    let (label, source) = text
+        .split_once('=')
+        .ok_or_else(|| problem(line, "Expected name = expression"))?;
+    let (name, declared) = declaration(label, line)?;
+    if !valid_name(name) || !names.insert(name.to_lowercase()) {
+        return Err(problem(
+            line,
+            format!("Invalid or duplicate lane name {name}"),
+        ));
+    }
+    Ok((name, declared, source))
 }
 
 fn declaration(label: &str, line: usize) -> Result<(&str, Option<SignalType>), GraphError> {
