@@ -1,7 +1,7 @@
 use crate::file_source::{FileSource, ReadCheck};
 use little_clip_core::engineering::touchstone::{
     self, BandFinder, BandSearch, Index, Point, Reader, Summary, ThresholdDirection, TracePoint,
-    magnitude_db,
+    comparison, magnitude_db,
 };
 use std::{
     fmt::Write,
@@ -83,6 +83,31 @@ impl Capture {
                 .read_window(index, row..row + 1, cancel)?
                 .pop()
                 .ok_or(touchstone::Error::Invalid("row outside sweep"))
+        })
+    }
+
+    pub fn sample(
+        &self,
+        index: &Index,
+        hz: f64,
+        trace: Trace,
+        cancel: &AtomicBool,
+    ) -> Result<Option<comparison::Sample>, String> {
+        let [lo, hi] = index.band_hz();
+        if !(lo..=hi).contains(&hz) {
+            return Ok(None);
+        }
+        self.read(cancel, |reader| {
+            let nearest = reader.nearest(index, hz, cancel)?;
+            let nearby = if nearest.frequency_hz == hz {
+                vec![nearest]
+            } else {
+                let first = nearest
+                    .index
+                    .saturating_sub(u64::from(nearest.frequency_hz > hz));
+                reader.read_window(index, first..first + 2, cancel)?
+            };
+            Ok(comparison::sample(&trace_points(&nearby, trace), hz))
         })
     }
 

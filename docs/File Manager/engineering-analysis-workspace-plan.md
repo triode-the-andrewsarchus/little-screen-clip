@@ -50,11 +50,23 @@ Open Intervals beside the selected frame’s actions. Keep the bus and identifie
 
 ## 6. Compare two RF sweeps
 
-- [ ] Open two RF sweeps together from Files. Show stable A and B identities with a swap control. Select a shared trace and link the frequency markers, readouts and original measurement rows.
-- [ ] Compare bandwidth, notch depth and group delay with compatible settings. Show the coverage and the source measurements used for each delta. Distinguish exact and interpolated points, and limit comparisons to common coverage.
-- [ ] Verify a shared S11 point at 100 MHz, an off-grid point at 130 MHz, a trace present in one sweep and a threshold interval that extends beyond capture. Preserve the one-sweep cutoff and gate interactions.
+- [x] Open two RF sweeps together from Files. Show stable A and B identities with a swap control. Select a shared trace and link the frequency markers, readouts and original measurement rows.
+- [x] Compare bandwidth, notch depth and group delay with compatible settings. Show the coverage and the source measurements used for each delta. Distinguish exact and interpolated points, and limit comparisons to common coverage.
+- [x] Verify a shared S11 point at 100 MHz, an off-grid point at 130 MHz, a trace present in one sweep and a threshold interval that extends beyond capture. Preserve the one-sweep cutoff and gate interactions.
 
 Open the pair from the Files selection action. Put A and B names beside their plot colors and keep the trace and swap controls above the frequency plot. A shared marker should show both values and link to the actual rows used for an exact or interpolated readout. Use the same cutoff and delay settings for deltas, and show the measurement coverage alongside each result.
+
+The paired viewer uses the plotted scale for off-grid marker readings. A hollow point and its two measured rows identify an interpolation. With different normalization or reference impedances, each trace has its own vertical scale and the frequency cursor still moves through both plots. Widths that reach a coverage boundary are lower bounds. Group delay uses the same aperture in both sweeps, even when its edges fall between different measured rows. [Touchstone specification](https://ibis.org/touchstone_ver2.1/touchstone_ver2_1.pdf)
+
+Private Files sessions checked 100 and 130 MHz, row jumps, A/B swaps, S21 on one sweep, bandwidth and notch deltas, coverage-limited widths, and a 1 ns delay difference. They also covered an 800 × 620 window, separate normalized and ohmic scales in the light theme, and the original cutoff drag and time gate. A 19 MB synthetic sweep with one million records took 0.4 ms to produce a 256-row preview, 490 ms to index, and 647 ms to scan at a cutoff. The indexed lookup of a marker and its two source rows took 0.30 ms at the 95th percentile in the reader benchmark.
+
+## 7. Keep spectrum filters in context
+
+- [ ] Place the four filter actions next to the active trace's spectrum. Initialize a new stage from its marked frequency when available and focus its row.
+- [ ] Give each stage an inline row with its current frequency, Q and remove action. Pair the row with the same stage's plot handles. Retain the selected trace, time range and other stages while editing.
+- [ ] Verify LP, HP, BP and Notch placement and dragging on measured and derived traces, independent stages for two channels, a narrow window, and saving and reopening the existing filter settings.
+
+The current scope and linked-recording views share the stage controls. Filter creation and stage edits each open a menu, even when the visible spectrum already shows the matching handles. Use a compact row of direct actions and show stages in the workspace below the spectrum settings. Indicate the selected stage in the list and on the plot when the user focuses either representation. Keep the time interval and raw or filtered spectrum state visible while manipulating the frequency response.
 
 ## Review after each addition
 

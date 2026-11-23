@@ -37,6 +37,8 @@ pub struct BandEdge {
     pub frequency_hz: f64,
     /// The data ended before it showed a crossing.
     pub limited: bool,
+    /// Exact records that establish the crossing or observed boundary.
+    pub rows: [TracePoint; 2],
 }
 
 /// One contiguous region. The extreme is an actual sampled point.
@@ -134,6 +136,7 @@ impl BandFinder {
             |last| BandEdge {
                 frequency_hz: crossing(last, next, self.threshold),
                 limited: false,
+                rows: [last.point, next.point],
             },
         )
     }
@@ -180,6 +183,7 @@ impl Sample {
         BandEdge {
             frequency_hz: self.point.frequency_hz,
             limited: true,
+            rows: [self.point; 2],
         }
     }
 }

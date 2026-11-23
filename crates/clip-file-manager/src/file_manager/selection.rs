@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use super::FileManager;
+use super::{FileManager, document_format::Format};
 
 /// One prior multi-selection per folder, including its keyboard/range anchors.
 #[derive(Clone, Debug)]
@@ -101,13 +101,37 @@ impl FileManager {
         })
     }
 
+    pub(super) fn analysis_selection_action(&self) -> Option<super::EngineeringAction> {
+        if self.location().is_some_and(|location| {
+            location.selection.len() == 2
+                && location
+                    .selection
+                    .iter()
+                    .all(|path| little_clip_core::engineering::touchstone::is_candidate_path(path))
+        }) && self
+            .comparison_paths_matching(Some(Format::Touchstone))
+            .is_ok()
+        {
+            return Some(super::EngineeringAction::CompareRf);
+        }
+        self.can_analyze_selection()
+            .then_some(super::EngineeringAction::Analyze)
+    }
+
     pub(super) fn comparison_paths(&self) -> Result<Vec<PathBuf>, String> {
+        self.comparison_paths_matching(None)
+    }
+
+    fn comparison_paths_matching(&self, format: Option<Format>) -> Result<Vec<PathBuf>, String> {
         let paths = self.selected_paths();
         let entries = self.displayed_entries();
         if !self.can_compare_selection()
             || !paths.iter().all(|path| {
                 entries.iter().any(|entry| {
-                    entry.path == *path && entry.regular_file && entry.system.is_none()
+                    entry.path == *path
+                        && entry.regular_file
+                        && entry.system.is_none()
+                        && format.is_none_or(|format| entry.document_format() == Some(format))
                 })
             })
         {

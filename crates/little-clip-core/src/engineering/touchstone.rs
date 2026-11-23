@@ -1,6 +1,7 @@
 //! Incremental Touchstone network-parameter decoding for guarded capture previews.
 
 mod bandwidth;
+pub mod comparison;
 mod group_delay;
 mod header;
 mod index;

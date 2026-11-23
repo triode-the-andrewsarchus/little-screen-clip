@@ -1,7 +1,10 @@
 use super::capture::Band;
-use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
+use egui::{
+    Align2, Color32, FontId, Id, Painter, PointerButton, Pos2, Rect, Response, Sense, Shape,
+    Stroke, Ui, pos2, vec2,
+};
 use little_clip_core::engineering::{
-    touchstone::{Complex64, TracePoint},
+    touchstone::{Complex64, TracePoint, comparison::Sample},
     waveforms::display_value,
 };
 
@@ -42,6 +45,34 @@ impl Projection {
         }
     }
 
+    pub(super) fn marker_value(self, sample: Sample) -> f64 {
+        let [a, b] = sample.rows;
+        if self == Self::Phase && [a, b].iter().any(|point| point.value == Complex64::ZERO) {
+            return f64::NAN;
+        }
+        let left = self.coordinate(a.value);
+        if sample.exact() {
+            return left;
+        }
+        let step = self.difference(self.coordinate(b.value), left);
+        let t = (sample.frequency_hz - a.frequency_hz) / (b.frequency_hz - a.frequency_hz);
+        let result = step.mul_add(t, left);
+        if self == Self::Phase {
+            wrap_phase(result)
+        } else {
+            result
+        }
+    }
+
+    pub(super) fn difference(self, after: f64, before: f64) -> f64 {
+        let delta = after - before;
+        if self == Self::Phase {
+            wrap_phase(delta)
+        } else {
+            delta
+        }
+    }
+
     fn limit(self, data: &[TracePoint]) -> Band {
         if self == Self::Phase {
             return [-180.0, 180.0];
@@ -66,6 +97,10 @@ impl Projection {
         }
         [lo, hi]
     }
+}
+
+fn wrap_phase(degrees: f64) -> f64 {
+    (degrees + 180.0).rem_euclid(360.0) - 180.0
 }
 
 pub(super) use little_clip_core::engineering::touchstone::magnitude_db as decibels;
@@ -95,6 +130,39 @@ pub(super) fn fit_band(band: Band, full: Band) -> Band {
         .min(end)
         .clamp(full[0], (full[1] - width).max(full[0]));
     [left, (left + width).min(full[1])]
+}
+
+pub(super) fn navigate(
+    ui: &Ui,
+    rect: Rect,
+    response: &Response,
+    mut viewport: Band,
+    full: Band,
+    in_scroll_area: bool,
+) -> Band {
+    if response.dragged_by(PointerButton::Middle) {
+        let width = viewport[1] - viewport[0];
+        let delta = f64::from(response.drag_delta().x / rect.width()) * width;
+        viewport = fit_band(viewport.map(|edge| edge - delta), full);
+    }
+    if let Some(pos) = response.hover_pos().filter(|pos| rect.contains(*pos)) {
+        let scroll = ui.input_mut(|input| {
+            if in_scroll_area && input.modifiers.shift {
+                return 0.0;
+            }
+            let scroll = input.smooth_scroll_delta().y;
+            if in_scroll_area {
+                input.smooth_scroll_delta.y = 0.0;
+            }
+            scroll
+        });
+        if scroll != 0.0 {
+            let anchor = hz_at(rect, viewport, pos.x);
+            let factor = f64::from((-scroll * 0.003).clamp(-2.0, 2.0).exp());
+            viewport = fit_band(viewport.map(|edge| anchor + (edge - anchor) * factor), full);
+        }
+    }
+    viewport
 }
 
 pub(super) fn hz_at(rect: Rect, band: Band, x: f32) -> f64 {
@@ -172,7 +240,7 @@ pub(super) fn compare_traces(
     [recorded, gated]: [&[TracePoint]; 2],
     projection: Projection,
     [recorded_color, gated_color]: [Color32; 2],
-) {
+) -> Band {
     let primary = visible(recorded, band, false);
     let comparison = visible(gated, band, false);
     let base = projection.limit(primary);
@@ -197,6 +265,7 @@ pub(super) fn compare_traces(
             color,
         );
     }
+    values
 }
 
 fn paint_trace(
@@ -312,6 +381,33 @@ pub(super) fn highlight(
     );
 }
 
+pub(super) fn cutoff_handle(
+    ui: &Ui,
+    painter: &Painter,
+    rect: Rect,
+    values: Band,
+    db: f64,
+    color: Color32,
+    id: Id,
+) -> Option<f64> {
+    if !(values[0]..=values[1]).contains(&db) {
+        return None;
+    }
+    let y = rect.bottom() - fraction(values, db) * rect.height();
+    let center = pos2(rect.right() - 4.0, y);
+    let handle = Rect::from_center_size(center, vec2(22.0, 18.0));
+    let response = ui
+        .interact(handle, id, Sense::drag())
+        .on_hover_text("Drag the cutoff");
+    painter.hline(rect.x_range(), y, Stroke::new(1.0, color));
+    painter.circle_filled(center, if response.hovered() { 5.5 } else { 4.0 }, color);
+    let pointer = response
+        .interact_pointer_pos()
+        .filter(|_| response.dragged())?;
+    let height = ((rect.bottom() - pointer.y) / rect.height()).clamp(0.0, 1.0);
+    Some(f64::from(height).mul_add(values[1] - values[0], values[0]))
+}
+
 pub(super) fn marker(
     painter: &Painter,
     rect: Rect,
@@ -411,5 +507,32 @@ impl Smith {
             FontId::monospace(11.0),
             color,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::engineering::touchstone::comparison::sample;
+
+    #[test]
+    fn off_grid_marker_uses_the_drawn_decibel_scale_and_wraps_phase() {
+        let rows = [
+            TracePoint {
+                index: 0,
+                frequency_hz: 100e6,
+                value: Complex64::from_polar(0.1, 170_f64.to_radians()),
+            },
+            TracePoint {
+                index: 1,
+                frequency_hz: 150e6,
+                value: Complex64::from_polar(1.0, -170_f64.to_radians()),
+            },
+        ];
+        let marker = sample(&rows, 125e6).unwrap();
+        assert!((Projection::Decibels.marker_value(marker) + 10.0).abs() < 1e-12);
+        assert!((Projection::Magnitude.marker_value(marker) - 0.55).abs() < 1e-12);
+        assert!((Projection::Phase.marker_value(marker).abs() - 180.0).abs() < 1e-12);
+        assert!((Projection::Phase.difference(-170.0, 170.0) - 20.0).abs() < 1e-12);
     }
 }

@@ -737,6 +737,69 @@ impl FileManagerApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(10));
         }
     }
+    fn selection_summary(&mut self, root: &mut egui::Ui) {
+        let colors = ui_appearance::WorkbenchColors::from_palette(&self.palette);
+        egui::Panel::bottom("file_manager_summary")
+            .frame(
+                egui::Frame::NONE
+                    .fill(colors.panel)
+                    .inner_margin(egui::Margin::symmetric(8, 3)),
+            )
+            .show(root, |ui| {
+                let height = ui.text_style_height(&egui::TextStyle::Body)
+                    .max(clip_ui::ui_ext::COMPACT_CONTROL_HEIGHT);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), height),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add(egui::Label::new(self.browser.selection_summary()).truncate());
+                        if let Some(action) = self.browser.analysis_selection_action() {
+                            let (label, help) = match action {
+                                super::EngineeringAction::CompareRf => (
+                                    "Compare RF sweeps",
+                                    "Compare selected sweeps on one frequency axis [Enter]",
+                                ),
+                                _ => (
+                                    "Analyze recordings",
+                                    "Open the selected recordings on one timeline [Enter]",
+                                ),
+                            };
+                            let button = clip_ui::buttons::ButtonRole::Primary
+                                .button(label, &self.palette)
+                                .compact();
+                            if ui.add_enabled(!self.browser.browser_modal(), button)
+                                .on_hover_text(help).clicked()
+                            {
+                                self.browser.open_selected();
+                            }
+                        }
+                        let music = &self.browser.music;
+                        if music.busy() || music.copying() || self.browser.preview_copies.busy() {
+                            ui.spinner();
+                        }
+                        if let Some(error) = &music.error {
+                            ui.separator();
+                            ui.add(egui::Label::new(egui::RichText::new(error).color(colors.warning)).truncate())
+                                .on_hover_text(error);
+                        }
+                        if let Some(status) = self.browser.archives.status(self.browser.path()) {
+                            ui.separator();
+                            ui.add(egui::Label::new(egui::RichText::new(status).color(colors.warning)).truncate())
+                                .on_hover_text("Temporary decompressed snapshot. Changes do not update the archive; save or copy files to an ordinary folder to keep them.");
+                        }
+                        let now = ui.input(|input| input.time);
+                        if let Some(hint) = self.browser.type_navigation.hint(now) {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.add(egui::Label::new(hint).truncate());
+                                },
+                            );
+                        }
+                    },
+                );
+            });
+    }
 }
 
 impl eframe::App for FileManagerApp {
@@ -842,61 +905,7 @@ impl eframe::App for FileManagerApp {
         self.browser.handle_address_escape(ctx);
         self.menu_bar(root);
         if !self.viewers.active() {
-            egui::Panel::bottom("file_manager_summary")
-                .frame(
-                    egui::Frame::NONE
-                        .fill(ui_appearance::WorkbenchColors::from_palette(&self.palette).panel)
-                        .inner_margin(egui::Margin::symmetric(8, 3)),
-                )
-                .show(root, |ui| {
-                    let analyze = self.browser.can_analyze_selection();
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(
-                            ui.available_width(),
-                            ui.text_style_height(&egui::TextStyle::Body)
-                                .max(clip_ui::ui_ext::COMPACT_CONTROL_HEIGHT),
-                        ),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.add(
-                                egui::Label::new(self.browser.selection_summary()).truncate(),
-                            );
-                            if analyze
-                                && ui.add_enabled(
-                                    !self.browser.browser_modal(),
-                                    clip_ui::buttons::ButtonRole::Primary
-                                        .button("Analyze recordings", &self.palette)
-                                        .compact(),
-                                )
-                                .on_hover_text("Open the selected recordings on one timeline [Enter]")
-                                .clicked()
-                            {
-                                self.browser.open_selected();
-                            }
-                            if self.browser.music.busy() || self.browser.music.copying() || self.browser.preview_copies.busy() { ui.spinner(); }
-                            if let Some(error) = &self.browser.music.error {
-                                ui.separator();
-                                ui.add(egui::Label::new(egui::RichText::new(error).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate()).on_hover_text(error);
-                            }
-                            if let Some(status) = self.browser.archives.status(self.browser.path()) {
-                                ui.separator();
-                                ui.add(egui::Label::new(egui::RichText::new(status).color(ui_appearance::WorkbenchColors::from_palette(&self.palette).warning)).truncate()).on_hover_text("Temporary decompressed snapshot. Changes do not update the archive; save or copy files to an ordinary folder to keep them.");
-                            }
-                            if let Some(hint) = self
-                                .browser
-                                .type_navigation
-                                .hint(ctx.input(|input| input.time))
-                            {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.add(egui::Label::new(hint).truncate());
-                                    },
-                                );
-                            }
-                        },
-                    );
-                });
+            self.selection_summary(root);
         }
         let folder = self.browser.path().to_path_buf();
         self.browser

@@ -2,6 +2,7 @@
 
 mod bandwidth;
 mod capture;
+pub(super) mod compare;
 mod group_delay;
 mod markers;
 mod plot;
@@ -455,18 +456,9 @@ impl Viewer {
     }
 
     fn navigate(&mut self, ui: &Ui, rect: Rect, response: &Response) {
-        let width = self.viewport[1] - self.viewport[0];
-        if response.dragged_by(PointerButton::Middle) {
-            let delta = f64::from(response.drag_delta().x / rect.width()) * width;
-            self.set_viewport([self.viewport[0] - delta, self.viewport[1] - delta]);
-        }
-        if let Some(pos) = response.hover_pos().filter(|pos| rect.contains(*pos)) {
-            let dy = ui.input(|input| input.smooth_scroll_delta().y);
-            if dy != 0.0 {
-                let anchor = plot::hz_at(rect, self.viewport, pos.x);
-                let factor = f64::from((-dy * 0.003).clamp(-2.0, 2.0).exp());
-                self.set_viewport(self.viewport.map(|edge| anchor + (edge - anchor) * factor));
-            }
+        let band = plot::navigate(ui, rect, response, self.viewport, self.full, false);
+        if band != self.viewport {
+            self.set_viewport(band);
         }
     }
 

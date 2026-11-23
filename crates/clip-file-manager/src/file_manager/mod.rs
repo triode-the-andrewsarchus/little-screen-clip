@@ -124,6 +124,7 @@ impl LastStatus {
 enum EngineeringAction {
     Compare,
     Analyze,
+    CompareRf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1036,9 +1037,10 @@ impl FileManager {
 
     fn open_selected(&mut self) {
         if self.selection_count() != 1 {
-            if self.can_analyze_selection() {
-                self.engineering_selection = Some(EngineeringAction::Analyze);
-            }
+            self.engineering_selection = self
+                .analysis_selection_action()
+                .or(self.engineering_selection);
+
             return;
         }
         let selected = self

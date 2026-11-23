@@ -4,7 +4,7 @@ use super::{
     plot, read_job,
 };
 use crate::{file_manager::signal_view::take_query_result, ui_appearance::WorkbenchColors};
-use egui::{Color32, Id, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Color32, Painter, Rect, Sense, Ui, pos2};
 use egui_extras::{Column, TableBuilder};
 use little_clip_core::engineering::{
     touchstone::{BandEdge, BandSearch, Index, ThresholdBand},
@@ -293,30 +293,11 @@ impl View {
         color: Color32,
     ) {
         let query = self.query(trace);
-        let Some(db) = self
-            .threshold(query)
-            .filter(|db| (values[0]..=values[1]).contains(db))
-        else {
+        let Some(db) = self.threshold(query) else {
             return;
         };
-        let height = ((db - values[0]) / (values[1] - values[0])) as f32;
-        let y = rect.bottom() - height * rect.height();
-        let handle = Rect::from_center_size(pos2(rect.right() - 4.0, y), vec2(22.0, 18.0));
-        let id: Id = ui.make_persistent_id("touchstone-cutoff-drag");
-        let response = ui
-            .interact(handle, id, Sense::drag())
-            .on_hover_text("Drag the cutoff");
-        painter.hline(rect.x_range(), y, Stroke::new(1.0, color));
-        painter.circle_filled(
-            pos2(rect.right() - 4.0, y),
-            if response.hovered() { 5.5 } else { 4.0 },
-            color,
-        );
-        if let Some(pointer) = response.interact_pointer_pos()
-            && response.dragged()
-        {
-            let height = ((rect.bottom() - pointer.y) / rect.height()).clamp(0.0, 1.0);
-            let wanted = f64::from(height).mul_add(values[1] - values[0], values[0]);
+        let id = ui.make_persistent_id("touchstone-cutoff-drag");
+        if let Some(wanted) = plot::cutoff_handle(ui, painter, rect, values, db, color, id) {
             match query.cutoff {
                 Cutoff::Below(_) => self.inputs.below = wanted.clamp(-240.0, 240.0),
                 Cutoff::Above(_) => self.inputs.above = wanted.clamp(-240.0, 240.0),

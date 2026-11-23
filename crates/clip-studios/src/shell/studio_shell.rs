@@ -455,6 +455,7 @@ impl StudioPanelLayout {
 pub struct StudioShell<'a> {
     pub title: String,
     compact_title: Option<String>,
+    use_session_title: bool,
     header_readout: Option<(String, f32)>,
     pub icon: Option<Icon>,
     pub palette: &'a AppPalette,
@@ -476,6 +477,7 @@ impl<'a> StudioShell<'a> {
         Self {
             title: title.into(),
             compact_title: None,
+            use_session_title: false,
             header_readout: None,
             icon: icon.into(),
             palette,
@@ -490,6 +492,12 @@ impl<'a> StudioShell<'a> {
 
     pub fn with_badge(mut self, text: impl Into<String>, accent: Option<Color32>) -> Self {
         self.badges.push(HeaderBadge::new(text, accent));
+        self
+    }
+
+    /// Keeps this title when the viewer represents more than one source file.
+    pub fn with_session_title(mut self) -> Self {
+        self.use_session_title = true;
         self
     }
 
@@ -546,7 +554,9 @@ impl<'a> StudioShell<'a> {
         right_actions: impl FnOnce(&mut egui::Ui),
     ) -> Option<usize> {
         let file_editor = super::file_editor::FileEditor::current(ui.ctx());
-        if let Some(chrome) = &file_editor {
+        if !self.use_session_title
+            && let Some(chrome) = &file_editor
+        {
             self.title = chrome.title();
             self.compact_title = None;
         }

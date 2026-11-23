@@ -56,6 +56,7 @@ enum Loaded {
     Path,
     Signals(Box<super::signal_view::Viewer>),
     Touchstone(Box<super::touchstone_view::Viewer>),
+    RfComparison(Box<super::touchstone_view::compare::Viewer>),
     PacketCapture(Box<super::packets_view::Viewer>),
     CanCapture(Box<super::can_view::Viewer>),
     PulseSignals(Box<super::pulse_view::Viewer>),
@@ -93,6 +94,7 @@ enum ViewerSession {
     Scene(SplatViewerState),
     Signals(Box<super::signal_view::Viewer>),
     Touchstone(Box<super::touchstone_view::Viewer>),
+    RfComparison(Box<super::touchstone_view::compare::Viewer>),
     PacketCapture(Box<super::packets_view::Viewer>),
     CanCapture(Box<super::can_view::Viewer>),
     PulseSignals(Box<super::pulse_view::Viewer>),
@@ -273,6 +275,9 @@ impl Viewers {
                 )),
                 super::EngineeringAction::Analyze => Loaded::Signals(Box::new(
                     super::signal_view::Viewer::load_sources(paths, cancel)?,
+                )),
+                super::EngineeringAction::CompareRf => Loaded::RfComparison(Box::new(
+                    super::touchstone_view::compare::Viewer::load(paths, cancel)?,
                 )),
             };
             Ok((loaded, None))
@@ -526,6 +531,7 @@ impl Viewers {
                 | ViewerSession::Embroidery(_)
                 | ViewerSession::Signals(_)
                 | ViewerSession::Touchstone(_)
+                | ViewerSession::RfComparison(_)
                 | ViewerSession::PacketCapture(_)
                 | ViewerSession::CanCapture(_)
                 | ViewerSession::PulseSignals(_)
@@ -1104,6 +1110,10 @@ fn session(
             viewer.set_check(check);
             ViewerSession::Signals(viewer)
         }
+        Loaded::RfComparison(mut viewer) => {
+            viewer.set_check(check);
+            ViewerSession::RfComparison(viewer)
+        }
         Loaded::Touchstone(mut viewer) => {
             viewer.set_check(check);
             ViewerSession::Touchstone(viewer)
@@ -1230,6 +1240,7 @@ fn render(
         ViewerSession::Comparison(state) => state.ui(ui, close, palette),
         ViewerSession::Signals(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Touchstone(state) => state.ui(ui, close, palette, copies),
+        ViewerSession::RfComparison(state) => state.ui(ui, close, palette),
         ViewerSession::PacketCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::CanCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::PulseSignals(state) => state.ui(ui, close, palette),

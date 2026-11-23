@@ -35,11 +35,6 @@ pub fn group_delay(points: &[TracePoint], radius: usize) -> Result<Vec<GroupDela
             "group delay requires increasing, finite frequencies",
         ));
     }
-    let has_phase = |point: &TracePoint| {
-        point.value.re.is_finite()
-            && point.value.im.is_finite()
-            && (point.value.re != 0.0 || point.value.im != 0.0)
-    };
     let mut output = Vec::with_capacity(points.len());
     for run in points.chunk_by(|left, right| has_phase(left) && has_phase(right)) {
         if run.len() < 2 {
@@ -52,15 +47,7 @@ pub fn group_delay(points: &[TracePoint], radius: usize) -> Result<Vec<GroupDela
 }
 
 fn estimate_run(run: &[TracePoint], radius: usize, output: &mut Vec<GroupDelayPoint>) {
-    let mut previous = run[0].value.arg();
-    let mut cumulative = 0.0;
-    let mut phase = Vec::with_capacity(run.len());
-    for point in run {
-        let angle = point.value.arg();
-        cumulative += (angle - previous + PI).rem_euclid(TAU) - PI;
-        phase.push(cumulative);
-        previous = angle;
-    }
+    let phase = unwrap_phase(run);
     for (index, &point) in run.iter().enumerate() {
         let left = index.saturating_sub(radius);
         let right = (index + radius).min(run.len() - 1);
@@ -73,6 +60,25 @@ fn estimate_run(run: &[TracePoint], radius: usize, output: &mut Vec<GroupDelayPo
         }
         output.push(estimated);
     }
+}
+
+pub(super) fn has_phase(point: &TracePoint) -> bool {
+    point.value.re.is_finite()
+        && point.value.im.is_finite()
+        && (point.value.re != 0.0 || point.value.im != 0.0)
+}
+
+pub(super) fn unwrap_phase(run: &[TracePoint]) -> Vec<f64> {
+    let mut previous = run[0].value.arg();
+    let mut cumulative = 0.0;
+    let mut phase = Vec::with_capacity(run.len());
+    for point in run {
+        let angle = point.value.arg();
+        cumulative += (angle - previous + PI).rem_euclid(TAU) - PI;
+        phase.push(cumulative);
+        previous = angle;
+    }
+    phase
 }
 
 fn no_estimate(point: TracePoint) -> GroupDelayPoint {
