@@ -4,6 +4,7 @@ mod alignment;
 mod expression;
 mod filter;
 mod graph;
+mod measurements;
 mod spectrum;
 mod survey;
 
@@ -11,6 +12,7 @@ pub use alignment::{Correlation, correlate, strongest_peaks};
 pub use expression::{Binding, Dimension, Expression, ExpressionError, SignalType, Value};
 pub use filter::{FilterChain, FilterKind, FilterStage};
 pub use graph::{DerivedLane, Evaluator, GraphError, SignalGraph};
+pub use measurements::{Measurement, MeasurementGrid, Moments};
 pub use spectrum::{
     MAX_ANALYSIS_SAMPLES, Spectrum, SpectrumWindow, fundamental_hz, spectrum, spectrum_with_window,
 };

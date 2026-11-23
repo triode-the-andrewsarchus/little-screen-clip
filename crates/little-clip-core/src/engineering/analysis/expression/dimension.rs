@@ -86,6 +86,11 @@ impl Dimension {
         (self.amps == 0 && self.seconds == 0 && self.full_scale == 0).then_some(self.volts)
     }
 
+    /// Returns the unit of the integral over time, such as joules for watts.
+    pub fn time_integral(self) -> Option<Self> {
+        self.combine(Self::TIME, false)
+    }
+
     pub(super) fn combine(self, rhs: Self, divide: bool) -> Option<Self> {
         let operation = if divide {
             i8::checked_sub

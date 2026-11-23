@@ -2,6 +2,7 @@ mod compute;
 mod decoders;
 mod filtering;
 mod frequency;
+mod measurements;
 
 use super::{
     inputs::{Input, Signature},
@@ -21,6 +22,7 @@ pub(super) struct Derived {
     editor: bool,
     decoders: decoders::Decoders,
     frequency: frequency::Frequency,
+    measurements: measurements::View,
     draft: String,
     draft_error: Option<String>,
     rate: Option<f64>,
@@ -163,6 +165,7 @@ impl Derived {
         self.request_after = 0.0;
         self.decoders = decoders::Decoders::default();
         self.frequency = frequency::Frequency::default();
+        self.measurements.reset();
         self.selected = None;
     }
 
@@ -260,6 +263,9 @@ impl Derived {
         let pointed = if self.frequency.only() {
             None
         } else {
+            let region = self.selected.clone().unwrap_or_else(|| span.clone());
+            self.measurements
+                .ui(ui, &frame, region, self.selected.is_some());
             self.decoders.controls(ui, &frame, span);
             self.time_plot(ui, &frame, span, domain, probe, reference)
         };
@@ -316,6 +322,10 @@ impl Derived {
             cursor.or(probe),
             reference,
         );
+        self.measurements.paint(ui.painter(), rect, span);
+        if self.measurements.take_reveal() {
+            ui.scroll_to_rect(area, Some(egui::Align::Max));
+        }
         if self.decoders.active() {
             let band = Rect::from_min_max(pos2(rect.left(), area.top()), rect.right_top());
             self.decoders.paint(ui, ui.painter(), band, rect, span);
