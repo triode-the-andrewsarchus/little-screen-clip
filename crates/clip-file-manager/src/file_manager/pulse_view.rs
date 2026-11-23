@@ -75,7 +75,20 @@ impl Viewer {
             egui::Panel::left("ir_signal_bank")
                 .exact_size(width)
                 .show(ui, |ui| self.signal_list(ui));
+            egui::Frame::new()
+                .inner_margin(egui::Margin {
+                    left: 12,
+                    right: 8,
+                    top: 6,
+                    bottom: 0,
+                })
+                .show(ui, |ui| self.signal_detail(ui));
+        } else {
+            self.signal_detail(ui);
         }
+    }
+
+    fn signal_detail(&mut self, ui: &mut Ui) {
         self.signal_summary(ui);
         if self.capture.signals[self.active].pulses.is_empty() {
             self.fields(ui);

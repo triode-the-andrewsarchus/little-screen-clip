@@ -1,6 +1,6 @@
 use super::hex;
 use crate::ui_appearance::WorkbenchColors;
-use egui::{Align, Layout, ScrollArea, Ui, vec2};
+use egui::{Align, Key, Layout, Modifiers, ScrollArea, Ui, vec2};
 use little_clip_core::engineering::tags::{Memory, MemoryRow, RowRole};
 
 pub(super) struct View {
@@ -9,6 +9,8 @@ pub(super) struct View {
     selected: Option<usize>,
     scroll_to: Option<usize>,
     byte: Option<usize>,
+    field: Option<usize>,
+    reveal_field: bool,
 }
 
 impl View {
@@ -21,6 +23,8 @@ impl View {
             selected,
             scroll_to: None,
             byte: None,
+            field: None,
+            reveal_field: false,
         }
     }
 
@@ -35,6 +39,7 @@ impl View {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+        self.navigate(ui);
         self.title(ui, colors);
         ui.separator();
         let width = ui.available_width();
@@ -57,6 +62,31 @@ impl View {
             self.list(ui, (height * 0.42).max(86.0), colors);
             ui.separator();
             self.details(ui, colors);
+        }
+    }
+
+    fn navigate(&mut self, ui: &Ui) {
+        let delta = ui.input_mut(|input| {
+            let down = input.consume_key(Modifiers::NONE, Key::ArrowDown);
+            let up = input.consume_key(Modifiers::NONE, Key::ArrowUp);
+            isize::from(down) - isize::from(up)
+        });
+        if delta == 0 {
+            return;
+        }
+        if !self.memory.rows.is_empty() && self.field.is_none() {
+            let index = self
+                .selected
+                .unwrap_or_default()
+                .saturating_add_signed(delta);
+            self.focus(index as u64);
+        } else if !self.memory.fields.is_empty() {
+            let last = self.memory.fields.len() - 1;
+            let index = self
+                .field
+                .map_or(0, |index| index.saturating_add_signed(delta));
+            self.field = Some(index.min(last));
+            self.reveal_field = true;
         }
     }
 
@@ -126,6 +156,7 @@ impl View {
                 {
                     self.selected = Some(index);
                     self.byte = None;
+                    self.field = None;
                 }
             }
         });
@@ -145,11 +176,18 @@ impl View {
                 .id_salt("tag recorded fields")
                 .max_height(ui.available_height().max(40.0))
                 .show(ui, |ui| {
-                    for (name, value) in &self.memory.fields {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.weak(name);
-                            ui.monospace(value);
-                        });
+                    for (index, (name, value)) in self.memory.fields.iter().enumerate() {
+                        let field = ui.selectable_label(
+                            self.field == Some(index),
+                            egui::RichText::new(format!("{name}   {value}")).monospace(),
+                        );
+                        if field.clicked() {
+                            self.field = Some(index);
+                        }
+                        if self.field == Some(index) && self.reveal_field {
+                            field.scroll_to_me(None);
+                            self.reveal_field = false;
+                        }
                     }
                 });
         }
