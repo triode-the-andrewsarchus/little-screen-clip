@@ -203,6 +203,8 @@ pub struct Integral {
     pub value: f64,
     pub approximate: bool,
     pub partial: bool,
+    /// Native time interval covered by the integrated sample cells.
+    pub time: Range<f64>,
 }
 
 impl Capture {
@@ -263,21 +265,20 @@ impl Capture {
             if range.is_empty() {
                 continue;
             }
-            *output = if let Some(value) = capture.integral(index, range.clone(), cancel)? {
-                Some(Integral {
-                    value,
-                    approximate: false,
-                    partial,
-                })
+            let time = channel.time_at(range.start)..channel.time_at(range.end);
+            let integration = if let Some(value) = capture.integral(index, range.clone(), cancel)? {
+                Some((value, false))
             } else {
                 capture
                     .summary_integral(index, range, cancel)?
-                    .map(|value| Integral {
-                        value,
-                        approximate: true,
-                        partial,
-                    })
+                    .map(|value| (value, true))
             };
+            *output = integration.map(|(value, approximate)| Integral {
+                value,
+                approximate,
+                partial,
+                time,
+            });
         }
         Ok(Some(totals))
     }

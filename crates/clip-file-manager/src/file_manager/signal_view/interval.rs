@@ -9,7 +9,7 @@ use little_clip_core::{
     BackgroundJobs,
     engineering::{
         analysis::Clock,
-        waveforms::{display_axis_value, display_value},
+        waveforms::{Integral, PowerTotals, display_axis_value, display_value},
     },
 };
 use measure::{Figures, Input, Report, SampleReport};
@@ -323,24 +323,70 @@ fn sample_readings(
         ui.weak(format!("{valid} of {count} samples present"));
     }
     if let Some(power) = power {
-        for (reading, label, unit) in [
-            (&power.charge, "Charge", "C"),
-            (&power.energy, "Energy", "J"),
-        ] {
-            if let Some(reading) = reading {
-                let quality = if reading.approximate { "≈ " } else { "" };
-                let partial = if reading.partial { " (partial)" } else { "" };
-                ui.label(format!(
-                    "{label} {quality}{}{partial}",
-                    display_value(reading.value * clock.scale(), unit)
-                ));
-            }
-        }
+        power_readings(ui, power, clock);
     }
     if count > 0 && ui.button("Show samples").clicked() {
         visit = Some(examined.clone());
     }
     visit
+}
+
+fn power_readings(ui: &mut Ui, totals: &PowerTotals, clock: Clock) {
+    let charge = totals.charge.as_ref();
+    let energy = totals.energy.as_ref();
+    if let Some(reading) = charge {
+        let seconds = reading.time.end - reading.time.start;
+        if seconds > 0.0 {
+            integral_label(
+                ui,
+                reading,
+                "Avg current",
+                display_value(reading.value / seconds, "A"),
+            );
+        }
+        integral_label(ui, reading, "Charge", milli_hours(reading, clock, "mAh"));
+    }
+    if let Some(reading) = energy {
+        integral_label(ui, reading, "Energy", milli_hours(reading, clock, "mWh"));
+    }
+    match (charge, energy) {
+        (Some(charge), Some(energy)) if charge.time != energy.time => {
+            integral_time(ui, "Current interval", charge, clock);
+            integral_time(ui, "Power interval", energy, clock);
+        }
+        (Some(reading), _) | (_, Some(reading)) => {
+            integral_time(ui, "Integrated", reading, clock);
+        }
+        (None, None) => {
+            ui.weak("Charge and energy unavailable");
+        }
+    }
+}
+
+fn integral_label(ui: &mut Ui, reading: &Integral, label: &str, value: String) {
+    let quality = if reading.approximate { "≈ " } else { "" };
+    let partial = if reading.partial { " (partial)" } else { "" };
+    ui.label(format!("{label} {quality}{value}{partial}"));
+}
+
+fn milli_hours(reading: &Integral, clock: Clock, unit: &str) -> String {
+    let value = reading.value * clock.scale() / 3.6;
+    if value != 0.0 && value.abs() < 0.0001 {
+        format!("{value:.3e} {unit}")
+    } else {
+        let number = format!("{value:.6}");
+        format!(
+            "{} {unit}",
+            number.trim_end_matches('0').trim_end_matches('.')
+        )
+    }
+}
+
+fn integral_time(ui: &mut Ui, label: &str, reading: &Integral, clock: Clock) {
+    ui.weak(format!(
+        "{label} {}",
+        times(&clock.workspace_range(&reading.time))
+    ));
 }
 
 fn times(range: &Range<f64>) -> String {

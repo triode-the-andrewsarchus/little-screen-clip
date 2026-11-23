@@ -162,6 +162,18 @@ fn v2_sparse_recording_reads_index_and_unindexed_short_tail() {
         .unwrap()
         .unwrap();
     assert!((estimate - integral).abs() < 1e-12);
+
+    let channel = &capture.channels()[0];
+    let measured = channel.time_at(0)..channel.time_at(10);
+    let request = (measured.start - 0.005)..measured.end;
+    let totals = crate::engineering::waveforms::Capture::Power(capture)
+        .power_totals(request, &cancel)
+        .unwrap()
+        .unwrap();
+    let charge = totals.charge.unwrap();
+    assert_eq!(charge.time, measured);
+    assert!(charge.partial && !charge.approximate);
+    assert!((charge.value - 0.01).abs() < 1e-12);
 }
 
 #[test]
