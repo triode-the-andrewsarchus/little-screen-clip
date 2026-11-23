@@ -202,7 +202,13 @@ impl Viewer {
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
             ui.weak(message);
         }
-        if self.frequency.visible {
+        super::signal_view::frequency_plot::origin_controls(
+            ui,
+            &mut self.frequency.spectra,
+            &mut self.span,
+            Link::clock(link),
+        );
+        if self.frequency.visible && self.frequency.spectra.origin().is_none() {
             self.protocols.close();
             self.frequency(ui, link);
             return None;
@@ -252,14 +258,21 @@ impl Viewer {
                     .selected_text(&self.overview.lanes[self.active].name)
                     .show_ui(ui, |ui| {
                         for (index, lane) in self.overview.lanes.iter().enumerate() {
-                            ui.selectable_value(&mut self.active, index, &lane.name);
+                            if ui
+                                .selectable_value(&mut self.active, index, &lane.name)
+                                .changed()
+                            {
+                                self.frequency.spectra.clear_result();
+                            }
                         }
                     });
             }
             if ui.button("Fit").clicked() {
                 self.span = self.overview.span.clone();
             }
-            ui.toggle_value(&mut self.frequency.visible, "Spectrum");
+            if self.frequency.spectra.origin().is_none() {
+                ui.toggle_value(&mut self.frequency.visible, "Spectrum");
+            }
             ui.toggle_value(&mut self.show_transitions, "Transitions");
             if self.protocols.add_menu(ui, &self.overview.lanes) {
                 self.show_transitions = true;
@@ -351,6 +364,13 @@ impl Viewer {
         timing::axes(&painter, rect, &axis, ink);
         let clipped = painter.with_clip_rect(rect);
         self.draw_channels(&painter, &clipped, rect, ink);
+        super::signal_view::frequency_plot::paint_origin(
+            ui,
+            &clipped,
+            rect,
+            &self.span,
+            &self.frequency.spectra,
+        );
         if let Some(link) = link {
             link.paint_markers(&clipped, rect, &self.span);
         }

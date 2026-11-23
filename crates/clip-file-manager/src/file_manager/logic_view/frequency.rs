@@ -2,19 +2,21 @@ use super::Viewer;
 use crate::file_manager::{
     scope_view::plot,
     signal_view::{
-        frequency_plot::{Display, choose_region, choose_window, spectrum_readout, spectrum_rect},
-        spectra::{Input, Spectra},
+        frequency_plot::{
+            Display, measurement_readout, paint_measurement, settings, spectrum_rect,
+        },
+        spectra::{Input, PeakWindow, Spectra},
         timeline::Link,
     },
 };
 use egui::Ui;
 use little_clip_core::engineering::{analysis::SpectrumWindow, waveforms::display_value};
-use std::{ops::Range, time::Duration};
+use std::ops::Range;
 
 #[derive(Default)]
 pub(super) struct Frequency {
     pub visible: bool,
-    spectra: Spectra,
+    pub(super) spectra: Spectra,
     window: SpectrumWindow,
     span: Option<Range<f64>>,
     marker: Option<f64>,
@@ -61,9 +63,12 @@ impl Viewer {
         panel
             .spectra
             .update(ui.ctx(), Some(input), interval, panel.window);
-        if let Some(interval) = panel.plot(ui, link) {
-            self.frequency.visible = false;
-            self.focus_time(interval.start, interval.end);
+        if let Some(window) = panel.plot(ui, link) {
+            let domain = link.map_or(&self.overview.span, |link| &link.domain);
+            panel
+                .spectra
+                .inspect(window, &mut self.span, domain, rate.recip());
+            ui.ctx().request_repaint();
         }
     }
 }
@@ -102,11 +107,10 @@ impl Frequency {
             self.span = None;
             self.marker = None;
             self.sampled_rate = None;
+            self.spectra.clear_result();
         }
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("{} spectrum", lane.name));
-            choose_region(ui, &mut self.spectra.region);
-            choose_window(ui, &mut self.window);
             if lane.sample_rate.is_none() {
                 let rate = self.sampled_rate.get_or_insert(default_rate);
                 let speed = (*rate * 0.005).max(1.0);
@@ -124,36 +128,33 @@ impl Frequency {
                 self.span = None;
             }
         });
+        settings(ui, &mut self.spectra.region, &mut self.window);
     }
 
-    fn plot(&mut self, ui: &mut Ui, link: Option<&Link>) -> Option<Range<f64>> {
-        let Some((input, output)) = self.spectra.ready() else {
-            ui.weak("Computing spectrum…");
-            if self.spectra.busy() {
-                ui.ctx().request_repaint_after(Duration::from_millis(33));
-            }
-            return None;
-        };
-        let survey = match output {
-            Ok(Some(survey)) => survey,
-            Ok(None) => {
-                ui.weak("No contiguous known levels in this interval");
-                return None;
-            }
-            Err(error) => {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-                return None;
-            }
-        };
-        let (rect, response) = spectrum_rect(ui, 65.0);
-        let mut plot = Display {
+    fn plot(&mut self, ui: &mut Ui, link: Option<&Link>) -> Option<PeakWindow> {
+        let (rect, response) = spectrum_rect(ui, 90.0);
+        let ready = self.spectra.ready();
+        let shown = ready.or_else(|| self.spectra.latest());
+        let mut span = self.span.clone().unwrap_or(0.0..1.0);
+        let color = plot::color(2);
+        let mut display = Display {
             span: &mut self.span,
             marker: &mut self.marker,
             db: true,
-            color: plot::color(2),
+            color: if ready.is_some() {
+                color
+            } else {
+                color.gamma_multiply(0.48)
+            },
         };
-        let span = plot.navigate(ui, rect, &response, survey, link.is_some());
-        let bin = plot.paint(ui, rect, survey, &span, "")?;
-        spectrum_readout(ui, survey, input.channel(), bin, true, Link::clock(link))
+        let cursor = paint_measurement(ui, rect, &response, &mut span, &mut display, shown);
+        measurement_readout(
+            ui,
+            ready,
+            cursor,
+            true,
+            Link::clock(link),
+            "Computing spectrum…",
+        )
     }
 }

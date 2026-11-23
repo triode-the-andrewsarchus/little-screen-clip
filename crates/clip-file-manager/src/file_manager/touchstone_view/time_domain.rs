@@ -141,51 +141,54 @@ impl TimeDomain {
 
     fn controls(&mut self, ui: &mut Ui, viewport: Band, copies: &mut Copies) {
         ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("Band-pass impulse");
-            choose_window(ui, &mut self.window);
-            if ui.button("Use visible band").clicked() {
-                self.band = Some(viewport);
-            }
-            if ui.button("Whole sweep").clicked() {
-                self.band = None;
-            }
-            if ui.button("Fit delay").clicked() {
-                self.view = None;
-            }
-            ui.add_enabled_ui(self.gate.is_some(), |ui| {
-                egui::ComboBox::from_id_salt("delay gate mode")
-                    .selected_text(match self.gate_mode {
-                        GateMode::Keep => "Keep interval",
-                        GateMode::Reject => "Reject interval",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.gate_mode, GateMode::Keep, "Keep interval");
-                        ui.selectable_value(
-                            &mut self.gate_mode,
-                            GateMode::Reject,
-                            "Reject interval",
-                        );
-                    });
+        ui.scope(|ui| {
+            let spacing = ui.spacing_mut();
+            spacing.interact_size.y = 24.0;
+            spacing.item_spacing = vec2(4.0, 4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("Band-pass impulse");
+                choose_window(ui, &mut self.window);
+                if ui.small_button("Use visible band").clicked() {
+                    self.band = Some(viewport);
+                }
+                if ui.small_button("Whole sweep").clicked() {
+                    self.band = None;
+                }
+                if ui.small_button("Fit delay").clicked() {
+                    self.view = None;
+                }
+                ui.weak("Gate");
+                for (mode, label) in [(GateMode::Keep, "Keep"), (GateMode::Reject, "Reject")] {
+                    let button = egui::Button::new(label)
+                        .small()
+                        .selected(self.gate_mode == mode);
+                    if ui
+                        .add_enabled(self.gate.is_some(), button)
+                        .on_hover_text(format!("{label} the selected delay interval"))
+                        .clicked()
+                    {
+                        self.gate_mode = mode;
+                    }
+                }
+                if ui
+                    .add_enabled(self.gate.is_some(), egui::Button::new("Clear gate").small())
+                    .clicked()
+                {
+                    self.gate = None;
+                    ui.ctx().request_repaint();
+                }
+                if ui
+                    .add_enabled(
+                        self.gated().is_some() && !copies.busy(),
+                        egui::Button::new("Copy gated CSV").small(),
+                    )
+                    .clicked()
+                    && let Some((_, Ok(points))) = &self.gated
+                {
+                    let points = points.clone();
+                    copies.start(ui.ctx(), move |_| copy_trace(&points));
+                }
             });
-            if ui
-                .add_enabled(self.gate.is_some(), egui::Button::new("Clear gate"))
-                .clicked()
-            {
-                self.gate = None;
-                ui.ctx().request_repaint();
-            }
-            if ui
-                .add_enabled(
-                    self.gated().is_some() && !copies.busy(),
-                    egui::Button::new("Copy gated CSV"),
-                )
-                .clicked()
-                && let Some((_, Ok(points))) = &self.gated
-            {
-                let points = points.clone();
-                copies.start(ui.ctx(), move |_| copy_trace(&points));
-            }
         });
     }
 

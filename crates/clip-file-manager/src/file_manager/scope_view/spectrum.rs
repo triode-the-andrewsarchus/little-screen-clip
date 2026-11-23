@@ -4,11 +4,8 @@ use super::{
 };
 use crate::file_manager::signal_view::{
     filter_editor::{SpectrumPane, spectrum_workspace},
-    frequency_plot::{
-        Display, choose_region, choose_window, measurement_readout, paint_measurement,
-        spectrum_rect,
-    },
-    timeline::{self, Link},
+    frequency_plot::{Display, measurement_readout, paint_measurement, settings, spectrum_rect},
+    timeline::Link,
 };
 use egui::{Button, Ui};
 use std::ops::Range;
@@ -77,8 +74,10 @@ impl Viewer {
         if self.spectra.kind != LaneKind::Calculated {
             self.draw_filter_response(ui, rect, &span);
         }
-        if let Some(interval) = target {
-            self.reveal_peak(interval, link);
+        if let Some(window) = target {
+            let domain = link.map_or(&self.domain, |link| &link.domain);
+            self.spectra.inspect(window, &mut self.span, domain, 0.0);
+            ui.ctx().request_repaint();
         }
         response.on_hover_text(
             "Scroll to zoom in frequency · Middle drag to pan · Click to measure a frequency",
@@ -111,6 +110,7 @@ impl Viewer {
     fn spectrum_controls(&mut self, ui: &mut Ui) {
         ui.separator();
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
             let name = if self.spectra.kind == LaneKind::Calculated {
                 "Math"
             } else {
@@ -127,33 +127,17 @@ impl Viewer {
                     self.set_spectrum_kind(kind);
                 }
             }
-        });
-        ui.horizontal_wrapped(|ui| {
-            choose_region(ui, &mut self.spectra.region);
-            choose_window(ui, &mut self.spectrum_window);
+            ui.separator();
             ui.toggle_value(&mut self.spectrum_db, "dB")
                 .on_hover_text("Amplitude relative to one peak unit");
             ui.toggle_value(&mut self.spectra.only, "Frequency only");
             if ui.button("Fit frequencies").clicked() {
                 self.spectrum_span = None;
             }
-            if ui.button("Close spectrum").clicked() {
+            if ui.button("Close").on_hover_text("Close spectrum").clicked() {
                 self.spectrum = false;
             }
         });
-    }
-
-    fn reveal_peak(&mut self, interval: Range<f64>, link: Option<&Link>) {
-        self.archive_mark();
-        self.snaps.iter_mut().for_each(super::CursorSnap::clear);
-        self.cursors = [Some(interval.start), Some(interval.end)];
-        let padding = (interval.end - interval.start) * 0.08;
-        let domain = link.map_or(&self.domain, |link| &link.domain);
-        self.span = timeline::fit(
-            domain,
-            interval.start - padding..interval.end + padding,
-            0.0,
-        );
-        self.spectra.only = false;
+        settings(ui, &mut self.spectra.region, &mut self.spectrum_window);
     }
 }

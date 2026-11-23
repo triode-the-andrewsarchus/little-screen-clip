@@ -246,9 +246,16 @@ impl Viewer {
         }
         let spectrum_opened = self.toolbar(ui, copies);
         self.power_totals(ui);
-        let show_time = !self.spectrum || !self.spectra.only;
+        let returned = super::signal_view::frequency_plot::origin_controls(
+            ui,
+            &mut self.spectra,
+            &mut self.span,
+            Link::clock(link),
+        );
+        let showing_spectrum = self.spectrum && self.spectra.origin().is_none();
+        let show_time = !showing_spectrum || !self.spectra.only;
         let probe = if show_time {
-            let height = if self.spectrum {
+            let height = if showing_spectrum {
                 (ui.available_height() * 0.32).max(68.0)
             } else {
                 (ui.available_height() - 72.0).max(80.0)
@@ -261,10 +268,10 @@ impl Viewer {
             self.hover.time = None;
             None
         };
-        if self.spectrum {
+        if showing_spectrum {
             let filter_added = std::mem::take(&mut self.filters.reveal_spectrum);
             let view = ui.scope(|ui| self.spectrum_ui(ui, link));
-            if spectrum_opened || filter_added {
+            if spectrum_opened || filter_added || returned {
                 view.response.scroll_to_me(None);
             }
         } else {
@@ -297,9 +304,10 @@ impl Viewer {
             if self.recording.triggered_segments() && ui.button("Fit segment").clicked() {
                 self.fit_active();
             }
-            if ui
-                .add(egui::Button::new("Spectrum").selected(self.spectrum))
-                .clicked()
+            if self.spectra.origin().is_none()
+                && ui
+                    .add(egui::Button::new("Spectrum").selected(self.spectrum))
+                    .clicked()
             {
                 self.spectrum = !self.spectrum;
                 spectrum_opened = self.spectrum;
@@ -440,6 +448,13 @@ impl Viewer {
         self.draw_filters(&painter, &clipped, rect);
         let clock = Link::clock(link);
         self.paint_marks(ui, &clipped, rect, clock.scale());
+        super::signal_view::frequency_plot::paint_origin(
+            ui,
+            &clipped,
+            rect,
+            &self.span,
+            &self.spectra,
+        );
         if let Some(link) = link {
             link.paint_markers(&clipped, rect, &self.span);
         }

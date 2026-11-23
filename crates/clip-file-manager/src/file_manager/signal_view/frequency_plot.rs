@@ -1,12 +1,11 @@
 use super::{
-    spectra::{Region, ResultView},
+    spectra::{PeakWindow, Region, ResultView, Spectra},
     timeline,
 };
 use crate::file_manager::scope_view::plot;
-use egui::{Align2, Color32, FontId, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Button, Color32, FontId, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::engineering::{
     analysis::{Clock, SpectralSurvey, SpectrumWindow},
-    scope::Channel,
     waveforms::{Peak, display_value},
 };
 use std::ops::Range;
@@ -15,7 +14,7 @@ pub(in crate::file_manager) fn spectrum_rect(
     ui: &mut Ui,
     min_height: f32,
 ) -> (Rect, egui::Response) {
-    let height = (ui.available_height() - 29.0).max(min_height);
+    let height = (ui.available_height() - 48.0).max(min_height);
     let (area, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
     (
@@ -114,70 +113,169 @@ impl Display<'_> {
     }
 }
 
-pub(in crate::file_manager) fn spectrum_readout(
+fn spectrum_readout(
     ui: &mut Ui,
+    result: ResultView<'_>,
     survey: &SpectralSurvey,
-    channel: &Channel,
     bin: usize,
     db: bool,
     clock: Clock,
-) -> Option<Range<f64>> {
+) -> Option<PeakWindow> {
+    let channel = result.input.channel();
     let measured = survey.peak_interval(bin)?;
     let interval = channel.time_at(measured.start)..channel.time_at(measured.end);
+    let requested = channel.time_at(result.rows.start)..channel.time_at(result.rows.end);
+    let hz = bin as f64 * survey.spectrum.bin_hz;
     let amplitude = survey.spectrum.peak_amplitude[bin];
     let gain = if db {
         format!("{:.2} dB", amplitude_value(amplitude, true))
     } else {
         display_value(f64::from(amplitude), &channel.unit)
     };
+    let reveal = ui
+        .horizontal_wrapped(|ui| {
+            ui.monospace(format!("{} · {gain}", display_value(hz, "Hz")));
+            ui.small_button(format!(
+                "Show peak window  {}",
+                time_range(&interval, clock)
+            ))
+            .on_hover_text("Inspect the source samples that produced this frequency bin")
+            .clicked()
+        })
+        .inner;
     ui.horizontal_wrapped(|ui| {
-        ui.monospace(format!(
-            "{} · {gain}",
-            display_value(bin as f64 * survey.spectrum.bin_hz, "Hz")
-        ));
-        let window = format!(
-            "{} to {}",
-            display_value(clock.to_workspace(interval.start), "s"),
-            display_value(clock.to_workspace(interval.end), "s")
-        );
-        let reveal = ui
-            .button("Reveal peak interval")
-            .on_hover_text(window)
-            .clicked();
+        ui.weak(format!("FFT input  {}", time_range(&requested, clock)));
         if survey.windows > 1 || survey.covered_samples < survey.requested_samples {
             ui.weak(format!(
-                "{} windows · {:.1}% coverage",
+                "{} windows · {:.1}% sample coverage",
                 survey.windows,
                 survey.covered_samples as f64 * 100.0 / survey.requested_samples as f64
             ));
         }
-        reveal.then_some(interval)
-    })
-    .inner
+    });
+    reveal.then_some(PeakWindow { interval, hz })
+}
+
+fn time_range(interval: &Range<f64>, clock: Clock) -> String {
+    format!(
+        "{} to {}",
+        display_value(clock.to_workspace(interval.start), "s"),
+        display_value(clock.to_workspace(interval.end), "s"),
+    )
+}
+
+pub(in crate::file_manager) fn origin_controls(
+    ui: &mut Ui,
+    spectra: &mut Spectra,
+    view: &mut Range<f64>,
+    clock: Clock,
+) -> bool {
+    let reveal = spectra.take_origin_reveal();
+    let Some(window) = spectra.origin() else {
+        return false;
+    };
+    let row = ui.horizontal_wrapped(|ui| {
+        ui.colored_label(
+            ui.visuals().hyperlink_color,
+            format!(
+                "{} peak window  {}",
+                display_value(window.hz, "Hz"),
+                time_range(&window.interval, clock),
+            ),
+        );
+        ui.button("Back to spectrum").clicked()
+    });
+    if row.inner {
+        spectra.finish_inspection(view);
+        ui.ctx().request_repaint();
+    } else if reveal {
+        row.response.scroll_to_me(Some(egui::Align::Min));
+    }
+    row.inner
+}
+
+pub(in crate::file_manager) fn paint_origin(
+    ui: &Ui,
+    painter: &egui::Painter,
+    rect: Rect,
+    visible: &Range<f64>,
+    spectra: &Spectra,
+) {
+    if let Some(window) = spectra.origin() {
+        let color = ui.visuals().hyperlink_color;
+        plot::highlight(
+            painter,
+            rect,
+            visible,
+            window.interval.clone(),
+            color.gamma_multiply(0.18),
+        );
+        for edge in [window.interval.start, window.interval.end] {
+            if visible.contains(&edge) {
+                painter.vline(
+                    plot::x_at(rect, visible, edge),
+                    rect.y_range(),
+                    Stroke::new(1.1, color),
+                );
+            }
+        }
+    }
 }
 
 pub(in crate::file_manager) fn choose_window(ui: &mut Ui, window: &mut SpectrumWindow) {
-    egui::ComboBox::from_id_salt("dsp-fft-window")
-        .selected_text(window_name(*window))
-        .show_ui(ui, |ui| {
-            for candidate in [
-                SpectrumWindow::Hann,
-                SpectrumWindow::Rectangular,
-                SpectrumWindow::BlackmanHarris,
-            ] {
-                ui.selectable_value(window, candidate, window_name(candidate));
-            }
-        });
+    ui.weak("Window");
+    for candidate in [
+        SpectrumWindow::Hann,
+        SpectrumWindow::Rectangular,
+        SpectrumWindow::BlackmanHarris,
+    ] {
+        if ui
+            .add(
+                Button::new(window_name(candidate))
+                    .small()
+                    .selected(*window == candidate),
+            )
+            .clicked()
+        {
+            *window = candidate;
+        }
+    }
 }
 
-pub(in crate::file_manager) fn choose_region(ui: &mut Ui, region: &mut Region) {
-    egui::ComboBox::from_id_salt("dsp-fft-region")
-        .selected_text(region.label())
-        .show_ui(ui, |ui| {
-            for candidate in [Region::Current, Region::Visible, Region::Whole] {
-                ui.selectable_value(region, candidate, candidate.label());
+pub(in crate::file_manager) fn settings(
+    ui: &mut Ui,
+    region: &mut Region,
+    window: &mut SpectrumWindow,
+) {
+    ui.horizontal_wrapped(|ui| {
+        let spacing = ui.spacing_mut();
+        spacing.interact_size.y = 24.0;
+        spacing.item_spacing.x = 3.0;
+        ui.weak("FFT range");
+        for (candidate, label, help) in [
+            (
+                Region::Current,
+                "Selection or view",
+                "Use the selected time range, or the visible range when there is no selection",
+            ),
+            (Region::Visible, "Visible", "Use the visible time range"),
+            (
+                Region::Whole,
+                "Whole lane",
+                "Use the full available span of this lane",
+            ),
+        ] {
+            if ui
+                .add(Button::new(label).small().selected(*region == candidate))
+                .on_hover_text(help)
+                .clicked()
+            {
+                *region = candidate;
             }
-        });
+        }
+        ui.add_space(7.0);
+        choose_window(ui, window);
+    });
 }
 
 fn window_name(window: SpectrumWindow) -> &'static str {
@@ -259,49 +357,66 @@ pub(in crate::file_manager) fn amplitude_ticks(
     }
 }
 
-pub(in crate::file_manager) type Cursor<'a> = (&'a SpectralSurvey, &'a Channel, usize);
-
-pub(in crate::file_manager) fn paint_measurement<'a>(
+pub(in crate::file_manager) fn paint_measurement(
     ui: &mut Ui,
     rect: Rect,
     response: &Response,
     span: &mut Range<f64>,
     display: &mut Display<'_>,
-    shown: Option<ResultView<'a>>,
-) -> Option<Cursor<'a>> {
-    let Some((input, Ok(Some(survey)))) = shown else {
+    shown: Option<ResultView<'_>>,
+) -> Option<usize> {
+    let Some(ResultView {
+        input,
+        output: Ok(Some(survey)),
+        ..
+    }) = shown
+    else {
         ui.painter()
             .rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
         return None;
     };
     let channel = input.channel();
     *span = display.navigate(ui, rect, response, survey, true);
-    let bin = display.paint(ui, rect, survey, span, &channel.unit)?;
-    Some((survey, channel, bin))
+    display.paint(ui, rect, survey, span, &channel.unit)
 }
 
 pub(in crate::file_manager) fn measurement_readout(
     ui: &mut Ui,
     ready: Option<ResultView<'_>>,
-    cursor: Option<Cursor<'_>>,
+    cursor: Option<usize>,
     db: bool,
     clock: Clock,
     pending: &str,
-) -> Option<Range<f64>> {
-    match ready {
-        Some((_, Ok(Some(_)))) => {
-            let (survey, channel, bin) = cursor?;
-            return spectrum_readout(ui, survey, channel, bin, db, clock);
+) -> Option<PeakWindow> {
+    ui.scope(|ui| {
+        let spacing = ui.spacing_mut();
+        spacing.interact_size.y = 20.0;
+        spacing.item_spacing.y = 3.0;
+        ui.set_min_height(48.0);
+        match ready {
+            Some(
+                result @ ResultView {
+                    output: Ok(Some(survey)),
+                    ..
+                },
+            ) => {
+                return spectrum_readout(ui, result, survey, cursor?, db, clock);
+            }
+            Some(ResultView {
+                output: Ok(None), ..
+            }) => {
+                ui.weak("No contiguous finite samples in this interval");
+            }
+            Some(ResultView {
+                output: Err(error), ..
+            }) => {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+            None => {
+                ui.weak(pending);
+            }
         }
-        Some((_, Ok(None))) => {
-            ui.weak("No contiguous finite samples in this interval");
-        }
-        Some((_, Err(error))) => {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-        None => {
-            ui.weak(pending);
-        }
-    }
-    None
+        None
+    })
+    .inner
 }

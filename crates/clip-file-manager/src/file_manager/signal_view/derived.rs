@@ -233,6 +233,12 @@ impl Derived {
             return None;
         }
         self.rate_controls(ui);
+        let returned = super::frequency_plot::origin_controls(
+            ui,
+            &mut self.frequency.spectra,
+            span,
+            Default::default(),
+        );
         self.update(ui.ctx(), inputs, span);
         let frame = self.current_frame(ui, inputs);
         if let Some(frame) = &frame {
@@ -262,14 +268,13 @@ impl Derived {
             self.frequency
                 .content(ui, &frame, self.selected.clone(), span)
         });
-        if reveal {
+        if reveal || returned {
             spectrum.response.scroll_to_me(None);
         }
-        if let Some(interval) = spectrum.inner {
-            *span = timeline::fit(domain, interval, frame.step);
-            if let Some(first) = plots.first() {
-                ui.scroll_to_rect(first.rect, None);
-            }
+        if let Some(window) = spectrum.inner {
+            self.frequency
+                .spectra
+                .inspect(window, span, domain, frame.step);
             ui.ctx().request_repaint();
         }
         pointed
@@ -398,6 +403,20 @@ impl Derived {
         );
         for plot in plots.iter().filter(|plot| ui.is_rect_visible(plot.rect)) {
             self.measurements.paint(ui.painter(), plot.rect, span);
+        }
+        if let Some(index) = self.frequency.origin_lane()
+            && let Some(plot) = plots.get(index)
+        {
+            let painter = ui
+                .painter()
+                .with_clip_rect(plot.rect.intersect(ui.clip_rect()));
+            super::frequency_plot::paint_origin(
+                ui,
+                &painter,
+                plot.rect,
+                span,
+                &self.frequency.spectra,
+            );
         }
         if self.measurements.take_reveal() {
             ui.scroll_to_rect(rect, Some(egui::Align::Max));

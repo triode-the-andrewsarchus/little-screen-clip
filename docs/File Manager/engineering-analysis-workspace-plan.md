@@ -72,11 +72,21 @@ The scope smoke test placed three stages on CH1, moved its band-pass from about 
 
 ## 8. Make spectral measurement settings visible
 
-- [ ] Put the available time ranges and window functions in the workspace and make the active settings readable at a glance.
-- [ ] Show the interval used for the current FFT alongside the peak readout. Keep the time selection, cursor and filter interval independently inspectable.
-- [ ] Walk a transient peak from frequency to its measured time window and back on a recorded channel, logic line and equation lane.
+- [x] Put the available time ranges and window functions in the workspace and make the active settings readable at a glance.
+- [x] Show the interval used for the current FFT alongside the peak readout. Keep the time selection, cursor and filter interval independently inspectable.
+- [x] Walk a transient peak from frequency to its measured time window and back on a recorded channel, logic line and equation lane.
 
-Start with a narrow-window review. Use compact button groups for the two sets of choices and retain the chart and peak readout as the primary workspace. Keep the existing spectral survey jobs and sample coverage reporting behind those controls.
+The FFT controls sit above the spectrum and the result shows both the input interval and the contributing window for the active bin. The window button opens the waveform at that interval with its endpoints marked. Back to spectrum restores the previous viewport. The waveform selection and filter range keep their original meanings throughout the inspection.
+
+In the scope test, a 1 kHz transient in the 1–2 s window rose above the baseline tone. The FFT searched 0–3 s, and the saved analysis still held the original A and B cursors at about 210 and 382 ms after the round trip. The logic and equation viewers also returned to the same FFT result after inspecting the contributing window. The controls and both interval readouts fit at 800 × 620. The Touchstone impulse toolbar also uses direct window and gate choices.
+
+## 9. Check scope markers against missing data and zoom limits
+
+- [ ] Exercise the hover readouts with a gap on one channel and valid samples on its neighbors. Distinguish a missing value from a measured zero.
+- [ ] Inspect a selection at the widest and closest zoom levels and around a gap. Verify the source sample positions, zero-crossing snap and Shift override.
+- [ ] Check aligned traces with independent units and display offsets while switching between stacked and overlay views. Keep measurements tied to the original values.
+
+Start with a recording that has known samples on both sides of a gap. Walk from a hover readout or selection to its source rows, then back to the same location after zooming. Keep units and missing-value indicators close to their trace intersections.
 
 ## Review after each addition
 

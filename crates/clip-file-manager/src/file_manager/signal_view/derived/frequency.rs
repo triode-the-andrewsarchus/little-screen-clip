@@ -8,10 +8,9 @@ use crate::file_manager::{
     signal_view::{
         filter_editor::{SpectrumPane, add_buttons, reveal_frequency, spectrum_workspace},
         frequency_plot::{
-            Display, choose_region, choose_window, measurement_readout, paint_measurement,
-            spectrum_rect,
+            Display, measurement_readout, paint_measurement, settings, spectrum_rect,
         },
-        spectra::Spectra,
+        spectra::{PeakWindow, Spectra},
     },
 };
 use egui::Ui;
@@ -25,7 +24,7 @@ use std::ops::Range;
 pub(super) struct Frequency {
     lane: Option<usize>,
     window: SpectrumWindow,
-    spectra: Spectra,
+    pub(super) spectra: Spectra,
     span: Option<Range<f64>>,
     marker: Option<f64>,
     linear: bool,
@@ -122,8 +121,13 @@ impl Frequency {
         self.filters.plots(frame)
     }
 
+    pub(super) fn origin_lane(&self) -> Option<usize> {
+        self.spectra.origin()?;
+        self.lane
+    }
+
     pub(super) fn only(&self) -> bool {
-        self.lane.is_some() && self.spectra.only
+        self.lane.is_some() && self.spectra.only && self.spectra.origin().is_none()
     }
 
     pub(super) fn content(
@@ -132,7 +136,10 @@ impl Frequency {
         frame: &Frame,
         selected: Option<Range<f64>>,
         visible: &Range<f64>,
-    ) -> Option<Range<f64>> {
+    ) -> Option<PeakWindow> {
+        if self.spectra.origin().is_some() {
+            return None;
+        }
         let index = self.lane?;
         let lane = frame.lanes.get(index)?;
         let interval = self.measurement_controls(ui, lane, index, selected, visible);
@@ -150,9 +157,6 @@ impl Frequency {
             },
         );
         self.reveal |= added;
-        if target.is_some() {
-            self.spectra.only = false;
-        }
         target
     }
 
@@ -162,7 +166,7 @@ impl Frequency {
         frame: &Frame,
         index: usize,
         interval: Option<Range<f64>>,
-    ) -> Option<Range<f64>> {
+    ) -> Option<PeakWindow> {
         let lane = frame.lanes.get(index)?;
         let rate = frame.step.recip();
         let input = if self.filtered_spectrum {
@@ -185,7 +189,7 @@ impl Frequency {
         let shown = ready.or_else(|| {
             self.spectra
                 .latest()
-                .filter(|(input, _)| input.channel().name == expected)
+                .filter(|result| result.input.channel().name == expected)
         });
         let pending = if !self.filtered_spectrum {
             "Computing spectrum…"
@@ -240,8 +244,6 @@ impl Frequency {
                     }
                 }
             }
-            choose_region(ui, &mut self.spectra.region);
-            choose_window(ui, &mut self.window);
             if ui
                 .button(if self.linear { "Linear" } else { "dB" })
                 .clicked()
@@ -263,6 +265,7 @@ impl Frequency {
                 self.spectra.suspend();
             }
         });
+        settings(ui, &mut self.spectra.region, &mut self.window);
         self.spectra.region.interval(selected, visible)
     }
 

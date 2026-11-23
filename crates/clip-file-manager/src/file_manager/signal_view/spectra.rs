@@ -1,4 +1,4 @@
-use super::{inputs::Samples, take_query_result};
+use super::{inputs::Samples, take_query_result, timeline};
 use crate::file_manager::{preview_job::Task, scope_view::reads::RawChannel};
 use egui::Context;
 use little_clip_core::BackgroundJobs;
@@ -25,14 +25,6 @@ pub(in crate::file_manager) enum Region {
 }
 
 impl Region {
-    pub(in crate::file_manager) fn label(self) -> &'static str {
-        match self {
-            Self::Current => "Selection or visible",
-            Self::Visible => "Visible interval",
-            Self::Whole => "Whole lane",
-        }
-    }
-
     pub(in crate::file_manager) fn interval(
         self,
         selection: Option<Range<f64>>,
@@ -206,8 +198,23 @@ struct Query {
     window: SpectrumWindow,
 }
 
-pub(in crate::file_manager) type ResultView<'a> =
-    (&'a Input, Result<Option<&'a SpectralSurvey>, &'a str>);
+#[derive(Clone, Copy)]
+pub(in crate::file_manager) struct ResultView<'a> {
+    pub input: &'a Input,
+    pub rows: &'a Range<u64>,
+    pub output: Result<Option<&'a SpectralSurvey>, &'a str>,
+}
+
+pub(in crate::file_manager) struct PeakWindow {
+    pub interval: Range<f64>,
+    pub hz: f64,
+}
+
+struct Inspection {
+    window: PeakWindow,
+    previous_view: Range<f64>,
+    reveal: bool,
+}
 
 #[derive(Default)]
 pub(in crate::file_manager) struct Spectra {
@@ -218,6 +225,7 @@ pub(in crate::file_manager) struct Spectra {
     result: Option<(Query, Result<Option<SpectralSurvey>, String>)>,
     requested: Option<Query>,
     request_after: f64,
+    inspection: Option<Inspection>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -243,6 +251,42 @@ impl Spectra {
         self.clear_result();
     }
 
+    pub(in crate::file_manager) fn inspect(
+        &mut self,
+        window: PeakWindow,
+        view: &mut Range<f64>,
+        domain: &Range<f64>,
+        min_width: f64,
+    ) {
+        let padding = (window.interval.end - window.interval.start) * 0.08;
+        let next = timeline::fit(
+            domain,
+            window.interval.start - padding..window.interval.end + padding,
+            min_width,
+        );
+        self.inspection = Some(Inspection {
+            window,
+            previous_view: std::mem::replace(view, next),
+            reveal: true,
+        });
+    }
+
+    pub(in crate::file_manager) fn origin(&self) -> Option<&PeakWindow> {
+        Some(&self.inspection.as_ref()?.window)
+    }
+
+    pub(in crate::file_manager) fn take_origin_reveal(&mut self) -> bool {
+        self.inspection
+            .as_mut()
+            .is_some_and(|inspection| std::mem::take(&mut inspection.reveal))
+    }
+
+    pub(in crate::file_manager) fn finish_inspection(&mut self, view: &mut Range<f64>) {
+        if let Some(inspection) = self.inspection.take() {
+            *view = inspection.previous_view;
+        }
+    }
+
     pub(in crate::file_manager) fn update(
         &mut self,
         ctx: &Context,
@@ -262,8 +306,11 @@ impl Spectra {
             .result
             .as_ref()
             .is_some_and(|(ready, _)| ready == query)
-            || self.task.is_some()
         {
+            return;
+        }
+        if self.task.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(33));
             return;
         }
         let now = ctx.input(|input| input.time);
@@ -301,6 +348,7 @@ impl Spectra {
         self.suspend();
         self.result = None;
         self.request_after = 0.0;
+        self.inspection = None;
     }
 
     pub(in crate::file_manager) fn ready(&self) -> Option<ResultView<'_>> {
@@ -313,13 +361,48 @@ impl Spectra {
 
     pub(in crate::file_manager) fn latest(&self) -> Option<ResultView<'_>> {
         let (query, result) = self.result.as_ref()?;
-        Some((
-            &query.input,
-            result.as_ref().map(Option::as_ref).map_err(String::as_str),
-        ))
+        Some(ResultView {
+            input: &query.input,
+            rows: &query.rows,
+            output: result.as_ref().map(Option::as_ref).map_err(String::as_str),
+        })
     }
 
     pub(in crate::file_manager) fn busy(&self) -> bool {
         self.task.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspecting_a_peak_restores_the_original_view_and_fft_settings() {
+        let mut spectra = Spectra {
+            region: Region::Visible,
+            only: true,
+            ..Default::default()
+        };
+        let original = 0.25..4.0;
+        let mut view = original.clone();
+        spectra.inspect(
+            PeakWindow {
+                interval: 1.0..2.0,
+                hz: 1000.0,
+            },
+            &mut view,
+            &(0.0..4.0),
+            0.0,
+        );
+        assert!(view.start < 1.0 && view.end > 2.0);
+        assert_eq!(spectra.origin().unwrap().interval, 1.0..2.0);
+        assert!(spectra.take_origin_reveal());
+        assert!(!spectra.take_origin_reveal());
+        assert_eq!(spectra.region, Region::Visible);
+        assert!(spectra.only);
+        spectra.finish_inspection(&mut view);
+        assert_eq!(view, original);
+        assert!(spectra.origin().is_none());
     }
 }
