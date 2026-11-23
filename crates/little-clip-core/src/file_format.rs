@@ -35,6 +35,7 @@ pub enum Format {
     TagCapture,
     OneWire,
     RadioProgramming,
+    Flowgraph,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -62,6 +63,7 @@ impl Format {
             "pcap" | "pcapng" => Some(Self::PacketCapture),
             "ir" => Some(Self::PulseSignals),
             "chirp" => Some(Self::RadioProgramming),
+            "grc" => Some(Self::Flowgraph),
             _ if crate::engineering::touchstone::extension_ports(path).is_some() => {
                 Some(Self::Touchstone)
             }

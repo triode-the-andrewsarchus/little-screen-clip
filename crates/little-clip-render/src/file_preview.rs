@@ -41,6 +41,7 @@ pub(crate) enum Preview {
     Pulses(little_clip_core::engineering::pulses::Capture),
     Tags(little_clip_core::engineering::tags::Document),
     Radio(little_clip_core::engineering::radio::Summary),
+    Flowgraph(little_clip_core::engineering::flowgraph::Preview),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -63,6 +64,7 @@ enum Kind {
     Pulses,
     Tags,
     Radio,
+    Flowgraph,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -321,6 +323,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Pulses
     } else if Format::for_path(path) == Some(Format::RadioProgramming) {
         Kind::Radio
+    } else if Format::for_path(path) == Some(Format::Flowgraph) {
+        Kind::Flowgraph
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
@@ -408,6 +412,14 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
         Kind::Radio => little_clip_core::engineering::radio::preview(path, &AtomicBool::new(false))
             .ok()
             .map(Preview::Radio),
+        Kind::Flowgraph => {
+            use little_clip_core::{engineering::flowgraph, file_source::ReadCheck};
+            let cancel = AtomicBool::new(false);
+            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
+            let graph = flowgraph::preview(file.try_clone().ok()?, &cancel).ok()?;
+            source.check_file(&file).ok()?;
+            Some(Preview::Flowgraph(graph))
+        }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);
             let design = little_clip_core::embroidery::Design::read(path, &cancelled).ok()?;

@@ -2,6 +2,7 @@
 
 pub mod analysis;
 pub mod can;
+pub mod flowgraph;
 pub mod jls;
 pub mod logic;
 pub mod logic_preview;

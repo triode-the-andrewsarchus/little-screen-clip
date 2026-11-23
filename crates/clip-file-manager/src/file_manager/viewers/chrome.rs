@@ -261,6 +261,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::PulseSignals(_)
         | ViewerSession::Tags(_)
         | ViewerSession::RadioProgramming(_)
+        | ViewerSession::Flowgraph(_)
         | ViewerSession::Embroidery(_)
         | ViewerSession::VcvPatch(_)
         | ViewerSession::Database(_)

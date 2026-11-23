@@ -91,6 +91,7 @@ pub(super) enum Category {
     TagCapture,
     OneWire,
     RadioProgramming,
+    Flowgraph,
     Video,
     Scene,
     Font,
@@ -153,6 +154,7 @@ fn extension_category(entry: &Entry) -> Category {
         Some(Format::TagCapture) => return Category::TagCapture,
         Some(Format::OneWire) => return Category::OneWire,
         Some(Format::RadioProgramming) => return Category::RadioProgramming,
+        Some(Format::Flowgraph) => return Category::Flowgraph,
         _ => {}
     }
     if entry.is_geography() {
@@ -204,6 +206,7 @@ impl Category {
             Self::TagCapture => "NFC and RFID",
             Self::OneWire => "1-Wire",
             Self::RadioProgramming => "Radio programming",
+            Self::Flowgraph => "Signal flowgraphs",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",

@@ -2,6 +2,7 @@
 
 mod activity;
 mod audio;
+mod flowgraph;
 mod images;
 mod logic_capture;
 mod pulse_signals;
@@ -538,6 +539,10 @@ impl ScreenRenderer {
             }
             Some(Preview::Radio(plan)) => {
                 self.draw_radio_channels(pixmap, plan, [rx, ry, rw, rh]);
+                true
+            }
+            Some(Preview::Flowgraph(preview)) => {
+                self.draw_flowgraph_card(pixmap, preview, [rx, ry, rw, rh]);
                 true
             }
             Some(Preview::Midi(score)) => {
