@@ -15,6 +15,9 @@ use std::{
 
 const DECODE_EDGES: usize = 8192;
 
+mod i2s;
+use i2s::I2sInputs;
+
 pub(in crate::file_manager) trait TraceInput: Send + Sync {
     fn time_bounds(&self, index: usize) -> Option<Range<f64>>;
     fn read_edges(
@@ -52,6 +55,7 @@ enum Mode {
     I2c,
     Spi,
     Uart,
+    I2s,
 }
 
 impl Mode {
@@ -60,6 +64,7 @@ impl Mode {
             Self::I2c => "I²C",
             Self::Spi => "SPI",
             Self::Uart => "UART",
+            Self::I2s => "I²S",
         }
     }
 }
@@ -122,6 +127,7 @@ enum Inputs {
     I2c { clock: usize, data: usize },
     Uart { data: usize, baud: f64 },
     Spi(SpiInputs),
+    I2s(I2sInputs),
 }
 
 #[derive(Clone, PartialEq)]
@@ -155,7 +161,7 @@ impl Panel {
     pub fn add_menu(&mut self, ui: &mut Ui, lanes: &[Lane]) -> bool {
         let mut added = false;
         ui.menu_button("Add decoder", |ui| {
-            for mode in [Mode::Spi, Mode::I2c, Mode::Uart] {
+            for mode in [Mode::Spi, Mode::I2c, Mode::Uart, Mode::I2s] {
                 if ui
                     .add_enabled(self.decoders.len() < 12, egui::Button::new(mode.label()))
                     .clicked()
@@ -268,6 +274,7 @@ impl Panel {
 struct Decoder {
     mode: Mode,
     spi: SpiInputs,
+    i2s: I2sInputs,
     clock: usize,
     data: usize,
     uart: usize,
@@ -287,6 +294,7 @@ impl Decoder {
         let uart = named_lane(lanes, &["UART", "TX", "RX", "TXD", "RXD"]).unwrap_or(0);
         Self {
             mode,
+            i2s: I2sInputs::new(lanes),
             spi: SpiInputs {
                 clock: named_lane(lanes, &["SCK", "CLK", "SCLK", "SPI_CLK"]).unwrap_or(0),
                 select: named_lane(lanes, &["CS", "CS_N", "SS", "SS_N", "CE"]),
@@ -319,6 +327,7 @@ impl Decoder {
             Mode::I2c => Some(self.data),
             Mode::Uart => Some(self.uart),
             Mode::Spi => self.spi.data.into_iter().flatten().next(),
+            Mode::I2s => Some(self.i2s.channels[2]),
         }
     }
 
@@ -327,6 +336,7 @@ impl Decoder {
             Mode::I2c => vec![self.clock, self.data],
             Mode::Uart => vec![self.uart],
             Mode::Spi => self.spi.channels().collect(),
+            Mode::I2s => self.i2s.channels.to_vec(),
         };
         channels.sort_unstable();
         channels.dedup();
@@ -336,6 +346,7 @@ impl Decoder {
     pub(super) fn controls(&mut self, ui: &mut Ui, lanes: &[Lane]) {
         ui.horizontal_wrapped(|ui| match self.mode {
             Mode::Spi => self.spi.controls(ui, lanes),
+            Mode::I2s => self.i2s.controls(ui, lanes),
             Mode::I2c => {
                 lane_picker(ui, "i2c-scl", "Clock", &mut self.clock, lanes);
                 lane_picker(ui, "i2c-sda", "Data", &mut self.data, lanes);
@@ -358,6 +369,7 @@ impl Decoder {
     fn inputs(&self) -> Result<Inputs, &'static str> {
         match self.mode {
             Mode::Spi => self.spi.validate(),
+            Mode::I2s => self.i2s.validate(),
             Mode::I2c if self.clock != self.data => Ok(Inputs::I2c {
                 clock: self.clock,
                 data: self.data,
@@ -511,6 +523,7 @@ impl Decoder {
 fn decode(capture: &dyn TraceInput, request: &Key, cancel: &AtomicBool) -> Result<Decoded, String> {
     let (window, inspected_until, events) = match request.inputs {
         Inputs::Spi(inputs) => return read_spi(capture, request.span.clone(), inputs, cancel),
+        Inputs::I2s(inputs) => return inputs.read(capture, request.span.clone(), cancel),
         Inputs::I2c { clock, data } => {
             let window = lane_window(
                 capture,
@@ -588,7 +601,7 @@ fn lane_window(
 fn lane_picker(ui: &mut Ui, id: &str, label: &str, index: &mut usize, lanes: &[Lane]) {
     ui.label(label);
     egui::ComboBox::from_id_salt(id)
-        .selected_text(&lanes[*index].name)
+        .selected_text(lanes.get(*index).map_or("Unavailable", |lane| &lane.name))
         .show_ui(ui, |ui| {
             for (lane, signal) in lanes.iter().enumerate() {
                 ui.selectable_value(index, lane, &signal.name);
@@ -598,7 +611,11 @@ fn lane_picker(ui: &mut Ui, id: &str, label: &str, index: &mut usize, lanes: &[L
 
 fn optional_lane(ui: &mut Ui, id: &str, label: &str, index: &mut Option<usize>, lanes: &[Lane]) {
     ui.label(label);
-    let title = index.map_or("None", |index| lanes[index].name.as_str());
+    let title = index.map_or("None", |index| {
+        lanes
+            .get(index)
+            .map_or("Unavailable", |lane| lane.name.as_str())
+    });
     egui::ComboBox::from_id_salt(id)
         .selected_text(title)
         .show_ui(ui, |ui| {
@@ -676,6 +693,21 @@ pub(super) fn event_label(kind: Kind) -> String {
             format!("0x{byte:02X}  '{}'", char::from(byte))
         }
         Kind::UartByte { byte } => format!("0x{byte:02X}"),
+        Kind::I2sSample {
+            channel,
+            sample: Some(sample),
+            ..
+        } => format!("{}  {sample}", channel.label()),
+        Kind::I2sSample {
+            channel,
+            sample: None,
+            ..
+        } => format!("{}  Unknown sample", channel.label()),
+        Kind::I2sShortWord {
+            channel,
+            received,
+            bits,
+        } => format!("{}  Short word ({received}/{bits} bits)", channel.label()),
     }
 }
 

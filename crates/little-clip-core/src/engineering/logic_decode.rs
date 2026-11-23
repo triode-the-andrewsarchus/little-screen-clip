@@ -3,7 +3,9 @@
 use super::logic::{Edge, Level, Trace};
 use std::ops::Range;
 
+mod i2s;
 mod spi;
+pub use i2s::{I2sChannel, I2sConfig, I2sFormat, i2s};
 pub use spi::{SpiConfig, spi};
 
 const MAX_EVENTS: usize = 16_384;
@@ -41,6 +43,16 @@ pub enum Kind {
     },
     UartByte {
         byte: u8,
+    },
+    I2sSample {
+        channel: I2sChannel,
+        sample: Option<i32>,
+        bits: u8,
+    },
+    I2sShortWord {
+        channel: I2sChannel,
+        received: u8,
+        bits: u8,
     },
 }
 
