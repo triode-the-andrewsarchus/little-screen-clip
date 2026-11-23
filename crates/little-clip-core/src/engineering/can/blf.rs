@@ -4,7 +4,9 @@
 //! and MIT/Apache-2.0 ablf crate. The scanner keeps physical container
 //! checkpoints so frame lookups need neither a full replay nor a temp file.
 
-use std::{collections::VecDeque, io::Read, os::unix::fs::FileExt, sync::atomic::AtomicBool};
+use std::{
+    collections::VecDeque, io::Read, ops::Range, os::unix::fs::FileExt, sync::atomic::AtomicBool,
+};
 
 use flate2::read::ZlibDecoder;
 
@@ -70,6 +72,12 @@ impl Object {
     }
 }
 
+struct FramedObject {
+    location: Location,
+    object: Object,
+    bytes: Range<usize>,
+}
+
 struct Segment {
     start: usize,
     end: usize,
@@ -120,36 +128,54 @@ impl<'a> Scanner<'a> {
                 return Err("Vector BLF checkpoint exceeds the container".into());
             }
         }
-        loop {
-            check_cancel(cancel)?;
-            if !self.ensure(BASE, cancel)? {
-                return Ok(None);
-            }
-            while self.inner[self.pos] == 0 {
-                // Byte padding separates some object types inside containers.
-                self.pos += 1;
-                if !self.ensure(BASE, cancel)? {
-                    return Ok(None);
-                }
-            }
-            let object = Object::parse(&self.inner[self.pos..self.pos + BASE])?;
-            if object.size > MAX_OBJECT_BYTES {
-                return Err("Vector BLF object exceeds the read limit".into());
-            }
-            let location = self
-                .location()
-                .ok_or("Missing Vector BLF object location")?;
-            if !self.ensure(object.size, cancel)? {
-                return Ok(None);
-            }
-            let start = self.pos;
-            self.pos += object.size;
-            if object.is_can()
-                && let Some(frame) = parse_frame(object, &self.inner[start..self.pos], bytes)?
+        while let Some(record) = self.next_object(cancel)? {
+            if record.object.is_can()
+                && let Some(frame) = parse_frame(record.object, &self.inner[record.bytes], bytes)?
             {
-                return Ok(Some((location, frame)));
+                return Ok(Some((record.location, frame)));
             }
         }
+        Ok(None)
+    }
+
+    fn next_object(&mut self, cancel: &AtomicBool) -> Result<Option<FramedObject>, String> {
+        check_cancel(cancel)?;
+        if !self.align_to_object(cancel)? {
+            return Ok(None);
+        }
+        let object = Object::parse(&self.inner[self.pos..self.pos + BASE])?;
+        if object.size > MAX_OBJECT_BYTES {
+            return Err("Vector BLF object exceeds the read limit".into());
+        }
+        // Ensuring the full object can compact or load the next container.
+        let location = self
+            .location()
+            .ok_or("Missing Vector BLF object location")?;
+        if !self.ensure(object.size, cancel)? {
+            return Ok(None);
+        }
+        let start = self.pos;
+        self.pos += object.size;
+        Ok(Some(FramedObject {
+            location,
+            object,
+            bytes: start..self.pos,
+        }))
+    }
+
+    fn align_to_object(&mut self, cancel: &AtomicBool) -> Result<bool, String> {
+        // Some objects have zero padding, potentially across container boundaries.
+        while self.ensure(BASE, cancel)? {
+            if self.inner[self.pos] != 0 {
+                return Ok(true);
+            }
+            let remainder = &self.inner[self.pos..];
+            self.pos += remainder
+                .iter()
+                .position(|byte| *byte != 0)
+                .unwrap_or(remainder.len());
+        }
+        Ok(false)
     }
 
     pub(super) fn covered_bytes(&self) -> u64 {

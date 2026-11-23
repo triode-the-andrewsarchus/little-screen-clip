@@ -38,6 +38,37 @@ fn asc_checkpoint_retains_relative_clock_and_pretrigger_time() {
 }
 
 #[test]
+fn asc_fd_reads_named_and_unnamed_frames_and_error_events() {
+    let source = b"date Mon Nov 2 03:22:02 2026
+base hex timestamps absolute
+        0.001 CANFD 1 Rx 201 Engine 1 0 2 2 43 12
+        0.002 CANFD 1 Tx 202 0 1 4 0
+        0.003 CANFD 1 ErrorFrame
+        0.004 CANFD 1 Rx ErrorFrame
+";
+    let capture = Capture::open(recording(source)).unwrap();
+    let cancel = AtomicBool::new(false);
+    let index = capture.index(&cancel).unwrap();
+    let rows = capture.rows(&index, 0..4, &cancel).unwrap();
+
+    assert_eq!(
+        rows[0].kind,
+        FrameKind::Flexible {
+            bitrate_switch: true,
+            error_state: false
+        }
+    );
+    assert_eq!(rows[0].data, [0x43, 0x12]);
+    assert_eq!(rows[1].kind, FrameKind::Remote);
+    assert_eq!(rows[1].dlc, Some(4));
+    assert!(rows[1].data.is_empty());
+    assert_eq!(rows[2].kind, FrameKind::Error);
+    assert_eq!(rows[2].direction, super::Direction::Unknown);
+    assert_eq!(rows[3].kind, FrameKind::Error);
+    assert_eq!(rows[3].direction, super::Direction::Rx);
+}
+
+#[test]
 fn trace_recognition_requires_a_can_signature() {
     let unrelated = b"{\"traceEvents\":[{\"name\":\"blocked\",\"ph\":\"B\"}]}";
     assert_eq!(identify(unrelated), None);
@@ -99,13 +130,18 @@ fn compressed_container(data: &[u8]) -> Vec<u8> {
 
 #[test]
 fn blf_checkpoint_resumes_an_object_split_across_compressed_containers() {
-    let objects: Vec<_> = (0..600).flat_map(classic_blf_row).collect();
-    let cross = 256 * 48 + 15;
+    let mut objects: Vec<_> = (0..256).flat_map(classic_blf_row).collect();
+    let padding_split = objects.len() + 17;
+    objects.extend([0; 32]);
+    let header_split = objects.len() + 15;
+    objects.extend((256..600).flat_map(classic_blf_row));
+    objects.extend([0; 16]);
     let mut bytes = vec![0u8; 144];
     bytes[..4].copy_from_slice(b"LOGG");
     bytes[4..8].copy_from_slice(&144u32.to_le_bytes());
-    bytes.extend(compressed_container(&objects[..cross]));
-    bytes.extend(compressed_container(&objects[cross..]));
+    bytes.extend(compressed_container(&objects[..padding_split]));
+    bytes.extend(compressed_container(&objects[padding_split..header_split]));
+    bytes.extend(compressed_container(&objects[header_split..]));
     let capture = Capture::open(recording(&bytes)).unwrap();
     let cancel = AtomicBool::new(false);
     let preview = capture.preview(&cancel).unwrap();

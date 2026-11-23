@@ -5,6 +5,18 @@ const TABLE_HEADER_BYTES: u64 = 16;
 const CRC_BYTES: u64 = 4;
 const ALIGNMENT: u64 = 8;
 
+pub(super) fn check_header(reader: &Reader) -> Result<(), String> {
+    let header = reader.array::<32>(0)?;
+    if header[27] != 1 || checksum(&header[..28]) != u32_at(&header, 28) {
+        return Err("Unsupported or damaged Joulescope v2 file header".into());
+    }
+    let length = u64_at(&header, 16);
+    if length != 0 && length != reader.len {
+        return Err("Joulescope file does not match its recorded length".into());
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Chunk {
     offset: u64,

@@ -2,17 +2,19 @@
 //!
 //! https://docs.joulescope.com/en/software/jls/h_format.html
 
+mod definitions;
 mod raw;
 #[cfg(test)]
 mod tests;
 
-use std::{collections::BTreeMap, ops::Range, sync::atomic::AtomicBool};
+use std::{ops::Range, sync::atomic::AtomicBool};
 
 use super::{
     Channel, Envelope, MAX_INTEGRAL_SAMPLES, Peak, Reader, check_cancel, new_envelope,
     raw_envelope, raw_sum, u16_at, u32_at, u64_at,
 };
-use raw::{Chunk, Table, checksum};
+use definitions::{OpenedSignals, strings};
+use raw::Table;
 
 const SOURCE_DEF: u8 = 0x01;
 const SIGNAL_DEF: u8 = 0x02;
@@ -23,8 +25,6 @@ const FSR_SUMMARY: u8 = 0x24;
 const UTC_HEAD: u8 = 0x39;
 const UTC_DATA: u8 = 0x3a;
 const LEVELS: usize = 16;
-const MAX_METADATA_CHUNKS: usize = 4096;
-const MAX_METADATA_PAYLOAD: usize = 16384;
 const MAX_DATA_SAMPLES: u64 = 1 << 22;
 const MAX_TABLE_ENTRIES: u64 = 1 << 19;
 const MAX_SUMMARY_BINS: u64 = 32768;
@@ -55,130 +55,11 @@ struct Signal {
 
 impl Recording {
     pub(super) fn open(reader: &Reader) -> Result<Self, String> {
-        let header = reader.array::<32>(0)?;
-        if header[27] != 1 || checksum(&header[..28]) != u32_at(&header, 28) {
-            return Err("Unsupported or damaged Joulescope v2 file header".into());
-        }
-        let length = u64_at(&header, 16);
-        if length != 0 && length != reader.len {
-            return Err("Joulescope file does not match its recorded length".into());
-        }
-
-        // The first definition anchors a linked list of all signal and track
-        // definitions, including definitions added after recording started.
-        let mut offset = 32;
-        let mut source_head = 0;
-        let mut signal_head = 0;
-        for _ in 0..MAX_METADATA_CHUNKS {
-            if offset == reader.len {
-                break;
-            }
-            let chunk = Chunk::read(reader, offset)?;
-            match chunk.tag {
-                SOURCE_DEF if source_head == 0 => source_head = offset,
-                SIGNAL_DEF if signal_head == 0 => signal_head = offset,
-                _ => {}
-            }
-            if source_head != 0 && signal_head != 0 {
-                break;
-            }
-            offset = chunk.end;
-        }
-
-        let mut definitions = BTreeMap::new();
-        let mut heads = BTreeMap::new();
-        let mut utc_heads = BTreeMap::new();
-        walk_definitions(reader, signal_head, |chunk| {
-            match chunk.tag {
-                SIGNAL_DEF if chunk.meta > 0 && chunk.meta < 256 => {
-                    let payload = chunk.payload(reader, MAX_METADATA_PAYLOAD)?;
-                    if let Some(signal) = Signal::definition(chunk.meta, &payload)? {
-                        definitions.entry(chunk.meta).or_insert(signal);
-                    }
-                }
-                FSR_HEAD | UTC_HEAD if chunk.meta > 0 && chunk.meta < 256 => {
-                    let payload = chunk.payload(reader, LEVELS * 8)?;
-                    if payload.len() != LEVELS * 8 {
-                        return Err("Invalid Joulescope track head".into());
-                    }
-                    if chunk.tag == FSR_HEAD {
-                        heads.entry(chunk.meta).or_insert_with(|| {
-                            std::array::from_fn(|index| u64_at(&payload, index * 8))
-                        });
-                    } else {
-                        utc_heads.entry(chunk.meta).or_insert(u64_at(&payload, 0));
-                    }
-                }
-                _ => {}
-            }
-            Ok(())
-        })?;
-
-        let mut sources = BTreeMap::new();
-        walk_definitions(reader, source_head, |chunk| {
-            if chunk.tag != SOURCE_DEF {
-                return Err("Invalid Joulescope source definition".into());
-            }
-            if chunk.meta != 0 && chunk.meta < 256 {
-                let payload = chunk.payload(reader, MAX_METADATA_PAYLOAD)?;
-                let [name, _, model] = strings::<3>(&payload, 64)?;
-                sources
-                    .entry(chunk.meta)
-                    .or_insert(if model.is_empty() { name } else { model });
-            }
-            Ok(())
-        })?;
-
-        let mut signals = Vec::new();
-        let mut first_times = Vec::new();
-        for (id, mut signal) in definitions {
-            let Some(offsets) = heads.remove(&id) else {
-                continue;
-            };
-            if offsets[0] == 0 {
-                continue;
-            }
-            signal.offsets = offsets;
-            signal.utc = utc_heads.remove(&id).unwrap_or(0);
-            signal.find_extent(reader)?;
-            if signal.channel.sample_count > i64::MAX as u64 {
-                return Err("Joulescope waveform exceeds its sample count limit".into());
-            }
-            first_times.push(signal.first_utc(reader));
-            signals.push(signal);
-        }
-        if signals.is_empty() {
-            return Err("Joulescope recording has no supported fixed-rate signal data".into());
-        }
-
-        let mut channels = Vec::with_capacity(signals.len());
-        let origin = first_times.iter().copied().flatten().min_by(f64::total_cmp);
-        for (signal, time) in signals.iter().zip(first_times) {
-            let mut channel = signal.channel.clone();
-            if let (Some(origin), Some(time)) = (origin, time) {
-                channel.start_seconds = time - origin;
-            }
-            if signals
-                .iter()
-                .any(|other| signal.id != other.id && signal.channel.name == other.channel.name)
-                && let Some(source) = sources.get(&signal.source)
-            {
-                channel.name = format!("{source} · {}", channel.name);
-            }
-            channels.push(channel);
-        }
-        let model = match sources.len() {
-            1 => sources
-                .into_values()
-                .find(|value| !value.is_empty())
-                .unwrap_or_else(|| "Joulescope".into()),
-            0 => "Joulescope".into(),
-            count => format!("Joulescope · {count} sources"),
-        };
+        let opened = OpenedSignals::read(reader)?;
         Ok(Self {
-            model,
-            channels,
-            signals,
+            model: opened.model(),
+            channels: opened.channels(reader),
+            signals: opened.signals,
         })
     }
 
@@ -396,17 +277,24 @@ impl Signal {
             self.channel.sample_count = end;
             return Ok(());
         }
-        let mut last = self.data_table(reader, offset)?;
+        let last = self.terminal_data_chunk(reader, offset)?;
+        let start = self.relative(last.sample)?;
+        self.channel.sample_count = start
+            .checked_add(last.count)
+            .ok_or("Joulescope sample count overflow")?;
+        self.end_chunk = Some(last);
+        Ok(())
+    }
+
+    fn terminal_data_chunk(&self, reader: &Reader, offset: u64) -> Result<Table, String> {
+        // The index can omit a final short chunk. Follow only a bounded tail
+        // from the last indexed data chunk, never the capture from its start.
+        let mut chunk = self.data_table(reader, offset)?;
         for _ in 0..MAX_LINKS {
-            if last.chunk.next == 0 {
-                let start = self.relative(last.sample)?;
-                self.channel.sample_count = start
-                    .checked_add(last.count)
-                    .ok_or("Joulescope sample count overflow")?;
-                self.end_chunk = Some(last);
-                return Ok(());
+            if chunk.chunk.next == 0 {
+                return Ok(chunk);
             }
-            last = self.data_table(reader, last.chunk.forward()?)?;
+            chunk = self.data_table(reader, chunk.chunk.forward()?)?;
         }
         Err("Joulescope recording is missing its terminal index".into())
     }
@@ -615,41 +503,6 @@ impl Signal {
         }
         Ok(at.min(range.end))
     }
-}
-
-fn walk_definitions(
-    reader: &Reader,
-    mut offset: u64,
-    mut visit: impl FnMut(Chunk) -> Result<(), String>,
-) -> Result<(), String> {
-    for _ in 0..MAX_METADATA_CHUNKS {
-        if offset == 0 {
-            return Ok(());
-        }
-        let chunk = Chunk::read(reader, offset)?;
-        visit(chunk)?;
-        offset = chunk.forward()?;
-    }
-    Err("Joulescope definition chain exceeds its limit".into())
-}
-
-fn strings<const N: usize>(payload: &[u8], offset: usize) -> Result<[String; N], String> {
-    let mut bytes = payload
-        .get(offset..)
-        .ok_or("Truncated Joulescope definition")?;
-    let mut output = std::array::from_fn(|_| String::new());
-    for name in &mut output {
-        let nul = bytes
-            .iter()
-            .position(|byte| *byte == 0)
-            .ok_or("Unterminated Joulescope label")?;
-        *name = String::from_utf8_lossy(&bytes[..nul]).into_owned();
-        bytes = &bytes[nul + 1..];
-        if bytes.first() == Some(&0x1f) {
-            bytes = &bytes[1..];
-        }
-    }
-    Ok(output)
 }
 
 #[derive(Debug, Clone, Copy)]

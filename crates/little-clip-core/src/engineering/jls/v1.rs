@@ -74,63 +74,88 @@ struct Block {
 }
 
 struct Metadata {
-    footer_offset: u64,
-    first_block: u64,
+    samples: Range<u64>,
     sample_count: u64,
     config: Value,
     calibration: Option<Calibration>,
 }
 
+#[derive(Default)]
+struct MetadataSections {
+    samples: Option<Range<u64>>,
+    sample_count: Option<u64>,
+    config: Option<Value>,
+    calibration: Option<Calibration>,
+}
+
 impl Metadata {
     fn read(reader: &Reader) -> Result<Self, String> {
-        let header = reader.array::<32>(0)?;
-        check_header(&header, reader.len)?;
-        let mut config = None;
-        let mut sample_count = None;
-        let mut first_block = None;
-        let mut calibration = None;
-        let mut footer_offset = 0;
+        check_header(&reader.array::<32>(0)?, reader.len)?;
+
+        let mut sections = MetadataSections::default();
         let mut offset = 32;
         for _ in 0..MAX_HEADER_CHUNKS {
             let chunk = Chunk::read(reader, offset)?;
-            offset = chunk.end;
-            match &chunk.tag {
-                b"END" => break,
-                b"CLS" if first_block.is_none() => {
-                    let end = chunk.collection(reader)?;
-                    first_block = Some(chunk.end);
-                    footer_offset = end.payload - 8;
-                    offset = end.end;
-                }
-                b"SUB" if first_block.is_none() && chunk.len <= 64 * 1024 => {
-                    if let Some(value) = Calibration::parse(&chunk.payload(reader)?)? {
-                        calibration = Some(value);
-                    }
-                }
-                b"MJS" => {
-                    let value: Value = serde_json::from_slice(&chunk.payload(reader)?)
-                        .map_err(|error| format!("Decode legacy Joulescope metadata: {error}"))?;
-                    match value["type"].as_str() {
-                        Some("config") => config = Some(value),
-                        Some("footer") => sample_count = value["size"].as_u64(),
-                        _ => {}
-                    }
-                }
-                _ => {}
+            if chunk.tag == *b"END" {
+                break;
             }
-            if sample_count.is_some() && config.is_some() && first_block.is_some() {
+            offset = sections.read_chunk(reader, chunk)?;
+            if sections.sample_count.is_some()
+                && sections.config.is_some()
+                && sections.samples.is_some()
+            {
                 break;
             }
         }
-        let sample_count = sample_count
+        sections.finish()
+    }
+}
+
+impl MetadataSections {
+    fn read_chunk(&mut self, reader: &Reader, chunk: Chunk) -> Result<u64, String> {
+        match &chunk.tag {
+            b"CLS" if self.samples.is_none() => {
+                // Read the collection's closing tag to skip its entire sample payload.
+                let end = chunk.collection(reader)?;
+                self.samples = Some(chunk.end..end.payload - 8);
+                return Ok(end.end);
+            }
+            b"SUB" if self.samples.is_none() && chunk.len <= 64 * 1024 => {
+                if let Some(calibration) = Calibration::parse(&chunk.payload(reader)?)? {
+                    self.calibration = Some(calibration);
+                }
+            }
+            b"MJS" => self.read_json(reader, chunk)?,
+            _ => {}
+        }
+        Ok(chunk.end)
+    }
+
+    fn read_json(&mut self, reader: &Reader, chunk: Chunk) -> Result<(), String> {
+        let value: Value = serde_json::from_slice(&chunk.payload(reader)?)
+            .map_err(|error| format!("Decode legacy Joulescope metadata: {error}"))?;
+        match value["type"].as_str() {
+            Some("config") => self.config = Some(value),
+            Some("footer") => self.sample_count = value["size"].as_u64(),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Metadata, String> {
+        let sample_count = self
+            .sample_count
             .filter(|count| *count > 0 && *count <= i64::MAX as u64)
             .ok_or("Legacy Joulescope recording has no sample count footer")?;
-        Ok(Self {
-            first_block: first_block.ok_or("Legacy Joulescope recording has no samples")?,
-            footer_offset,
+        Ok(Metadata {
+            samples: self
+                .samples
+                .ok_or("Legacy Joulescope recording has no samples")?,
             sample_count,
-            config: config.ok_or("Legacy Joulescope recording has no configuration")?,
-            calibration,
+            config: self
+                .config
+                .ok_or("Legacy Joulescope recording has no configuration")?,
+            calibration: self.calibration,
         })
     }
 }
@@ -176,7 +201,7 @@ impl Geometry {
             samples_per_tlv,
             samples_per_block,
             samples_per_reduction,
-            footer_offset: meta.footer_offset,
+            footer_offset: meta.samples.end,
             arrays_reduction,
             reduction_fields,
         })
@@ -199,7 +224,7 @@ impl Recording {
             .filter(|interval| interval.is_finite() && *interval > 0.0)
             .ok_or("Invalid legacy Joulescope sample rate")?;
 
-        let first = Block::read(reader, meta.first_block, geometry.footer_offset)?;
+        let first = Block::read(reader, meta.samples.start, geometry.footer_offset)?;
         let first_arrays = match encoding {
             Encoding::Raw => None,
             Encoding::FloatArrays => {

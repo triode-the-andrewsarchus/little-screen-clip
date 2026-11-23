@@ -1,7 +1,7 @@
 use std::{fs::File, os::unix::fs::FileExt, sync::atomic::AtomicBool};
 
 use super::super::{Capture, V2_MAGIC};
-use super::{FSR_DATA, FSR_HEAD, FSR_INDEX, FSR_SUMMARY, SIGNAL_DEF, SOURCE_DEF, checksum};
+use super::{FSR_DATA, FSR_HEAD, FSR_INDEX, FSR_SUMMARY, SIGNAL_DEF, SOURCE_DEF, raw::checksum};
 
 struct Fixture {
     file: File,

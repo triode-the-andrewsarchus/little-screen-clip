@@ -1,3 +1,5 @@
+use std::str::SplitAsciiWhitespace;
+
 use super::{
     super::{Channel, Direction, Frame, FrameKind, Identifier},
     data_bytes, decimal_ns, radix_value,
@@ -95,10 +97,10 @@ impl Asc {
         Some(frame)
     }
 
-    fn fd<'a>(
+    fn fd(
         &self,
         timestamp: i128,
-        mut words: impl Iterator<Item = &'a str>,
+        mut words: SplitAsciiWhitespace<'_>,
         bytes: bool,
     ) -> Option<Frame> {
         let channel = Channel::Number(words.next()?.parse::<u16>().ok()?);
@@ -117,17 +119,37 @@ impl Asc {
             return Some(frame);
         }
         let id = self.identifier(token)?;
-        let flag = words.next()?;
-        let brs = if matches!(flag, "0" | "1") {
-            flag
-        } else {
-            words.next()?
-        };
-        let esi = words.next()?;
-        if !matches!(brs, "0" | "1") || !matches!(esi, "0" | "1") {
-            return None;
-        }
-        let dlc = u16::try_from(radix_value(words.next()?, self.radix)?).ok()?;
+        let header = FdHeader::read(&mut words, self.radix)?;
+        Some(Frame {
+            id: Some(id),
+            direction,
+            dlc: Some(header.dlc),
+            data_len: header.length,
+            data: data_bytes(words, self.radix, header.length, bytes)?,
+            ..Frame::new(timestamp, channel, header.kind)
+        })
+    }
+
+    fn identifier(&self, word: &str) -> Option<Identifier> {
+        let (number, extended) = word
+            .strip_suffix(['x', 'X'])
+            .map_or((word, false), |number| (number, true));
+        Identifier::new(radix_value(number, self.radix)?, extended)
+    }
+}
+
+struct FdHeader {
+    kind: FrameKind,
+    dlc: u16,
+    length: u16,
+}
+
+impl FdHeader {
+    fn read(words: &mut SplitAsciiWhitespace<'_>, radix: u32) -> Option<Self> {
+        // Vector's optional symbolic frame name precedes the BRS flag.
+        let bitrate_switch = fd_flag(words.next()?).or_else(|| fd_flag(words.next()?))?;
+        let error_state = fd_flag(words.next()?)?;
+        let dlc = u16::try_from(radix_value(words.next()?, radix)?).ok()?;
         let length = words.next()?.parse::<u16>().ok()?;
         if length > 64 || dlc > 15 {
             return None;
@@ -136,22 +158,18 @@ impl Asc {
             FrameKind::Remote
         } else {
             FrameKind::Flexible {
-                bitrate_switch: brs == "1",
-                error_state: esi == "1",
+                bitrate_switch,
+                error_state,
             }
         };
-        let mut frame = Frame::new(timestamp, channel, kind);
-        frame.id = Some(id);
-        frame.direction = direction;
-        frame.dlc = Some(dlc);
-        frame.data_len = length;
-        frame.data = data_bytes(words, self.radix, length, bytes)?;
-        Some(frame)
+        Some(Self { kind, dlc, length })
     }
+}
 
-    fn identifier(&self, word: &str) -> Option<Identifier> {
-        let extended = word.ends_with(['x', 'X']);
-        let number = word.strip_suffix(['x', 'X']).unwrap_or(word);
-        Identifier::new(radix_value(number, self.radix)?, extended)
+fn fd_flag(word: &str) -> Option<bool> {
+    match word {
+        "0" => Some(false),
+        "1" => Some(true),
+        _ => None,
     }
 }
