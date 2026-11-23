@@ -20,6 +20,7 @@ impl Digital {
     pub(in crate::file_manager) fn decoder_buttons(&mut self, ui: &mut Ui) {
         if self.panel.decoder_buttons(ui, &self.config.lanes) {
             self.open = true;
+            self.cursor = None;
             for index in self.panel.channels().into_iter().flatten() {
                 if let Some(shown) = self.shown.get_mut(index) {
                     *shown = true;

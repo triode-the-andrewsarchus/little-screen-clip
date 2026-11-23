@@ -344,9 +344,9 @@ impl Panel {
         self.current().map(Decoder::channels)
     }
 
-    pub fn controls(&mut self, ui: &mut Ui, lanes: &[Lane]) {
+    pub fn controls(&mut self, ui: &mut Ui, lanes: &[Lane]) -> bool {
         if self.decoders.is_empty() {
-            return;
+            return false;
         }
         let mut selected = self.selected;
         let mut remove = false;
@@ -370,18 +370,21 @@ impl Panel {
                 remove = ui.button("Remove decoder").clicked();
             }
         });
+        let changed = selected != self.selected || remove;
         self.select_decoder(selected);
         if remove && let Some(index) = self.selected.take() {
             self.decoders.remove(index);
             self.inspection = None;
         }
-        if let Some(decoder) = self.current_mut() {
+        let wiring_changed = self.current_mut().is_some_and(|decoder| {
             let previous = decoder.inputs().ok();
             decoder.controls(ui, lanes);
-            if previous != decoder.inputs().ok() {
-                self.inspection = None;
-            }
+            previous != decoder.inputs().ok()
+        });
+        if wiring_changed {
+            self.inspection = None;
         }
+        changed || wiring_changed
     }
 
     pub(in crate::file_manager) fn select_decoder(&mut self, selected: Option<usize>) {
@@ -421,13 +424,26 @@ impl Panel {
         domain: &Range<f64>,
         step: f64,
     ) -> f64 {
-        match action {
-            EventAction::Select(event) => event.time.start,
-            EventAction::Inspect(event) => {
-                self.inspect(&event, visible, domain, step);
-                event.time.start
-            }
+        let event = match &action {
+            EventAction::Select(event) | EventAction::Inspect(event) => event,
+        };
+        let picked = self.current().and_then(|decoder| {
+            let output = decoder
+                .current(self.decode_window(visible))?
+                .as_ref()
+                .ok()?;
+            output
+                .events
+                .iter()
+                .position(|candidate| candidate == event)
+        });
+        if let Some(decoder) = self.current_mut() {
+            decoder.picked = picked;
         }
+        if matches!(action, EventAction::Inspect(_)) {
+            self.inspect(event, visible, domain, step);
+        }
+        event.time.start
     }
 
     pub fn return_controls(&mut self, ui: &mut Ui, visible: &mut Range<f64>) {
@@ -436,7 +452,7 @@ impl Panel {
         };
         let back = ui.button("Back to decoded window");
         if std::mem::take(&mut inspection.reveal) {
-            back.scroll_to_me(Some(egui::Align::TOP));
+            back.scroll_to_me(None);
         }
         if back.clicked() {
             self.exit_inspection(visible);
@@ -867,7 +883,6 @@ impl Decoder {
         // Move the scroll-follow state out while the decoded result is borrowed.
         let mut followed = self.follow;
         let mut show_samples = self.settings.show_samples;
-        let mut clicked = None;
         let mut destination = None;
         match self.current(span) {
             Some(Ok(output)) => {
@@ -893,7 +908,7 @@ impl Decoder {
                 };
                 let cursor = picked.map(|index| events[index].time.start).or(cursor);
                 let selected = picked.or(selected);
-                clicked = event_list(
+                let clicked = event_list(
                     ui,
                     ("logic-protocol-rows", "Decoded event"),
                     cursor,
@@ -919,9 +934,6 @@ impl Decoder {
             None => {
                 ui.weak("Decoding the visible window…");
             }
-        }
-        if let Some(index) = clicked {
-            self.picked = Some(index);
         }
         self.follow = followed;
         self.settings.show_samples = show_samples;
@@ -1221,7 +1233,6 @@ mod tests {
         };
         let mut decoder = Decoder::new(Mode::I2c, &[]);
         decoder.settings.data = 1;
-        decoder.picked = Some(0);
         decoder.request = Some(Key {
             span: original.clone(),
             inputs: decoder.inputs().unwrap(),
@@ -1239,15 +1250,17 @@ mod tests {
         };
 
         let mut visible = original.clone();
-        panel.inspect(&event, &mut visible, &original, 1e-6);
+        let cursor = panel.follow_event(
+            EventAction::Inspect(event.clone()),
+            &mut visible,
+            &original,
+            1e-6,
+        );
         assert!(visible.start < event.time.start && visible.end > event.time.end);
         assert!(visible.end - visible.start < 0.001);
         assert_eq!(panel.events(&visible).len(), 2);
         assert_eq!(
-            panel
-                .cursor_event(&visible, Some(event.time.start))
-                .unwrap()
-                .kind,
+            panel.cursor_event(&visible, Some(cursor)).unwrap().kind,
             event.kind
         );
         panel.exit_inspection(&mut visible);

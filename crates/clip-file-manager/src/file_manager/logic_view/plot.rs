@@ -1,10 +1,25 @@
-use crate::file_manager::scope_view::plot::{lane, x_at};
+use crate::file_manager::scope_view::plot::{highlight, lane, x_at};
 use egui::{Color32, Mesh, Painter, Rect, Stroke, pos2};
 use little_clip_core::engineering::{
     logic::{Envelope, Level, Trace},
     logic_preview::Overview,
 };
 use std::ops::Range;
+
+pub(in crate::file_manager) fn highlight_event(
+    painter: &Painter,
+    rect: Rect,
+    span: &Range<f64>,
+    time: Range<f64>,
+) {
+    highlight(
+        painter,
+        rect,
+        span,
+        time,
+        Color32::from_rgba_unmultiplied(241, 189, 76, 75),
+    );
+}
 
 pub(super) fn draw_overview(painter: &Painter, rect: Rect, overview: &Overview, color: Color32) {
     let count = overview.lanes_previewed.len();

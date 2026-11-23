@@ -533,6 +533,8 @@ impl Viewer {
             .or(link.and_then(|link| link.probe))
             .or_else(|| self.digital.cursor());
         let (channels, fft_change) = self.draw_channels(ui, &painter, rect, ink);
+        self.digital
+            .highlight_analog_inputs(&clipped, &self.span, &channels, self.stacked);
         self.draw_math(ui, &painter, &clipped, rect);
         self.draw_filters(ui, &painter, &clipped, rect);
         let clock = Link::clock(link);

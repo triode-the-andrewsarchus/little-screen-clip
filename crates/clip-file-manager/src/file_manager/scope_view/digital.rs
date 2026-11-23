@@ -4,7 +4,7 @@ pub(in crate::file_manager) use controls::Settings;
 
 pub(in crate::file_manager) use input::ThresholdInput;
 
-use super::{JOBS, Task, plot, timeline};
+use super::{JOBS, PlottedChannel, Task, display_value, plot, timeline};
 use crate::file_manager::{
     logic_view::{
         plot as logic_plot,
@@ -18,6 +18,7 @@ use input::Configuration;
 use little_clip_core::engineering::{
     analysis::Clock,
     logic::{Level, Trace},
+    logic_decode::Event,
     waveforms::Recording,
 };
 use std::{ops::Range, sync::Arc, time::Duration};
@@ -75,6 +76,34 @@ impl Digital {
         self.panel.suspend_all();
     }
 
+    fn event(&self, span: &Range<f64>) -> Option<&Event> {
+        self.panel.cursor_event(span, Some(self.cursor()?))
+    }
+
+    fn event_inputs(&self, span: &Range<f64>) -> Option<(Range<f64>, Vec<usize>)> {
+        let event = self.event(span)?;
+        Some((event.time.clone(), self.panel.channels()?))
+    }
+
+    pub(super) fn highlight_analog_inputs(
+        &self,
+        painter: &egui::Painter,
+        span: &Range<f64>,
+        channels: &[PlottedChannel],
+        stacked: bool,
+    ) {
+        if let Some((time, inputs)) = self.event_inputs(span) {
+            let limit = if stacked { channels.len() } else { 1 };
+            for channel in channels
+                .iter()
+                .filter(|lane| inputs.contains(&lane.index))
+                .take(limit)
+            {
+                logic_plot::highlight_event(painter, channel.plot, span, time.clone());
+            }
+        }
+    }
+
     pub(super) fn content(
         &mut self,
         ui: &mut Ui,
@@ -87,11 +116,26 @@ impl Digital {
             self.suspend();
             return;
         }
-        self.panel.controls(ui, &self.config.lanes);
+        if self.panel.controls(ui, &self.config.lanes) {
+            self.cursor = None;
+        }
         self.panel.return_controls(ui, span);
         let input = self.input(recording.clone());
         self.panel
             .update_all_materialized(ui.ctx(), span, input.revision(), input.clone());
+        if let Some(event) = self.event(span) {
+            let time = clock.workspace_range(&event.time);
+            let duration = (event.time.end - event.time.start) * clock.scale();
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(event_label(event.kind));
+                ui.monospace(format!(
+                    "{} – {}",
+                    display_value(time.start, "s"),
+                    display_value(time.end, "s"),
+                ));
+                ui.weak(format!("Duration {}", display_value(duration, "s")));
+            });
+        }
         self.update_preview(ui, span, input);
         self.lanes(ui, recording, span, domain, clock);
         if let Some((index, action)) = self.annotations(ui, span) {
@@ -177,11 +221,15 @@ impl Digital {
     ) {
         let mut next_span = None;
         let mut wired = None;
+        let event = self.event_inputs(span);
         for index in 0..self.config.lanes.len() {
             let result = ui
                 .push_id(("scope-digital", index), |ui| {
                     self.lane_tools(ui, recording, index);
-                    self.shown[index].then(|| self.lane_plot(ui, index, span, clock))
+                    let time = event.as_ref().and_then(|(time, inputs)| {
+                        (self.cursor.is_some() && inputs.contains(&index)).then_some(time)
+                    });
+                    self.shown[index].then(|| self.lane_plot(ui, index, span, clock, time))
                 })
                 .inner;
             if let Some((next, pick)) = result {
@@ -202,6 +250,7 @@ impl Digital {
         }
         if let Some(index) = wired {
             self.panel.wire_lane(index);
+            self.cursor = None;
             ui.ctx().request_repaint();
         }
         if let Some(next) = next_span {
@@ -222,6 +271,7 @@ impl Digital {
         index: usize,
         span: &Range<f64>,
         clock: Clock,
+        event: Option<&Range<f64>>,
     ) -> (Option<Range<f64>>, bool) {
         let (area, rect, response) = row(ui, ("threshold", index));
         if !ui.is_rect_visible(area) {
@@ -230,6 +280,9 @@ impl Digital {
         let lane = &self.config.lanes[index];
         let ink = plot::color(index);
         let painter = ui.painter_at(area);
+        if let Some(time) = event {
+            logic_plot::highlight_event(&painter, rect, span, time.clone());
+        }
         let pick = if self.panel.wiring_active() {
             logic_plot::wire_label(ui, &painter, rect, &lane.name, index)
         } else {

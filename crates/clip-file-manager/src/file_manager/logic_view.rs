@@ -468,13 +468,7 @@ impl Viewer {
         if let Some(event) = event
             && !event.time.is_empty()
         {
-            timing::highlight(
-                &clipped,
-                rect,
-                &self.span,
-                event.time.clone(),
-                Color32::from_rgba_unmultiplied(241, 189, 76, 75),
-            );
+            plot::highlight_event(&clipped, rect, &self.span, event.time.clone());
         }
         if let Some(cursor) = self.cursor {
             let x = timing::x_at(rect, &self.span, cursor);
