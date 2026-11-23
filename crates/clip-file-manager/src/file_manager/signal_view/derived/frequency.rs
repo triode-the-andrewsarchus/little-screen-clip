@@ -72,24 +72,7 @@ impl Frequency {
         let index = self.lane?;
         let lane = frame.lanes.get(index)?;
         let rate = frame.step.recip();
-        ui.horizontal_wrapped(|ui| {
-            ui.strong(format!("{} spectrum", lane.name()));
-            choose_region(ui, &mut self.spectra.region);
-            choose_window(ui, &mut self.window);
-            if ui
-                .button(if self.linear { "Linear" } else { "dB" })
-                .clicked()
-            {
-                self.linear = !self.linear;
-            }
-            if ui.button("Fit frequencies").clicked() {
-                self.span = None;
-            }
-        });
-        let interval = self.spectra.region.interval(selected, visible);
-        if matches!(lane, Lane::Analog { .. }) {
-            self.filter_controls(ui, index, rate, &interval);
-        }
+        let interval = self.measurement_controls(ui, lane, index, rate, selected, visible);
         let input = if self.filtered_spectrum {
             self.filters
                 .lanes()
@@ -158,6 +141,36 @@ impl Frequency {
             self.spectra.only = false;
         }
         target
+    }
+
+    fn measurement_controls(
+        &mut self,
+        ui: &mut Ui,
+        lane: &Lane,
+        index: usize,
+        rate: f64,
+        selected: Option<Range<f64>>,
+        visible: &Range<f64>,
+    ) -> Option<Range<f64>> {
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(format!("{} spectrum", lane.name()));
+            choose_region(ui, &mut self.spectra.region);
+            choose_window(ui, &mut self.window);
+            if ui
+                .button(if self.linear { "Linear" } else { "dB" })
+                .clicked()
+            {
+                self.linear = !self.linear;
+            }
+            if ui.button("Fit frequencies").clicked() {
+                self.span = None;
+            }
+        });
+        let interval = self.spectra.region.interval(selected, visible);
+        if matches!(lane, Lane::Analog { .. }) {
+            self.filter_controls(ui, index, rate, &interval);
+        }
+        interval
     }
 
     fn filter_controls(
