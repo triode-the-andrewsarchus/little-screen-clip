@@ -8,13 +8,16 @@ pub(super) struct ThresholdDraft {
 }
 
 impl Digital {
-    pub(in crate::file_manager) fn tools(&mut self, ui: &mut Ui) {
+    pub(in crate::file_manager) fn toggle_lanes(&mut self, ui: &mut Ui) {
         if ui
             .add(egui::Button::new("Digital lanes").selected(self.open))
             .clicked()
         {
             self.open = !self.open;
         }
+    }
+
+    pub(in crate::file_manager) fn decoder_buttons(&mut self, ui: &mut Ui) {
         if self.panel.decoder_buttons(ui, &self.config.lanes) {
             self.open = true;
             for index in self.panel.channels().into_iter().flatten() {

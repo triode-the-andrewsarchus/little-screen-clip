@@ -286,8 +286,12 @@ impl Viewer {
         let interaction = if show_time {
             let clock = Link::clock(link);
             let domain = link.map_or_else(|| self.domain.clone(), |link| link.domain.clone());
-            self.digital
-                .content(ui, &self.recording, &mut self.span, &domain, clock);
+            ui.scope(|ui| {
+                ui.spacing_mut().interact_size.y = 24.0;
+                ui.spacing_mut().button_padding.y = 2.0;
+                self.digital
+                    .content(ui, &self.recording, &mut self.span, &domain, clock);
+            });
             let available = ui.available_height();
             let content = (available - 92.0).max(100.0);
             let height = if showing_spectrum {
@@ -344,6 +348,7 @@ impl Viewer {
 
     fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) -> bool {
         let mut spectrum_opened = false;
+        let mut decoder_row = false;
         ui.horizontal_wrapped(|ui| {
             ui.strong(&self.overview.model);
             ui.weak(display_value(self.overview.duration_seconds(), "s"));
@@ -379,8 +384,15 @@ impl Viewer {
                 self.stacked = !self.stacked;
             }
             self.copy_selection(ui, copies);
-            self.digital.tools(ui);
+            self.digital.toggle_lanes(ui);
+            decoder_row = ui.available_width() < 390.0;
+            if !decoder_row {
+                self.digital.decoder_buttons(ui);
+            }
         });
+        if decoder_row {
+            self.digital.decoder_buttons(ui);
+        }
         self.channel_controls(ui);
         if self.filters.any() {
             ui.horizontal_wrapped(|ui| self.filters.visibility_controls(ui));
