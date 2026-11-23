@@ -1,5 +1,8 @@
 use crate::file_source::{FileSource, ReadCheck};
-use little_clip_core::engineering::touchstone::{self, Index, Point, Reader, Summary, TracePoint};
+use little_clip_core::engineering::touchstone::{
+    self, BandFinder, BandSearch, Index, Point, Reader, Summary, ThresholdDirection, TracePoint,
+    magnitude_db,
+};
 use std::{
     fmt::Write,
     fs::File,
@@ -11,6 +14,13 @@ use std::{
 
 pub(super) type Trace = [usize; 2];
 pub(super) type Band = [f64; 2];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Cutoff {
+    Above(f64),
+    Below(f64),
+    PeakDrop(f64),
+}
 
 const MAX_MATRIX_VALUES: usize = 512 * 1024;
 const MAX_DETAIL: usize = 4096;
@@ -84,16 +94,13 @@ impl Capture {
         cancel: &AtomicBool,
     ) -> Result<Vec<TracePoint>, String> {
         self.read(cancel, |reader| {
-            let first = reader.nearest(index, band[0], cancel)?.index;
-            let last = reader.nearest(index, band[1], cancel)?.index;
-            let start = first.saturating_sub(1);
-            let end = last.saturating_add(2).min(index.points());
+            let rows = rows_for_band(reader, index, Some(band), 1, cancel)?;
             let ports = reader.metadata().ports;
             let limit = MAX_DETAIL.min(MAX_MATRIX_VALUES / (ports * ports)) as u64;
-            if end.saturating_sub(start) > limit {
+            if rows.end - rows.start > limit {
                 return Ok(Vec::new());
             }
-            let points = reader.read_window(index, start..end, cancel)?;
+            let points = reader.read_window(index, rows, cancel)?;
             Ok(trace_points(&points, trace))
         })
     }
@@ -107,15 +114,7 @@ impl Capture {
         cancel: &AtomicBool,
     ) -> Result<Vec<TracePoint>, String> {
         self.read(cancel, |reader| {
-            let first = reader.nearest(index, band[0], cancel)?.index;
-            let last = reader.nearest(index, band[1], cancel)?.index;
-            let padding = neighbors as u64;
-            let start = first.min(last).saturating_sub(padding);
-            let end = first
-                .max(last)
-                .saturating_add(padding + 1)
-                .min(index.points());
-            let range = start..end;
+            let range = rows_for_band(reader, index, Some(band), neighbors as u64, cancel)?;
             if range.end - range.start > MAX_COPY {
                 return Err(touchstone::Error::Limit(
                     "zoom to a band with at most 16,384 points",
@@ -126,6 +125,50 @@ impl Capture {
                 output.push(point)
             })?;
             Ok(output)
+        })
+    }
+
+    pub fn search_bands(
+        &self,
+        index: &Index,
+        band: Option<Band>,
+        trace: Trace,
+        cutoff: Cutoff,
+        cancel: &AtomicBool,
+    ) -> Result<BandSearch, String> {
+        self.read(cancel, |reader| {
+            let rows = rows_for_band(reader, index, band, 0, cancel)?;
+            let includes = |point: TracePoint| {
+                band.is_none_or(|[first, last]| (first..=last).contains(&point.frequency_hz))
+            };
+            let (threshold, direction) = match cutoff {
+                Cutoff::Above(db) => (db, ThresholdDirection::AtLeast),
+                Cutoff::Below(db) => (db, ThresholdDirection::AtMost),
+                Cutoff::PeakDrop(amount) => {
+                    let mut peak = f64::NEG_INFINITY;
+                    if band.is_none() && index.trace() == trace {
+                        for bucket in index.overview() {
+                            peak = peak.max(magnitude_db(bucket.maximum.value));
+                        }
+                    } else {
+                        trace_window(reader, index, rows.clone(), trace, cancel, |point| {
+                            if includes(point) {
+                                peak = peak.max(magnitude_db(point.value));
+                            }
+                        })?;
+                    }
+                    (peak - amount, ThresholdDirection::AtLeast)
+                }
+            };
+            let mut finder = BandFinder::new(threshold, direction).ok_or(
+                touchstone::Error::Invalid("no finite cutoff for this search range"),
+            )?;
+            trace_window(reader, index, rows, trace, cancel, |point| {
+                if includes(point) {
+                    finder.push(point);
+                }
+            })?;
+            Ok(finder.finish())
         })
     }
 
@@ -160,6 +203,23 @@ impl Capture {
         little_clip_core::copy_text_to_system_clipboard(&csv).map_err(as_string)?;
         Ok(format!("Copied {count} frequency records"))
     }
+}
+
+fn rows_for_band(
+    reader: &mut Reader<BufReader<&File>>,
+    index: &Index,
+    band: Option<Band>,
+    neighbors: u64,
+    cancel: &AtomicBool,
+) -> Result<Range<u64>, touchstone::Error> {
+    let Some([lo, hi]) = band else {
+        return Ok(0..index.points());
+    };
+    let a = reader.nearest(index, lo, cancel)?.index;
+    let b = reader.nearest(index, hi, cancel)?.index;
+    let first = a.min(b).saturating_sub(neighbors);
+    let last = a.max(b).saturating_add(neighbors).saturating_add(1);
+    Ok(first..last.min(index.points()))
 }
 
 fn trace_window(

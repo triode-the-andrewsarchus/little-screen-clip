@@ -68,9 +68,7 @@ impl Projection {
     }
 }
 
-pub(super) fn decibels(value: Complex64) -> f64 {
-    20.0 * value.norm().log10()
-}
+pub(super) use little_clip_core::engineering::touchstone::magnitude_db as decibels;
 
 pub(super) fn domain(points: &[TracePoint]) -> Band {
     let first = points.first().map_or(0.0, |point| point.frequency_hz);
@@ -156,7 +154,7 @@ pub(super) fn trace(
     projection: Projection,
     color: Color32,
     labels: bool,
-) {
+) -> Band {
     let data = visible(data, band, true);
     let values = projection.limit(visible(data, band, false));
     let inside = painter.with_clip_rect(rect);
@@ -164,6 +162,7 @@ pub(super) fn trace(
         scale(painter, rect, values, projection);
     }
     paint_trace(&inside, rect, band, data, values, projection, color);
+    values
 }
 
 pub(super) fn compare_traces(

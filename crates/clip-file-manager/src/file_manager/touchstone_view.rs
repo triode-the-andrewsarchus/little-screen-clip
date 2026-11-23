@@ -1,5 +1,6 @@
 //! Plots and exact source inspection for offline Touchstone sweeps.
 
+mod bandwidth;
 mod capture;
 mod group_delay;
 mod markers;
@@ -38,6 +39,7 @@ enum Panel {
     Matrix,
     Impulse,
     Delay,
+    Bands,
 }
 
 pub(super) struct Viewer {
@@ -61,6 +63,7 @@ pub(super) struct Viewer {
     panel: Panel,
     time_domain: time_domain::TimeDomain,
     group_delay: group_delay::DelayView,
+    bandwidth: bandwidth::View,
     error: Option<String>,
 }
 
@@ -96,6 +99,7 @@ impl Viewer {
             panel: Panel::None,
             time_domain: time_domain::TimeDomain::default(),
             group_delay: group_delay::DelayView::default(),
+            bandwidth: bandwidth::View::default(),
             error: None,
         })
     }
@@ -134,7 +138,7 @@ impl Viewer {
         self.status(ui);
         self.draw_marker_tools(ui, copies, colors);
         let height = match self.panel {
-            Panel::Impulse | Panel::Delay => ui.available_height() * 0.41,
+            Panel::Impulse | Panel::Delay | Panel::Bands => ui.available_height() * 0.41,
             Panel::Matrix => ui.available_height() - 284.0,
             Panel::None => ui.available_height() - 52.0,
         };
@@ -152,6 +156,7 @@ impl Viewer {
         let mut trace = self.trace;
         let ports = meta.ports;
         let s_parameters = meta.parameter == Parameter::S;
+        let previous_panel = self.panel;
         let mut fit = false;
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("{}-port", ports));
@@ -190,12 +195,18 @@ impl Viewer {
             choose_panel(ui, &mut self.panel, s_parameters);
         });
         self.select_trace(trace);
+        if self.panel == Panel::Bands && previous_panel != Panel::Bands {
+            self.projection = Projection::Decibels;
+        }
         if fit {
             self.set_viewport(self.full);
         }
     }
 
     fn draw_panel(&mut self, ui: &mut Ui, copies: &mut Copies, colors: WorkbenchColors) {
+        if self.panel != Panel::Bands {
+            self.bandwidth.suspend();
+        }
         if self.panel != Panel::Delay {
             self.group_delay.suspend();
         }
@@ -218,6 +229,10 @@ impl Viewer {
             self.draw_group_delay(ui, copies, colors);
             return;
         }
+        if self.panel == Panel::Bands {
+            self.draw_bandwidth(ui);
+            return;
+        }
         let rows = self.row_count();
         if self.panel == Panel::Matrix
             && let Some(trace) = self
@@ -225,6 +240,20 @@ impl Viewer {
                 .inspect(ui, &self.summary.metadata, rows, self.trace)
         {
             self.select_trace(trace);
+        }
+    }
+
+    fn draw_bandwidth(&mut self, ui: &mut Ui) {
+        let index = self.matching_index().map(|indexed| indexed.index.clone());
+        let inputs = bandwidth::Inputs {
+            trace: self.trace,
+            viewport: self.viewport,
+            markers: self.markers.band(self.draft),
+            capture: &self.capture,
+            index: index.as_ref(),
+        };
+        if let Some(band) = self.bandwidth.content(ui, inputs) {
+            self.set_viewport(band);
         }
     }
 
@@ -262,6 +291,7 @@ impl Viewer {
         }
         self.trace = trace;
         self.time_domain.invalidate();
+        self.bandwidth.invalidate_trace();
         self.prefix = capture::trace_points(&self.summary.points, trace);
         if matches!(self.projection, Projection::Smith | Projection::Vswr) && trace[0] != trace[1] {
             self.projection = Projection::Decibels;
@@ -330,6 +360,14 @@ impl Viewer {
         self.navigate(ui, rect, response);
         self.place_markers(ui, rect, response);
         plot::axes(painter, rect, self.viewport, colors.text_muted);
+        if self.panel == Panel::Bands {
+            let at = response
+                .hover_pos()
+                .map(|point| plot::hz_at(rect, self.viewport, point.x));
+            self.bandwidth.observe_frequency(self.trace, at);
+            self.bandwidth
+                .paint_bands(painter, rect, self.viewport, self.trace, colors);
+        }
         if let Some(band) = self.markers.band(self.draft) {
             plot::highlight(painter, rect, self.viewport, band, colors.accent);
         }
@@ -343,7 +381,7 @@ impl Viewer {
                 [colors.accent, time_domain::GATE_COLOR],
             );
         } else {
-            plot::trace(
+            let values = plot::trace(
                 painter,
                 rect,
                 self.viewport,
@@ -352,6 +390,10 @@ impl Viewer {
                 colors.accent,
                 true,
             );
+            if self.panel == Panel::Bands && self.projection == Projection::Decibels {
+                self.bandwidth
+                    .cutoff_line(ui, painter, rect, values, self.trace, colors.warning);
+            }
         }
         self.draw_frequency_markers(painter, rect, colors);
     }
@@ -675,6 +717,7 @@ impl Viewer {
             || self.markers.pending()
             || self.time_domain.pending()
             || self.group_delay.pending()
+            || self.bandwidth.pending()
     }
 }
 
@@ -682,9 +725,10 @@ fn choose_panel(ui: &mut Ui, panel: &mut Panel, s_parameters: bool) {
     for (option, label) in [
         (Panel::Impulse, "Impulse response"),
         (Panel::Delay, "Group delay"),
+        (Panel::Bands, "Find bands"),
         (Panel::Matrix, "Matrix"),
     ] {
-        if matches!(option, Panel::Impulse | Panel::Delay) && !s_parameters {
+        if matches!(option, Panel::Impulse | Panel::Delay | Panel::Bands) && !s_parameters {
             continue;
         }
         let open = *panel == option;

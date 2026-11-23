@@ -1,11 +1,15 @@
 //! Incremental Touchstone network-parameter decoding for guarded capture previews.
 
+mod bandwidth;
 mod group_delay;
 mod header;
 mod index;
 mod stream;
 mod time_domain;
 
+pub use bandwidth::{
+    BandEdge, BandFinder, BandSearch, ThresholdBand, ThresholdDirection, magnitude_db,
+};
 pub use group_delay::{GroupDelayPoint, group_delay};
 pub use index::{Envelope, Index, Summary, TracePoint, summary};
 pub use realfft::num_complex::Complex64;
