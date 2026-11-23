@@ -208,7 +208,7 @@ fn display_peaks(values: &[f32], stride: usize, db: bool) -> (Vec<f32>, Peak) {
     (peaks, bounds)
 }
 
-fn amplitude_ticks(
+pub(in crate::file_manager) fn amplitude_ticks(
     painter: &egui::Painter,
     rect: egui::Rect,
     bounds: Peak,

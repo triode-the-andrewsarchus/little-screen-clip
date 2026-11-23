@@ -17,7 +17,7 @@ pub enum SpectrumWindow {
 }
 
 impl SpectrumWindow {
-    fn weight(self, index: usize, len: usize) -> f64 {
+    pub(crate) fn weight(self, index: usize, len: usize) -> f64 {
         let phase = TAU * index as f64 / len as f64;
         match self {
             Self::Hann => 0.5 - 0.5 * phase.cos(),

@@ -3,10 +3,12 @@
 mod header;
 mod index;
 mod stream;
+mod time_domain;
 
 pub use index::{Envelope, Index, Summary, TracePoint, summary};
 pub use realfft::num_complex::Complex64;
 pub use stream::Reader;
+pub use time_domain::ImpulseResponse;
 
 use std::{io, path::Path};
 use thiserror::Error;

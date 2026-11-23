@@ -163,6 +163,52 @@ pub(super) fn trace(
     if labels {
         scale(painter, rect, values, projection);
     }
+    paint_trace(&inside, rect, band, data, values, projection, color);
+}
+
+pub(super) fn compare_traces(
+    painter: &Painter,
+    rect: Rect,
+    band: Band,
+    [recorded, gated]: [&[TracePoint]; 2],
+    projection: Projection,
+    [recorded_color, gated_color]: [Color32; 2],
+) {
+    let primary = visible(recorded, band, false);
+    let comparison = visible(gated, band, false);
+    let base = projection.limit(primary);
+    let values = match (primary.is_empty(), comparison.is_empty()) {
+        (_, true) => base,
+        (true, false) => projection.limit(comparison),
+        (false, false) => {
+            let limits = projection.limit(comparison);
+            [base[0].min(limits[0]), base[1].max(limits[1])]
+        }
+    };
+    scale(painter, rect, values, projection);
+    let inside = painter.with_clip_rect(rect);
+    for (data, color) in [(recorded, recorded_color), (gated, gated_color)] {
+        paint_trace(
+            &inside,
+            rect,
+            band,
+            visible(data, band, true),
+            values,
+            projection,
+            color,
+        );
+    }
+}
+
+fn paint_trace(
+    inside: &Painter,
+    rect: Rect,
+    band: Band,
+    data: &[TracePoint],
+    values: Band,
+    projection: Projection,
+    color: Color32,
+) {
     let mut segment = Vec::with_capacity(data.len());
     let mut previous: Option<f64> = None;
     for point in data {
@@ -171,7 +217,7 @@ pub(super) fn trace(
             || (projection == Projection::Phase
                 && previous.is_some_and(|previous| (value - previous).abs() > 180.0))
         {
-            draw_line(&inside, std::mem::take(&mut segment), color);
+            draw_line(inside, std::mem::take(&mut segment), color);
         }
         if value.is_finite() {
             let height = fraction(values, value).clamp(-10.0, 11.0);
@@ -184,7 +230,7 @@ pub(super) fn trace(
             previous = None;
         }
     }
-    draw_line(&inside, segment, color);
+    draw_line(inside, segment, color);
 }
 
 fn scale(painter: &Painter, rect: Rect, values: Band, projection: Projection) {
@@ -327,6 +373,10 @@ impl Smith {
             });
             painter.add(Shape::line(arc.collect(), grid));
         }
+        self.trace(painter, data, color);
+    }
+
+    pub fn trace(&self, painter: &Painter, data: &[TracePoint], color: Color32) {
         let points = data.iter().map(|point| self.screen(point.value)).collect();
         draw_line(painter, points, color);
     }

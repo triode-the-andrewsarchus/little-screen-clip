@@ -4,6 +4,7 @@ mod capture;
 mod markers;
 mod plot;
 pub(super) mod strip;
+mod time_domain;
 
 use super::{preview_copy::Copies, preview_job::Task};
 use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
@@ -30,6 +31,13 @@ struct Indexed {
     points: Vec<TracePoint>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Panel {
+    None,
+    Matrix,
+    Impulse,
+}
+
 pub(super) struct Viewer {
     capture: Arc<Capture>,
     summary: Summary,
@@ -48,7 +56,8 @@ pub(super) struct Viewer {
     detail_at: f64,
     markers: Markers,
     draft: Option<(usize, f64)>,
-    inspect: bool,
+    panel: Panel,
+    time_domain: time_domain::TimeDomain,
     error: Option<String>,
 }
 
@@ -81,7 +90,8 @@ impl Viewer {
             detail_at: 0.0,
             markers: Markers::default(),
             draft: None,
-            inspect: false,
+            panel: Panel::None,
+            time_domain: time_domain::TimeDomain::default(),
             error: None,
         })
     }
@@ -119,18 +129,14 @@ impl Viewer {
         self.toolbar(ui);
         self.status(ui);
         self.draw_marker_tools(ui, copies, colors);
-        let details = if self.inspect { 232.0 } else { 0.0 };
-        let height = (ui.available_height() - 52.0 - details).max(96.0);
-        self.graph(ui, height, colors);
+        let height = match self.panel {
+            Panel::Impulse => ui.available_height() * 0.41,
+            Panel::Matrix => ui.available_height() - 284.0,
+            Panel::None => ui.available_height() - 52.0,
+        };
+        self.graph(ui, height.max(96.0), colors);
         self.overview(ui, colors);
-        let rows = self.row_count();
-        if self.inspect
-            && let Some(trace) = self
-                .markers
-                .inspect(ui, &self.summary.metadata, rows, self.trace)
-        {
-            self.select_trace(trace);
-        }
+        self.draw_panel(ui, copies, colors);
         self.request(ui.ctx(), ui.input(|input| input.time));
         if self.pending() {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
@@ -177,7 +183,7 @@ impl Viewer {
                 ui.selectable_value(&mut self.projection, Projection::Vswr, "VSWR");
             }
             fit = ui.button("Fit").clicked();
-            ui.toggle_value(&mut self.inspect, "Matrix");
+            choose_panel(ui, &mut self.panel, s_parameters);
         });
         self.select_trace(trace);
         if fit {
@@ -185,11 +191,44 @@ impl Viewer {
         }
     }
 
+    fn draw_panel(&mut self, ui: &mut Ui, copies: &mut Copies, colors: WorkbenchColors) {
+        if self.panel == Panel::Impulse {
+            let index = self.matching_index().map(|indexed| indexed.index.clone());
+            self.time_domain.content(
+                ui,
+                self.trace,
+                self.viewport,
+                self.full,
+                &self.capture,
+                index.as_ref(),
+                colors,
+                copies,
+            );
+            return;
+        }
+        self.time_domain.suspend();
+        let rows = self.row_count();
+        if self.panel == Panel::Matrix
+            && let Some(trace) = self
+                .markers
+                .inspect(ui, &self.summary.metadata, rows, self.trace)
+        {
+            self.select_trace(trace);
+        }
+    }
+
+    fn gated_trace(&self) -> Option<&[TracePoint]> {
+        (self.panel == Panel::Impulse)
+            .then(|| self.time_domain.gated())
+            .flatten()
+    }
+
     fn select_trace(&mut self, trace: Trace) {
         if trace == self.trace {
             return;
         }
         self.trace = trace;
+        self.time_domain.invalidate();
         self.prefix = capture::trace_points(&self.summary.points, trace);
         if matches!(self.projection, Projection::Smith | Projection::Vswr) && trace[0] != trace[1] {
             self.projection = Projection::Decibels;
@@ -261,15 +300,26 @@ impl Viewer {
         if let Some(band) = self.markers.band(self.draft) {
             plot::highlight(painter, rect, self.viewport, band, colors.accent);
         }
-        plot::trace(
-            painter,
-            rect,
-            self.viewport,
-            self.current_trace(),
-            self.projection,
-            colors.accent,
-            true,
-        );
+        if let Some(gated) = self.gated_trace() {
+            plot::compare_traces(
+                painter,
+                rect,
+                self.viewport,
+                [self.current_trace(), gated],
+                self.projection,
+                [colors.accent, time_domain::GATE_COLOR],
+            );
+        } else {
+            plot::trace(
+                painter,
+                rect,
+                self.viewport,
+                self.current_trace(),
+                self.projection,
+                colors.accent,
+                true,
+            );
+        }
         for (index, hz) in self.markers.positions(self.draft) {
             plot::marker(
                 painter,
@@ -297,6 +347,13 @@ impl Viewer {
             .and_then(|pos| smith.nearest(pos, data));
         let clipped = painter.with_clip_rect(rect);
         smith.paint(&clipped, data, colors.accent, colors.text_muted);
+        if let Some(gated) = self.gated_trace() {
+            smith.trace(
+                &clipped,
+                plot::visible(gated, self.viewport, false),
+                time_domain::GATE_COLOR,
+            );
+        }
         if let Some(point) = picked {
             smith.mark(&clipped, point.value, "", colors.text_secondary);
             if response.clicked_by(PointerButton::Primary) {
@@ -421,7 +478,9 @@ impl Viewer {
         let (show_matrix, recenter) =
             self.markers
                 .controls(ui, self.trace, &self.summary.metadata, colors);
-        self.inspect |= show_matrix;
+        if show_matrix {
+            self.panel = Panel::Matrix;
+        }
         if let Some(hz) = recenter {
             self.recenter(hz);
         }
@@ -574,7 +633,25 @@ impl Viewer {
     }
 
     fn pending(&self) -> bool {
-        self.index_job.is_some() || self.detail_job.is_some() || self.markers.pending()
+        self.index_job.is_some()
+            || self.detail_job.is_some()
+            || self.markers.pending()
+            || self.time_domain.pending()
+    }
+}
+
+fn choose_panel(ui: &mut Ui, panel: &mut Panel, s_parameters: bool) {
+    for (option, label) in [
+        (Panel::Impulse, "Impulse response"),
+        (Panel::Matrix, "Matrix"),
+    ] {
+        if option == Panel::Impulse && !s_parameters {
+            continue;
+        }
+        let open = *panel == option;
+        if ui.selectable_label(open, label).clicked() {
+            *panel = if open { Panel::None } else { option };
+        }
     }
 }
 

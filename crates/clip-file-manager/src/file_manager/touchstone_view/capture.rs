@@ -4,6 +4,7 @@ use std::{
     fmt::Write,
     fs::File,
     io::BufReader,
+    ops::Range,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -97,6 +98,30 @@ impl Capture {
         })
     }
 
+    pub fn impulse_input(
+        &self,
+        index: &Index,
+        band: Band,
+        trace: Trace,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<TracePoint>, String> {
+        self.read(cancel, |reader| {
+            let first = reader.nearest(index, band[0], cancel)?.index;
+            let last = reader.nearest(index, band[1], cancel)?.index;
+            let range = first.min(last)..first.max(last).saturating_add(1);
+            if range.end - range.start > MAX_COPY {
+                return Err(touchstone::Error::Limit(
+                    "zoom to a band with at most 16,384 points",
+                ));
+            }
+            let mut output = Vec::with_capacity((range.end - range.start) as usize);
+            trace_window(reader, index, range, trace, cancel, |point| {
+                output.push(point)
+            })?;
+            Ok(output)
+        })
+    }
+
     pub fn copy(
         &self,
         index: &Index,
@@ -110,31 +135,51 @@ impl Capture {
             return Err("Select at most 16,384 frequency records to copy".into());
         }
         let (csv, count) = self.read(cancel, |reader| {
-            let ports = reader.metadata().ports;
-            let page = (MAX_MATRIX_VALUES / (ports * ports)).min(2048) as u64;
             let [response, stimulus] = trace;
             let label = reader
                 .metadata()
                 .parameter_label(response, stimulus)
                 .ok_or(touchstone::Error::Invalid("matrix element outside sweep"))?;
             let mut csv = format!("frequency_hz,\"{label} real\",\"{label} imaginary\"\n");
-            let mut row = start;
-            while row < end {
-                let next = (row + page).min(end);
-                let points = reader.read_window(index, row..next, cancel)?;
-                for point in &points {
-                    let value = point
-                        .value(response, stimulus)
-                        .ok_or(touchstone::Error::Invalid("matrix element outside sweep"))?;
-                    let _ = writeln!(csv, "{},{},{}", point.frequency_hz, value.re, value.im);
-                }
-                row = next;
-            }
+            trace_window(reader, index, start..end, trace, cancel, |point| {
+                let _ = writeln!(
+                    csv,
+                    "{},{},{}",
+                    point.frequency_hz, point.value.re, point.value.im
+                );
+            })?;
             Ok((csv, end - start))
         })?;
         little_clip_core::copy_text_to_system_clipboard(&csv).map_err(as_string)?;
         Ok(format!("Copied {count} frequency records"))
     }
+}
+
+fn trace_window(
+    reader: &mut Reader<BufReader<&File>>,
+    index: &Index,
+    mut rows: Range<u64>,
+    [response, stimulus]: Trace,
+    cancel: &AtomicBool,
+    mut emit: impl FnMut(TracePoint),
+) -> Result<(), touchstone::Error> {
+    let ports = reader.metadata().ports;
+    let page = (MAX_MATRIX_VALUES / (ports * ports)).min(2048) as u64;
+    while rows.start < rows.end {
+        let next = (rows.start + page).min(rows.end);
+        for point in reader.read_window(index, rows.start..next, cancel)? {
+            let value = point
+                .value(response, stimulus)
+                .ok_or(touchstone::Error::Invalid("matrix element outside sweep"))?;
+            emit(TracePoint {
+                index: point.index,
+                frequency_hz: point.frequency_hz,
+                value,
+            });
+        }
+        rows.start = next;
+    }
+    Ok(())
 }
 
 pub(super) fn trace_points(points: &[Point], [response, stimulus]: Trace) -> Vec<TracePoint> {
