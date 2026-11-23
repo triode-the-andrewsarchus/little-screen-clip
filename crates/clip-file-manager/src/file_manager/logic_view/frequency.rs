@@ -3,7 +3,7 @@ use crate::file_manager::{
     scope_view::plot,
     signal_view::{
         frequency_plot::{Display, choose_region, choose_window, spectrum_readout, spectrum_rect},
-        spectra::{Input, Region, Spectra},
+        spectra::{Input, Spectra},
         timeline::Link,
     },
 };
@@ -27,7 +27,6 @@ impl Viewer {
         let index = self.active;
         let lane = &self.overview.lanes[index];
         let default_rate = (32_768.0 / (self.span.end - self.span.start)).clamp(1.0, 1e12);
-        let visible = self.span.clone();
         let panel = &mut self.frequency;
         panel.controls(ui, index, lane, default_rate);
         let rate = lane
@@ -41,11 +40,10 @@ impl Viewer {
             domain
         };
         let input = Input::logic(self.recording.clone(), index, &lane.name, domain, rate);
-        let interval = match panel.spectra.region {
-            Region::Current => self.selected.clone().or(Some(visible)),
-            Region::Visible => Some(visible),
-            Region::Whole => None,
-        };
+        let interval = panel
+            .spectra
+            .region
+            .interval(self.selected.clone(), &self.span);
         panel
             .spectra
             .update(ui.ctx(), Some(input), interval, panel.window);

@@ -1,8 +1,9 @@
 use super::{
     Viewer, plot,
-    spectrum_input::{Input, LaneKind, Region},
+    spectrum_input::{Input, LaneKind},
 };
 use crate::file_manager::signal_view::{
+    filter_editor::filter_menu,
     frequency_plot::{Display, choose_region, choose_window, spectrum_readout, spectrum_rect},
     timeline::{self, Link},
 };
@@ -61,9 +62,7 @@ impl Viewer {
             self.draw_filter_response(ui, rect, &span);
             let mut add = None;
             response.context_menu(|ui| {
-                add = ui
-                    .add_enabled_ui(self.can_add_filter(), super::filters::filter_menu)
-                    .inner;
+                add = ui.add_enabled_ui(self.can_add_filter(), filter_menu).inner;
             });
             if let Some(kind) = add {
                 self.add_filter(kind);
@@ -78,11 +77,7 @@ impl Viewer {
     }
 
     pub(super) fn spectrum_interval(&self) -> Option<Range<f64>> {
-        match self.spectra.region {
-            Region::Current => self.selection().or_else(|| Some(self.span.clone())),
-            Region::Visible => Some(self.span.clone()),
-            Region::Whole => None,
-        }
+        self.spectra.region.interval(self.selection(), &self.span)
     }
 
     fn spectrum_input(&self) -> Option<Input> {

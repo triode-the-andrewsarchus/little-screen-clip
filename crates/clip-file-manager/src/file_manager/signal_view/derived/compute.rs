@@ -168,7 +168,13 @@ fn grid(span: Range<f64>, rate: f64) -> Result<(Range<f64>, usize), String> {
     Ok((first / rate..last / rate, count as usize))
 }
 
-fn analog(name: String, unit: String, span: &Range<f64>, step: f64, values: Vec<f32>) -> Lane {
+pub(super) fn analog(
+    name: String,
+    unit: String,
+    span: &Range<f64>,
+    step: f64,
+    values: Vec<f32>,
+) -> Lane {
     let channel = Channel {
         name,
         unit,

@@ -1,12 +1,13 @@
 mod compute;
 mod decoders;
+mod filtering;
 mod frequency;
 
 use super::{
     inputs::{Input, Signature},
     take_query_result, timeline,
 };
-use crate::file_manager::{logic_view, preview_job::Task, scope_view::plot};
+use crate::file_manager::{logic_view, preview_copy, preview_job::Task, scope_view::plot};
 use compute::{Frame, Lane};
 use egui::{Align2, Color32, Context, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::{
@@ -26,6 +27,7 @@ pub(super) struct Derived {
     program: String,
     program_rate: Option<f64>,
     history_span: Option<Range<f64>>,
+    selected: Option<Range<f64>>,
     show_output: bool,
     revision: u64,
     request_after: f64,
@@ -159,6 +161,7 @@ impl Derived {
         self.request_after = 0.0;
         self.decoders = decoders::Decoders::default();
         self.frequency = frequency::Frequency::default();
+        self.selected = None;
     }
 
     pub(super) fn update(&mut self, ctx: &Context, inputs: &[Input], span: &Range<f64>) {
@@ -258,7 +261,10 @@ impl Derived {
             self.decoders.controls(ui, &frame, span);
             self.time_plot(ui, &frame, span, domain, probe, reference)
         };
-        if let Some(interval) = self.frequency.content(ui, &frame) {
+        if let Some(interval) = self
+            .frequency
+            .content(ui, &frame, self.selected.clone(), span)
+        {
             *span = timeline::fit(domain, interval, frame.step);
             ui.ctx().request_repaint();
         }
@@ -275,15 +281,21 @@ impl Derived {
         reference: Option<f64>,
     ) -> Option<f64> {
         let annotations = if self.decoders.active() { 24.0 } else { 3.0 };
-        let height = (frame.lanes.len() as f32 * 48.0).max(100.0) + annotations;
-        let (area, response) = ui.allocate_exact_size(
-            vec2(ui.available_width(), height + 17.0),
-            Sense::click_and_drag(),
-        );
+        let filtered = self.frequency.filtered_lanes(frame);
+        let lane_count = frame.lanes.len() + filtered.len();
+        let height = (lane_count as f32 * 48.0).max(100.0) + annotations;
+        let (area, _) =
+            ui.allocate_exact_size(vec2(ui.available_width(), height + 17.0), Sense::hover());
         let rect = Rect::from_min_max(
             area.min + vec2(78.0, annotations),
             area.max - vec2(9.0, 17.0),
         );
+        let response = ui.interact(
+            rect,
+            ui.make_persistent_id("derived signals"),
+            Sense::click_and_drag(),
+        );
+        Self::select_interval(ui, &response, span, &mut self.selected);
         if let Some(requested) = timeline::navigate(ui.ctx(), rect, &response, span, true) {
             *span = timeline::fit(domain, requested, frame.step);
             ui.ctx().request_repaint();
@@ -293,13 +305,49 @@ impl Derived {
             .filter(|p| rect.contains(*p))
             .map(|p| plot::at(rect, span, p.x));
         let cursor = pointed.or(self.decoders.cursor());
-        frame.paint(ui, rect, span, cursor.or(probe), reference);
+        frame.paint(
+            ui,
+            rect,
+            span,
+            self.selected.as_ref(),
+            &filtered,
+            cursor.or(probe),
+            reference,
+        );
         if self.decoders.active() {
             let band = Rect::from_min_max(pos2(rect.left(), area.top()), rect.right_top());
             self.decoders.paint(ui, ui.painter(), band, span);
             self.decoders.table(ui, span, pointed);
         }
         pointed.or(self.decoders.cursor())
+    }
+
+    fn select_interval(
+        ui: &Ui,
+        response: &egui::Response,
+        visible: &Range<f64>,
+        selected: &mut Option<Range<f64>>,
+    ) {
+        let modified = ui.input(|input| input.modifiers.command || input.modifiers.alt);
+        let (_, drag) = preview_copy::drag_range(ui, response, response.id, modified);
+        if let Some((left, right)) = drag {
+            let width = visible.end - visible.start;
+            let start = width.mul_add(f64::from(left), visible.start);
+            let end = width.mul_add(f64::from(right), visible.start);
+            *selected = (start < end).then_some(start..end);
+        } else if response.secondary_clicked() {
+            *selected = None;
+        }
+        if let Some(selected) = selected.as_ref() {
+            response.clone().on_hover_text(format!(
+                "{} selected · Right-click to clear",
+                display_value(selected.end - selected.start, "s")
+            ));
+        } else {
+            response
+                .clone()
+                .on_hover_text("Drag to select a time range · Scroll to zoom");
+        }
     }
 }
 
@@ -309,6 +357,8 @@ impl Frame {
         ui: &Ui,
         rect: Rect,
         span: &Range<f64>,
+        selected: Option<&Range<f64>>,
+        filtered: &[filtering::PlotLane<'_>],
         probe: Option<f64>,
         reference: Option<f64>,
     ) {
@@ -317,16 +367,39 @@ impl Frame {
         let clipped = painter.with_clip_rect(rect.intersect(ui.clip_rect()));
         clipped.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
         plot::axes(painter, rect, span, ink);
-        for (index, lane) in self.lanes.iter().enumerate() {
-            let row = plot::lane(rect, index, self.lanes.len());
-            let color = plot::color(index + 1);
-            lane.paint(
+        if let Some(selected) = selected {
+            plot::highlight(
                 &clipped,
-                row.shrink2(vec2(0.0, 4.0)),
+                rect,
                 span,
-                &self.span,
-                color,
+                selected.clone(),
+                plot::color(1).gamma_multiply(0.22),
             );
+        }
+        let count = self.lanes.len() + filtered.len();
+        let recorded = self
+            .lanes
+            .iter()
+            .enumerate()
+            .map(|(index, lane)| (lane.name(), Some(lane), plot::color(index + 1)));
+        let filtered = filtered.iter().map(|lane| {
+            (
+                lane.name.as_str(),
+                lane.values,
+                super::filter_editor::FILTER_COLOR,
+            )
+        });
+        for (index, (name, lane, color)) in recorded.chain(filtered).enumerate() {
+            let row = plot::lane(rect, index, count);
+            if let Some(lane) = lane {
+                lane.paint(
+                    &clipped,
+                    row.shrink2(vec2(0.0, 4.0)),
+                    span,
+                    &self.span,
+                    color,
+                );
+            }
             clipped.hline(
                 row.x_range(),
                 row.bottom(),
@@ -335,14 +408,14 @@ impl Frame {
             painter.text(
                 pos2(row.left() - 5.0, row.center().y),
                 Align2::RIGHT_CENTER,
-                lane.name(),
+                name,
                 FontId::monospace(10.0),
                 color,
             );
             if let Some(time) = probe.filter(|time| span.contains(time)) {
                 let x = plot::x_at(row, span, time);
                 let value = lane
-                    .value(time)
+                    .and_then(|lane| lane.value(time))
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| "—".into());
                 let galley = painter.layout_no_wrap(value, FontId::monospace(11.0), color);

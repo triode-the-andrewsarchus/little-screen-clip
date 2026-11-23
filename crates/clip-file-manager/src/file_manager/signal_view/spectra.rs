@@ -32,6 +32,18 @@ impl Region {
             Self::Whole => "Whole lane",
         }
     }
+
+    pub(in crate::file_manager) fn interval(
+        self,
+        selection: Option<Range<f64>>,
+        visible: &Range<f64>,
+    ) -> Option<Range<f64>> {
+        match self {
+            Self::Current => selection.or_else(|| Some(visible.clone())),
+            Self::Visible => Some(visible.clone()),
+            Self::Whole => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
@@ -194,6 +206,9 @@ struct Query {
     window: SpectrumWindow,
 }
 
+pub(in crate::file_manager) type ResultView<'a> =
+    (&'a Input, Result<Option<&'a SpectralSurvey>, &'a str>);
+
 #[derive(Default)]
 pub(in crate::file_manager) struct Spectra {
     pub kind: LaneKind,
@@ -260,13 +275,16 @@ impl Spectra {
         self.requested = None;
     }
 
-    pub(in crate::file_manager) fn ready(
-        &self,
-    ) -> Option<(&Input, Result<Option<&SpectralSurvey>, &str>)> {
-        let (query, result) = self.result.as_ref()?;
+    pub(in crate::file_manager) fn ready(&self) -> Option<ResultView<'_>> {
+        let (query, _) = self.result.as_ref()?;
         if self.requested.as_ref() != Some(query) {
             return None;
         }
+        self.latest()
+    }
+
+    pub(in crate::file_manager) fn latest(&self) -> Option<ResultView<'_>> {
+        let (query, result) = self.result.as_ref()?;
         Some((
             &query.input,
             result.as_ref().map(Option::as_ref).map_err(String::as_str),

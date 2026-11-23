@@ -1,23 +1,22 @@
 use super::{JOBS, Task, Viewer, plot, reads, spectrum_input::Input};
-use crate::file_manager::signal_view::take_query_result;
-use egui::{Align2, Color32, FontId, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
+use crate::file_manager::signal_view::{
+    filter_editor::{StageList, filter_menu},
+    take_query_result,
+};
+use egui::{Color32, Painter, Rect, Stroke, Ui, vec2};
 use little_clip_core::engineering::{
-    analysis::{FilterChain, FilterKind, FilterStage},
+    analysis::FilterKind,
     scope::{Channel, MAX_SAMPLES_PER_READ},
     waveforms::{Envelope, Peak, Recording, display_value, sample_span},
 };
 use std::{
     collections::BTreeMap,
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
-pub(super) const FILTER_COLOR: Color32 = Color32::from_rgb(221, 163, 93);
-const MAX_STAGES: usize = 8;
+pub(super) use crate::file_manager::signal_view::filter_editor::FILTER_COLOR;
 
 #[derive(Default)]
 pub(super) struct Filters {
@@ -31,7 +30,7 @@ struct Lane {
     name: String,
     visible: bool,
     rows: Range<u64>,
-    stages: Vec<FilterStage>,
+    stages: StageList,
     output: Option<Output>,
     completed: Option<Request>,
     error: Option<String>,
@@ -41,7 +40,7 @@ struct Lane {
 struct Request {
     channel: usize,
     rows: Range<u64>,
-    stages: Vec<FilterStage>,
+    stages: StageList,
 }
 
 struct Output {
@@ -87,7 +86,6 @@ impl Viewer {
         }
         let channel = &self.overview.channels[self.active];
         let rate = channel.interval_seconds.recip();
-        let bounds = rate * 1e-7..=rate * (0.5 - 1e-7);
         let rows = self
             .spectrum_interval()
             .map_or(0..channel.sample_count, |range| sample_span(channel, range));
@@ -116,47 +114,9 @@ impl Viewer {
         if let Some(error) = &lane.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        let remove = ui
-            .menu_button("Filter stages", |ui| {
-                let mut remove = None;
-                for (index, stage) in lane.stages.iter_mut().enumerate() {
-                    ui.push_id(("filter-stage-controls", index), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(kind_label(stage.kind));
-                            ui.add(
-                                egui::DragValue::new(&mut stage.frequency_hz)
-                                    .range(bounds.clone())
-                                    .speed(rate / 5000.0)
-                                    .suffix(" Hz"),
-                            );
-                            ui.add(
-                                egui::DragValue::new(&mut stage.q)
-                                    .range(0.1..=25.0)
-                                    .speed(0.04)
-                                    .prefix("Q "),
-                            )
-                            .on_hover_text(
-                                "Quality factor · higher Q narrows a band-pass or notch",
-                            );
-                            if ui
-                                .small_button("×")
-                                .on_hover_text("Remove filter")
-                                .clicked()
-                            {
-                                remove = Some(index);
-                            }
-                        });
-                    });
-                }
-                remove
-            })
-            .inner
-            .flatten();
-        if let Some(index) = remove {
-            lane.stages.remove(index);
-            if lane.stages.is_empty() {
-                self.filters.lanes.remove(&self.active);
-            }
+        lane.stages.controls(ui, rate);
+        if lane.stages.is_empty() {
+            self.filters.lanes.remove(&self.active);
         }
     }
 
@@ -164,7 +124,7 @@ impl Viewer {
         self.filters
             .lanes
             .get(&self.active)
-            .is_none_or(|lane| lane.stages.len() < MAX_STAGES)
+            .is_none_or(|lane| lane.stages.can_add())
     }
 
     pub(super) fn add_filter(&mut self, kind: FilterKind) {
@@ -184,25 +144,13 @@ impl Viewer {
                 name: format!("{} filtered", channel.name),
                 visible: true,
                 rows,
-                stages: Vec::new(),
+                stages: StageList::default(),
                 output: None,
                 completed: None,
                 error: None,
             });
         let span = self.spectrum_span.clone().unwrap_or(0.0..rate * 0.5);
-        let frequency = self
-            .spectrum_marker
-            .filter(|&marker| span.contains(&marker))
-            .unwrap_or_else(|| stage_position(&span, &lane.stages))
-            .clamp(rate * 1e-7, rate * (0.5 - 1e-7));
-        lane.stages.push(FilterStage {
-            kind,
-            frequency_hz: frequency,
-            q: match kind {
-                FilterKind::LowPass | FilterKind::HighPass => std::f64::consts::FRAC_1_SQRT_2,
-                FilterKind::BandPass | FilterKind::Notch => 4.0,
-            },
-        });
+        lane.stages.add(kind, rate, &span, self.spectrum_marker);
     }
 
     pub(super) fn draw_filters(&self, painter: &Painter, clip: &Painter, rect: Rect, ink: Color32) {
@@ -242,120 +190,8 @@ impl Viewer {
             return;
         };
         let rate = self.overview.channels[self.active].interval_seconds.recip();
-        let painter = ui.painter_at(rect);
-        if let Ok(chain) = FilterChain::new(rate, &lane.stages) {
-            let points = (0..=160).filter_map(|index| {
-                let fraction = f64::from(index) / 160.0;
-                let frequency = span.start + fraction * (span.end - span.start);
-                let gain = chain.gain_at(frequency)?;
-                let db = (20.0 * gain.max(1e-6).log10()).clamp(-60.0, 24.0);
-                Some(pos2(
-                    plot::x_at(rect, span, frequency),
-                    rect.bottom() - rect.height() * ((db + 60.0) / 84.0) as f32,
-                ))
-            });
-            painter.add(egui::Shape::line(
-                points.collect(),
-                Stroke::new(1.2, FILTER_COLOR),
-            ));
-            for db in [-60, 0, 24] {
-                let y = rect.bottom() - rect.height() * (db + 60) as f32 / 84.0;
-                painter.text(
-                    pos2(
-                        rect.right() - 4.0,
-                        y.clamp(rect.top() + 7.0, rect.bottom() - 7.0),
-                    ),
-                    Align2::RIGHT_CENTER,
-                    format!("{db} dB gain"),
-                    FontId::monospace(10.0),
-                    FILTER_COLOR,
-                );
-            }
-        }
-        for (index, stage) in lane.stages.iter_mut().enumerate() {
-            ui.push_id(("filter-handles", index), |ui| {
-                stage_handles(ui, &painter, rect, span, rate, stage);
-            });
-        }
+        lane.stages.draw(ui, rect, span, rate);
     }
-}
-
-fn stage_handles(
-    ui: &mut Ui,
-    painter: &Painter,
-    rect: Rect,
-    span: &Range<f64>,
-    rate: f64,
-    stage: &mut FilterStage,
-) {
-    let label = format!(
-        "{} · {}",
-        kind_label(stage.kind),
-        display_value(stage.frequency_hz, "Hz")
-    );
-    if let Some(target) = handle(
-        ui,
-        painter,
-        rect,
-        span,
-        stage.frequency_hz,
-        ("center", 9.0),
-        label,
-    ) {
-        stage.frequency_hz = target.clamp(rate * 1e-7, rate * (0.5 - 1e-7));
-    }
-    let Some(edges) = stage.band_edges(rate) else {
-        return;
-    };
-    plot::highlight(
-        painter,
-        rect,
-        span,
-        edges[0]..edges[1],
-        FILTER_COLOR.gamma_multiply(0.10),
-    );
-    for (name, frequency) in ["lower edge", "upper edge"].into_iter().zip(edges) {
-        let label = format!(
-            "{} {name} · {}",
-            kind_label(stage.kind),
-            display_value(frequency, "Hz")
-        );
-        if let Some(edge) = handle(ui, painter, rect, span, frequency, (name, 23.0), label)
-            && let Some(q) = stage.q_for_edge(rate, edge)
-        {
-            stage.q = q;
-        }
-    }
-}
-
-fn handle(
-    ui: &mut Ui,
-    painter: &Painter,
-    rect: Rect,
-    span: &Range<f64>,
-    frequency: f64,
-    (id, y): (&str, f32),
-    tooltip: String,
-) -> Option<f64> {
-    let x = plot::x_at(rect, span, frequency);
-    if !rect.x_range().contains(x) {
-        return None;
-    }
-    let target = Rect::from_center_size(pos2(x, rect.top() + y), vec2(16.0, 14.0));
-    let response = ui
-        .interact(target, ui.make_persistent_id(id), Sense::drag())
-        .on_hover_cursor(egui::CursorIcon::ResizeHorizontal)
-        .on_hover_text(tooltip);
-    painter.vline(x, rect.y_range(), Stroke::new(1.0, FILTER_COLOR));
-    painter.rect_filled(target.shrink2(vec2(3.0, 3.0)), 2.0, FILTER_COLOR);
-    response
-        .dragged()
-        .then(|| {
-            response
-                .interact_pointer_pos()
-                .map(|pointer| plot::at(rect, span, pointer.x))
-        })
-        .flatten()
 }
 
 impl Filters {
@@ -494,13 +330,8 @@ impl Request {
         let mut raw = recording.checked(cancel, |capture| {
             reads::read_raw(capture, self.channel, self.rows.clone(), cancel)
         })?;
-        let mut chain = FilterChain::new(raw.step.recip(), &self.stages)?;
-        for block in raw.samples.chunks_mut(4096) {
-            if cancel.load(Ordering::Relaxed) {
-                return Err("Filtering was cancelled".into());
-            }
-            chain.process(block);
-        }
+        self.stages
+            .apply(raw.step.recip(), &mut raw.samples, cancel)?;
         let step = raw.samples.len().div_ceil(2048).max(1);
         let peaks = raw
             .samples
@@ -567,48 +398,5 @@ fn draw_output(
             output.bounds,
             FILTER_COLOR,
         );
-    }
-}
-
-pub(super) fn filter_menu(ui: &mut Ui) -> Option<FilterKind> {
-    [
-        FilterKind::LowPass,
-        FilterKind::HighPass,
-        FilterKind::BandPass,
-        FilterKind::Notch,
-    ]
-    .into_iter()
-    .find(|&kind| {
-        let clicked = ui.button(kind_label(kind)).clicked();
-        if clicked {
-            ui.close();
-        }
-        clicked
-    })
-}
-
-fn stage_position(span: &Range<f64>, stages: &[FilterStage]) -> f64 {
-    let mut edges = stages
-        .iter()
-        .map(|stage| stage.frequency_hz)
-        .filter(|frequency| span.contains(frequency))
-        .collect::<Vec<_>>();
-    edges.push(span.start);
-    edges.push(span.end);
-    edges.sort_by(f64::total_cmp);
-    edges
-        .windows(2)
-        .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
-        .map_or(span.start.midpoint(span.end), |pair| {
-            pair[0].midpoint(pair[1])
-        })
-}
-
-fn kind_label(kind: FilterKind) -> &'static str {
-    match kind {
-        FilterKind::LowPass => "Low-pass",
-        FilterKind::HighPass => "High-pass",
-        FilterKind::BandPass => "Band-pass",
-        FilterKind::Notch => "Notch",
     }
 }
