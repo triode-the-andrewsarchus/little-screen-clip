@@ -1,9 +1,12 @@
 use little_clip_core::engineering::{
-    analysis::{self, Expression, Spectrum, Value},
+    analysis::{self, Expression, Value},
     scope::Channel,
     waveforms::{Capture, Peak, PowerTotals, Recording, sample_span},
 };
-use std::{ops::Range, sync::atomic::AtomicBool};
+use std::{
+    ops::Range,
+    sync::{Arc, atomic::AtomicBool},
+};
 
 pub(super) const DETAIL_SAMPLES: u64 = 4096;
 const ANALYSIS_SAMPLES: u64 = 65_536;
@@ -104,8 +107,7 @@ pub(super) struct Measurements {
     pub frequencies: Vec<Option<f64>>,
     pub raw: RawChannel,
     pub extrema: Peak,
-    pub spectrum: Option<Spectrum>,
-    pub math: Option<(RawChannel, Peak)>,
+    pub math: Option<(Arc<RawChannel>, Peak)>,
     pub limited: bool,
     pub power_totals: Option<PowerTotals>,
 }
@@ -113,7 +115,6 @@ pub(super) struct Measurements {
 pub(super) struct AnalysisRequest {
     pub span: Range<f64>,
     pub active: usize,
-    pub spectrum: Option<analysis::SpectrumWindow>,
     pub math: Option<(Expression, Range<f64>)>,
 }
 
@@ -130,9 +131,6 @@ pub(super) fn analyze(
             .iter()
             .map(|channel| analysis::fundamental_hz(&channel.samples, channel.step.recip()))
             .collect();
-        let spectrum = request.spectrum.and_then(|window| {
-            analysis::spectrum_with_window(&raw.samples, raw.step.recip(), window)
-        });
         let math = request
             .math
             .as_ref()
@@ -156,7 +154,6 @@ pub(super) fn analyze(
             frequencies,
             raw,
             extrema,
-            spectrum,
             math,
             limited,
             power_totals,
@@ -195,7 +192,11 @@ fn analysis_data(
     Ok((data, limited))
 }
 
-fn math_trace(expression: &Expression, data: &[RawChannel], index: usize) -> (RawChannel, Peak) {
+fn math_trace(
+    expression: &Expression,
+    data: &[RawChannel],
+    index: usize,
+) -> (Arc<RawChannel>, Peak) {
     let active = &data[index];
     let samples = (0..active.samples.len())
         .map(|index| {
@@ -209,12 +210,12 @@ fn math_trace(expression: &Expression, data: &[RawChannel], index: usize) -> (Ra
     let mut extrema = Peak::default();
     extrema.add(&samples);
     (
-        RawChannel {
+        Arc::new(RawChannel {
             first: active.first,
             start: active.start,
             step: active.step,
             samples,
-        },
+        }),
         extrema,
     )
 }

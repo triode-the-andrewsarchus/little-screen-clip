@@ -155,6 +155,11 @@ impl Viewer {
                 super::MATH_COLOR,
             ));
         }
+        for (index, name, value) in self.filters.values(time) {
+            let unit = &self.overview.channels[index].unit;
+            let value = display_value(value.map_or(f64::NAN, f64::from), unit);
+            labels.push((format!("{name}  {value}"), super::filters::FILTER_COLOR));
+        }
         let font = FontId::monospace(12.0);
         let laid_out = labels
             .into_iter()

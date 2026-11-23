@@ -9,6 +9,7 @@ mod math;
 pub(super) mod plot;
 mod reads;
 mod snap;
+mod spectrum_input;
 pub(super) mod strip;
 
 use super::{
@@ -76,10 +77,11 @@ pub(super) struct Viewer {
     math: String,
     math_state: math::Math,
     filters: filters::Filters,
+    spectra: spectrum_input::Spectra,
     spectrum: bool,
     spectrum_window: SpectrumWindow,
     spectrum_db: bool,
-    spectrum_marker: Option<usize>,
+    spectrum_marker: Option<f64>,
     spectrum_span: Option<Range<f64>>,
     snaps: [CursorSnap; 2],
     error: Option<String>,
@@ -103,7 +105,6 @@ impl PlotData {
 struct AnalysisKey {
     span: Range<f64>,
     channel: usize,
-    fft: Option<SpectrumWindow>,
     expression: String,
     math_span: Range<f64>,
 }
@@ -140,6 +141,7 @@ impl Viewer {
             math: String::new(),
             math_state: math::Math::default(),
             filters: filters::Filters::default(),
+            spectra: spectrum_input::Spectra::default(),
             spectrum: false,
             spectrum_window: SpectrumWindow::Hann,
             spectrum_db: true,
@@ -192,17 +194,25 @@ impl Viewer {
         }
         self.toolbar(ui, copies);
         self.power_totals(ui);
-        let has_spectrum = self.spectrum;
-        let plot_height = if has_spectrum {
-            (ui.available_height() * 0.36).max(68.0)
+        let show_time = !self.spectrum || !self.spectra.only;
+        let probe = if show_time {
+            let height = if self.spectrum {
+                (ui.available_height() * 0.32).max(68.0)
+            } else {
+                (ui.available_height() - 57.0).max(80.0)
+            };
+            let probe = self.waveform(ui, height, link);
+            self.overview_ui(ui);
+            self.cursor_readout(ui);
+            probe
         } else {
-            (ui.available_height() - 57.0).max(80.0)
+            self.hover.time = None;
+            None
         };
-        let probe = self.waveform(ui, plot_height, link);
-        self.overview_ui(ui);
-        self.cursor_readout(ui);
-        if has_spectrum {
-            self.spectrum_ui(ui);
+        if self.spectrum {
+            self.spectrum_ui(ui, link);
+        } else {
+            self.spectra.suspend();
         }
         self.request_detail();
         self.update_hover(ui.ctx());
@@ -273,6 +283,7 @@ impl Viewer {
                 for (channel, visible) in self.overview.channels.iter().zip(&mut self.visible) {
                     ui.checkbox(visible, &channel.name);
                 }
+                self.filters.visibility_controls(ui);
             });
             let range = self.selection();
             if ui
@@ -516,7 +527,7 @@ impl Viewer {
         )
     }
 
-    fn calculated(&self) -> Option<&(RawChannel, Peak)> {
+    fn calculated(&self) -> Option<&(Arc<RawChannel>, Peak)> {
         let key = self.measurement_key.as_ref()?;
         if key.expression != self.math || key.channel != self.active {
             return None;
@@ -786,6 +797,7 @@ impl Viewer {
             || self.analysis_job.is_some()
             || self.snaps.iter().any(CursorSnap::pending)
             || self.filters.pending()
+            || self.spectra.busy()
             || self.hover.pending()
             || self.math_state.pending()
             || self.analysis_key.is_none()
@@ -942,7 +954,6 @@ impl Viewer {
             if let Ok(Ok(data)) = result {
                 self.measurements = Some(data);
                 self.measurement_key = self.analysis_key.clone();
-                self.spectrum_marker = None;
             }
         }
         self.math_state.poll();
@@ -1011,7 +1022,6 @@ impl Viewer {
             } else {
                 0.0..0.0
             },
-            fft: self.spectrum.then_some(self.spectrum_window),
             expression: self
                 .math_state
                 .numeric()
@@ -1028,11 +1038,9 @@ impl Viewer {
             return;
         }
         self.analysis_dirty_at = now + 0.1;
-        self.spectrum_span = None;
         let request = AnalysisRequest {
             span: key.span.clone(),
             active: key.channel,
-            spectrum: key.fft,
             math: self
                 .math_state
                 .numeric()

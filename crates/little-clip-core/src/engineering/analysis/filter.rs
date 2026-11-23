@@ -27,6 +27,39 @@ pub struct FilterStage {
     pub q: f64,
 }
 
+impl FilterStage {
+    /// Returns the half-power band edges for a band-pass or notch stage.
+    ///
+    /// Frequencies are in Hertz and account for bilinear frequency warping.
+    pub fn band_edges(self, sample_rate: f64) -> Option<[f64; 2]> {
+        if !matches!(self.kind, FilterKind::BandPass | FilterKind::Notch) {
+            return None;
+        }
+        Biquad::new(&self, sample_rate).ok()?;
+        let center = warp(self.frequency_hz, sample_rate);
+        let width_ratio = 0.5 / self.q;
+        let upper_ratio = width_ratio.hypot(1.0) + width_ratio;
+        let to_hz = |warped: f64| warped.atan() / std::f64::consts::PI * sample_rate;
+        Some([to_hz(center / upper_ratio), to_hz(center * upper_ratio)])
+    }
+
+    /// Returns the quality factor placing a half-power edge at a frequency.
+    pub fn q_for_edge(self, sample_rate: f64, edge_hz: f64) -> Option<f64> {
+        if !(0.0..sample_rate * 0.5).contains(&edge_hz) {
+            return None;
+        }
+        self.band_edges(sample_rate)?;
+        let center = warp(self.frequency_hz, sample_rate);
+        let edge = warp(edge_hz, sample_rate);
+        let ratio = edge / center;
+        Some((ratio - ratio.recip()).abs().recip().clamp(0.1, 25.0))
+    }
+}
+
+fn warp(frequency: f64, sample_rate: f64) -> f64 {
+    (std::f64::consts::PI * (frequency / sample_rate)).tan()
+}
+
 /// Compiled coefficients and sample history for a chain of filters.
 ///
 /// Feed successive blocks in sample order. State carries across calls so
@@ -173,6 +206,22 @@ mod tests {
             let chain = FilterChain::new(1000.0, &[stage(kind, 100.0)]).unwrap();
             for (hz, amplitude) in [0.0, 100.0, 500.0].into_iter().zip(expected) {
                 assert!((chain.gain_at(hz).unwrap() - amplitude).abs() < 1e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn dragged_band_edges_match_the_applied_filter_at_high_frequencies() {
+        for kind in [FilterKind::BandPass, FilterKind::Notch] {
+            let rate = 1_000.0;
+            let mut stage = stage(kind, 380.0);
+            stage.q = 4.2;
+            let chain = FilterChain::new(rate, &[stage]).unwrap();
+            for edge in stage.band_edges(rate).unwrap() {
+                assert!(
+                    (chain.gain_at(edge).unwrap() - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-10
+                );
+                assert!((stage.q_for_edge(rate, edge).unwrap() - stage.q).abs() < 1e-10);
             }
         }
     }

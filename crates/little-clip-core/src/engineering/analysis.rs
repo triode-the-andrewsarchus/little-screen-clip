@@ -3,12 +3,15 @@
 mod expression;
 mod filter;
 mod spectrum;
+mod survey;
 
 pub use expression::{Expression, ExpressionError, Value};
 pub use filter::{FilterChain, FilterKind, FilterStage};
 pub use spectrum::{
     MAX_ANALYSIS_SAMPLES, Spectrum, SpectrumWindow, fundamental_hz, spectrum, spectrum_with_window,
 };
+
+pub use survey::{SpectralSurvey, spectral_survey};
 
 /// Returns the nearest zero crossing within a sample window.
 ///
