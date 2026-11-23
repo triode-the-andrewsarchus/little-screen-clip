@@ -7,6 +7,7 @@ use std::{ops::Range, sync::atomic::AtomicBool};
 
 pub(super) const DETAIL_SAMPLES: u64 = 4096;
 const ANALYSIS_SAMPLES: u64 = 65_536;
+const MATH_SAMPLES: u64 = 262_144;
 
 pub(super) struct RawChannel {
     pub first: u64,
@@ -122,7 +123,7 @@ pub(super) fn analyze(
     cancel: &AtomicBool,
 ) -> Result<Measurements, String> {
     recording.checked(cancel, |capture| {
-        let (data, limited) = analysis_data(capture, &request.span, cancel)?;
+        let (data, limited) = analysis_data(capture, &request.span, ANALYSIS_SAMPLES, cancel)?;
 
         let raw = &data[request.active];
         let frequencies = data
@@ -136,10 +137,10 @@ pub(super) fn analyze(
             .math
             .as_ref()
             .map(|(expression, span)| {
-                if *span == request.span {
+                if *span == request.span && !limited {
                     Ok(math_trace(expression, &data, request.active))
                 } else {
-                    let (viewport, _) = analysis_data(capture, span, cancel)?;
+                    let (viewport, _) = analysis_data(capture, span, MATH_SAMPLES, cancel)?;
                     Ok::<_, String>(math_trace(expression, &viewport, request.active))
                 }
             })
@@ -166,6 +167,7 @@ pub(super) fn analyze(
 fn analysis_data(
     capture: &Capture,
     span: &Range<f64>,
+    limit: u64,
     cancel: &AtomicBool,
 ) -> Result<(Vec<RawChannel>, bool), String> {
     let mut limited = false;
@@ -176,16 +178,16 @@ fn analysis_data(
         .map(|(index, channel)| {
             let span = sample_span(channel, span.clone());
             let length = span.end.saturating_sub(span.start);
-            let start = if length > ANALYSIS_SAMPLES {
+            let start = if length > limit {
                 limited = true;
-                span.start + (length - ANALYSIS_SAMPLES) / 2
+                span.start + (length - limit) / 2
             } else {
                 span.start
             };
             read_raw(
                 capture,
                 index,
-                start..span.end.min(start.saturating_add(ANALYSIS_SAMPLES)),
+                start..span.end.min(start.saturating_add(limit)),
                 cancel,
             )
         })

@@ -39,6 +39,12 @@ struct MarkedRange {
     peak_to_peak: Option<(f32, String)>,
 }
 
+#[derive(Clone, Copy)]
+struct CursorDrag {
+    slot: usize,
+    origin: egui::Pos2,
+}
+
 pub(super) struct Viewer {
     recording: Arc<Recording>,
     overview: Overview,
@@ -51,7 +57,7 @@ pub(super) struct Viewer {
     visible: Vec<bool>,
     hover: hover::Hover,
     conversion: logic_export::Conversion,
-    drag: Option<usize>,
+    drag: Option<CursorDrag>,
     index: Option<Vec<Envelope>>,
     index_job: Option<Task<Result<Vec<Envelope>, String>>>,
     index_started: bool,
@@ -283,6 +289,7 @@ impl Viewer {
                 };
                 ui.add(
                     egui::TextEdit::singleline(&mut self.math)
+                        .id_salt("scope_math_expression")
                         .hint_text(hint)
                         .char_limit(256)
                         .desired_width((ui.available_width() - 10.0).min(420.0)),
@@ -787,26 +794,29 @@ impl Viewer {
     }
 
     fn move_cursors(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
-        let Some(point) = response.interact_pointer_pos() else {
+        let active = response.dragged_by(PointerButton::Primary);
+        let stopped = response.drag_stopped_by(PointerButton::Primary);
+        let (down, origin, latest, free) = ui.input(|input| {
+            (
+                input.pointer.button_down(PointerButton::Primary),
+                input.pointer.press_origin(),
+                input.pointer.latest_pos(),
+                input.modifiers.shift,
+            )
+        });
+        let point = response
+            .interact_pointer_pos()
+            .or_else(|| stopped.then_some(latest).flatten());
+        let Some(point) = point else {
+            if !down {
+                self.drag = None;
+            }
             return;
         };
         let time = plot::at(rect, &self.span, point.x);
         let radius = (self.span.end - self.span.start) * 10.0 / f64::from(rect.width().max(1.0));
-        let free = ui.input(|input| input.modifiers.shift);
         if response.secondary_clicked() && rect.contains(point) {
-            if self
-                .selection()
-                .is_some_and(|range| time >= range.start && time <= range.end)
-            {
-                self.cursors = [None; 2];
-                self.snaps.iter_mut().for_each(CursorSnap::clear);
-            } else if let Some(index) = self
-                .marks
-                .iter()
-                .rposition(|mark| time >= mark.span.start && time <= mark.span.end)
-            {
-                self.marks.remove(index);
-            }
+            self.remove_mark(time);
             return;
         }
         let cursors = self.cursors;
@@ -815,42 +825,61 @@ impl Viewer {
                 .iter()
                 .position(|value| value.is_some_and(|value| (value - t).abs() <= radius))
         };
-        if response.drag_started_by(PointerButton::Primary) {
-            let origin = ui
-                .input(|input| input.pointer.press_origin())
-                .unwrap_or(point);
-            let origin = plot::at(rect, &self.span, origin.x);
+        if active
+            && let Some(origin) = origin
+            && self.drag.is_none_or(|drag| drag.origin != origin)
+            && rect.contains(origin)
+        {
+            let time = plot::at(rect, &self.span, origin.x);
             self.snaps.iter_mut().for_each(CursorSnap::clear);
-            self.drag = near(origin).or_else(|| {
+            let slot = near(time).unwrap_or_else(|| {
                 self.archive_mark();
-                self.place_cursor(0, origin, radius, free);
-                Some(1)
+                self.place_cursor(0, time, radius, free);
+                1
             });
+            self.drag = Some(CursorDrag { slot, origin });
         }
         if response.clicked_by(PointerButton::Primary) {
-            let selected = near(time);
+            self.select_at(time, radius, free, near(time));
+        } else if (active || stopped)
+            && let Some(drag) = self.drag
+        {
+            self.place_cursor(drag.slot, time, radius, free);
+        }
+        if !down {
+            self.drag = None;
+        }
+    }
+
+    fn remove_mark(&mut self, time: f64) {
+        if self
+            .selection()
+            .is_some_and(|range| time >= range.start && time <= range.end)
+        {
+            self.cursors = [None; 2];
             self.snaps.iter_mut().for_each(CursorSnap::clear);
-            if selected.is_none() {
-                if let Some(index) = self
-                    .marks
-                    .iter()
-                    .rposition(|mark| mark.span.contains(&time))
-                {
-                    let mark = self.marks.remove(index);
-                    self.archive_mark();
-                    self.cursors = [Some(mark.span.start), Some(mark.span.end)];
-                    return;
-                }
-                self.archive_mark();
-            }
-            self.place_cursor(selected.unwrap_or(0), time, radius, free);
-        } else if let Some(slot) = self.drag {
-            let done = response.drag_stopped_by(PointerButton::Primary);
-            self.place_cursor(slot, time, radius, free);
-            if done {
-                self.drag = None;
+        } else if let Some(index) = self.mark_at(time) {
+            self.marks.remove(index);
+        }
+    }
+
+    fn mark_at(&self, time: f64) -> Option<usize> {
+        self.marks
+            .iter()
+            .rposition(|mark| time >= mark.span.start && time <= mark.span.end)
+    }
+
+    fn select_at(&mut self, time: f64, radius: f64, free: bool, cursor: Option<usize>) {
+        self.snaps.iter_mut().for_each(CursorSnap::clear);
+        if cursor.is_none() {
+            let mark = self.mark_at(time).map(|index| self.marks.remove(index));
+            self.archive_mark();
+            if let Some(mark) = mark {
+                self.cursors = [Some(mark.span.start), Some(mark.span.end)];
+                return;
             }
         }
+        self.place_cursor(cursor.unwrap_or(0), time, radius, free);
     }
 
     fn place_cursor(&mut self, slot: usize, time: f64, radius: f64, free: bool) {

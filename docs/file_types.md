@@ -2,6 +2,8 @@
 
 `[x]` means the app can currently open the format for viewing or playback. Some current formats rely on external tools such as FFmpeg, ExifTool, ImageMagick, or librsvg. Unchecked entries are candidates for future viewers. Extensions that are ambiguous are described by their intended format so they are not confused with unrelated uses.
 
+Select two to eight ordinary files and choose **File → Compare selected files**. Waveforms share an elapsed time axis and a scale for channels in the same unit. **Decoded fields** compares available properties, while **Compare bytes** opens an aligned diff at the chosen offset. The comparison views label properties based on an initial preview when the entire capture has yet to be scanned.
+
 - [ ] Images
   - [ ] Camera RAW
     - [ ] EXIF, IPTC, and XMP metadata extraction
