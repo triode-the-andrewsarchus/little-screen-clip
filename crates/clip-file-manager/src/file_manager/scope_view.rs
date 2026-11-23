@@ -1,6 +1,7 @@
 //! File-backed oscilloscope plots with one timeline shared by cursors and analysis.
 
 mod filters;
+pub(super) use filters::{FilterSamples, FilteredChannel};
 #[cfg(test)]
 mod frame_benchmark;
 mod hover;
@@ -175,6 +176,10 @@ impl Viewer {
 
     pub(super) fn span(&mut self) -> &mut Range<f64> {
         &mut self.span
+    }
+
+    pub(super) fn filtered_channels(&self) -> impl Iterator<Item = FilteredChannel<'_>> {
+        self.filters.channels()
     }
 
     pub(super) fn recording(&self) -> &Arc<Recording> {

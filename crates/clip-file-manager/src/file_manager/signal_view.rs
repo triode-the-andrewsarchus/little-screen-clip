@@ -176,7 +176,7 @@ impl Viewer {
         );
         shell.render_header(ui, |_| {});
         self.controls(ui);
-        let inputs = if self.derived.needs_inputs() {
+        let inputs = if self.derived.editor_open() {
             self.sources.iter().flat_map(Source::inputs).collect()
         } else {
             Vec::new()
@@ -190,7 +190,7 @@ impl Viewer {
             self.span = source.capture.span().clone();
             self.domain = source.capture.domain();
         } else {
-            self.linked(ui, palette, copies, &inputs);
+            self.linked(ui, palette, copies);
         }
         if self.add_open {
             self.add_dialog(ui.ctx());
@@ -309,13 +309,7 @@ impl Viewer {
         }
     }
 
-    fn linked(
-        &mut self,
-        ui: &mut Ui,
-        palette: &AppPalette,
-        copies: &mut Copies,
-        inputs: &[inputs::Input],
-    ) {
+    fn linked(&mut self, ui: &mut Ui, palette: &AppPalette, copies: &mut Copies) {
         let domain = extent(&self.sources);
         if self.span == self.domain {
             self.span = domain.clone();
@@ -365,13 +359,18 @@ impl Viewer {
                         ui.separator();
                     });
                 }
+                let inputs = if self.derived.active() {
+                    self.sources.iter().flat_map(Source::inputs).collect()
+                } else {
+                    Vec::new()
+                };
                 next_probe = self
                     .derived
                     .content(
                         ui,
                         &mut self.span,
                         &self.domain,
-                        inputs,
+                        &inputs,
                         self.probe,
                         reference_time,
                     )
@@ -468,7 +467,18 @@ impl Source {
             .to_string_lossy();
         match &self.capture {
             Capture::Analog(view) => {
-                inputs::Input::analog(self.id, self.offset, &label, view.recording())
+                let recording = view.recording();
+                let mut inputs = inputs::Input::analog(self.id, self.offset, &label, recording);
+                inputs.extend(view.filtered_channels().filter_map(|filtered| {
+                    inputs::Input::filtered(
+                        self.id,
+                        self.offset,
+                        &label,
+                        recording.channels(),
+                        filtered,
+                    )
+                }));
+                inputs
             }
             Capture::Digital(view) => {
                 let (recording, lanes) = view.recording();

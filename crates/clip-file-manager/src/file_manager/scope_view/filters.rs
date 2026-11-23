@@ -24,6 +24,7 @@ pub(super) struct Filters {
     lanes: BTreeMap<usize, Lane>,
     task: Option<(Request, Task<Result<Output, String>>)>,
     retry_at: f64,
+    generation: u64,
 }
 
 struct Lane {
@@ -44,9 +45,30 @@ struct Request {
 }
 
 struct Output {
-    raw: Arc<reads::RawChannel>,
+    samples: FilterSamples,
     overview: Envelope,
     bounds: Peak,
+}
+
+pub(in crate::file_manager) struct FilteredChannel<'a> {
+    pub channel: usize,
+    pub name: &'a str,
+    pub samples: Option<FilterSamples>,
+}
+
+#[derive(Clone)]
+pub(in crate::file_manager) struct FilterSamples {
+    pub generation: u64,
+    pub raw: Arc<reads::RawChannel>,
+}
+
+impl Lane {
+    fn ready(&self) -> Option<&Output> {
+        self.completed
+            .as_ref()
+            .filter(|key| key.rows == self.rows && key.stages == self.stages)?;
+        self.output.as_ref()
+    }
 }
 
 impl Viewer {
@@ -193,12 +215,13 @@ impl Viewer {
                 lane.top(),
                 Stroke::new(1.0, ink.gamma_multiply(0.32)),
             );
-            let status = match &derived.output {
+            let output = derived.ready();
+            let status = match output {
                 Some(_) => "",
                 None if derived.error.is_some() => " · unavailable",
                 None => " · filtering…",
             };
-            if let Some(output) = &derived.output {
+            if let Some(output) = output {
                 draw_output(clip, lane, &self.span, channel, output);
                 super::axes_y(painter, lane, output.bounds, &channel.unit, ink);
             }
@@ -353,9 +376,8 @@ impl Filters {
     pub(super) fn values(&self, time: f64) -> impl Iterator<Item = (usize, &str, Option<f32>)> {
         self.visible().map(move |(&index, lane)| {
             let value = lane
-                .output
-                .as_ref()
-                .and_then(|output| output.raw.value_at(time));
+                .ready()
+                .and_then(|output| output.samples.raw.value_at(time));
             (index, lane.name.as_str(), value)
         })
     }
@@ -366,12 +388,20 @@ impl Filters {
 
     pub(super) fn input(&self, channel: usize, unit: &str) -> Option<Input> {
         let lane = self.lanes.get(&channel)?;
-        let output = lane.output.as_ref()?;
+        let output = lane.ready()?;
         Some(Input::derived(
             lane.name.clone(),
             unit.to_owned(),
-            output.raw.clone(),
+            output.samples.raw.clone(),
         ))
+    }
+
+    pub(super) fn channels(&self) -> impl Iterator<Item = FilteredChannel<'_>> {
+        self.lanes.iter().map(|(&channel, lane)| FilteredChannel {
+            channel,
+            name: &lane.name,
+            samples: lane.ready().map(|output| output.samples.clone()),
+        })
     }
 
     pub(super) fn update(&mut self, ui: &Ui, recording: &Arc<Recording>, active: usize) {
@@ -412,11 +442,13 @@ impl Filters {
             return;
         }
         self.retry_at = now + 0.08;
+        self.generation = self.generation.wrapping_add(1);
+        let generation = self.generation;
         let recording = recording.clone();
         let ctx = ui.ctx().clone();
         let load = request.clone();
         let task = Task::start(&JOBS, Duration::from_secs(20), move |cancel| {
-            let result = load.run(&recording, cancel);
+            let result = load.run(&recording, generation, cancel);
             ctx.request_repaint();
             result
         });
@@ -453,7 +485,12 @@ impl Filters {
 }
 
 impl Request {
-    fn run(&self, recording: &Recording, cancel: &AtomicBool) -> Result<Output, String> {
+    fn run(
+        &self,
+        recording: &Recording,
+        generation: u64,
+        cancel: &AtomicBool,
+    ) -> Result<Output, String> {
         let mut raw = recording.checked(cancel, |capture| {
             reads::read_raw(capture, self.channel, self.rows.clone(), cancel)
         })?;
@@ -482,7 +519,10 @@ impl Request {
         };
         let bounds = overview.extrema();
         Ok(Output {
-            raw: Arc::new(raw),
+            samples: FilterSamples {
+                generation,
+                raw: Arc::new(raw),
+            },
             overview,
             bounds,
         })
@@ -496,21 +536,22 @@ fn draw_output(
     channel: &Channel,
     output: &Output,
 ) {
-    let (start, samples) = output.raw.visible(span);
+    let (start, samples) = output.samples.raw.visible(span);
     if samples.len() <= 4096 {
         plot::draw_raw(
             painter,
             lane,
             span,
             start,
-            output.raw.step,
+            output.samples.raw.step,
             samples,
             output.bounds,
             FILTER_COLOR,
         );
         return;
     }
-    let filtered = channel.time_at(output.raw.first)..output.raw.time(output.raw.samples.len());
+    let filtered = channel.time_at(output.samples.raw.first)
+        ..output.samples.raw.time(output.samples.raw.samples.len());
     let region = Rect::from_x_y_ranges(
         plot::x_at(lane, span, filtered.start)..=plot::x_at(lane, span, filtered.end),
         lane.y_range(),

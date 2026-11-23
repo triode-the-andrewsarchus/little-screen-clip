@@ -2,7 +2,10 @@ mod compute;
 mod decoders;
 mod frequency;
 
-use super::{inputs::Input, take_query_result, timeline};
+use super::{
+    inputs::{Input, Signature},
+    take_query_result, timeline,
+};
 use crate::file_manager::{logic_view, preview_job::Task, scope_view::plot};
 use compute::{Frame, Lane};
 use egui::{Align2, Color32, Context, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
@@ -33,7 +36,7 @@ pub(super) struct Derived {
 #[derive(Clone, PartialEq)]
 struct Key {
     revision: u64,
-    inputs: Vec<(String, u64)>,
+    inputs: Vec<Signature>,
     span: Range<f64>,
 }
 
@@ -42,8 +45,8 @@ impl Derived {
         !self.program.is_empty()
     }
 
-    pub(super) fn needs_inputs(&self) -> bool {
-        self.editor || self.active()
+    pub(super) fn editor_open(&self) -> bool {
+        self.editor
     }
 
     pub(super) fn button(&mut self, ui: &mut Ui) {
@@ -72,7 +75,7 @@ impl Derived {
                         .char_limit(12_000)
                         .hint_text("name = expression"),
                 ).on_hover_text("Use [n-1] for the previous sample. Declare the unit for feedback, for example smooth: V = 0.9 * smooth[n-1] + 0.1 * s1_c1");
-                ui.collapsing("Recorded inputs", |ui| {
+                ui.collapsing("Signal inputs", |ui| {
                     egui::ScrollArea::vertical()
                         .max_height(180.0)
                         .show(ui, |ui| {
@@ -88,6 +91,9 @@ impl Derived {
                                         self.draft.extend(input.alias.chars().take(remaining));
                                     }
                                     ui.label(&input.label);
+                                    if input.is_awaiting_filter() {
+                                        ui.weak("Awaiting filtered samples");
+                                    }
                                 });
                             }
                         });

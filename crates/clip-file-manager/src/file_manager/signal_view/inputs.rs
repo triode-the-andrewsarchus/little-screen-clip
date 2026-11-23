@@ -1,4 +1,5 @@
 use super::timeline::translate;
+use crate::file_manager::scope_view::{FilterSamples, FilteredChannel, reads::RawChannel};
 use little_clip_core::engineering::{
     analysis::{Binding, Dimension, SignalType, Value},
     logic::{Level, Trace},
@@ -22,11 +23,23 @@ pub(super) struct Input {
     source: Source,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct Signature {
+    alias: String,
+    offset: u64,
+    generation: Option<u64>,
+}
+
 #[derive(Clone)]
 enum Source {
     Analog {
         reader: Arc<Recording>,
         index: usize,
+    },
+    Filtered {
+        dimension: Dimension,
+        rate: f64,
+        samples: Option<FilterSamples>,
     },
     Digital {
         reader: Arc<logic_preview::Recording>,
@@ -40,6 +53,10 @@ pub(super) enum Samples {
         channel: Channel,
         first: u64,
         values: Vec<f32>,
+        offset: f64,
+    },
+    Filtered {
+        raw: Arc<RawChannel>,
         offset: f64,
     },
     Digital {
@@ -71,6 +88,28 @@ impl Input {
             .collect()
     }
 
+    pub(super) fn filtered(
+        id: u64,
+        offset: f64,
+        label: &str,
+        channels: &[Channel],
+        filtered: FilteredChannel<'_>,
+    ) -> Option<Self> {
+        let index = filtered.channel;
+        let channel = channels.get(index)?;
+        let name = filtered.name;
+        Some(Self {
+            alias: format!("s{id}_f{}", index + 1),
+            label: format!("{label} · {name}"),
+            offset,
+            source: Source::Filtered {
+                dimension: Dimension::from_unit(&channel.unit)?,
+                rate: channel.interval_seconds.recip(),
+                samples: filtered.samples,
+            },
+        })
+    }
+
     pub(super) fn digital(
         id: u64,
         offset: f64,
@@ -94,8 +133,20 @@ impl Input {
             .collect()
     }
 
-    pub(super) fn signature(&self) -> (String, u64) {
-        (self.alias.clone(), self.offset.to_bits())
+    pub(super) fn signature(&self) -> Signature {
+        let generation = match &self.source {
+            Source::Filtered { samples, .. } => samples.as_ref().map(|samples| samples.generation),
+            _ => None,
+        };
+        Signature {
+            alias: self.alias.clone(),
+            offset: self.offset.to_bits(),
+            generation,
+        }
+    }
+
+    pub(super) fn is_awaiting_filter(&self) -> bool {
+        matches!(self.source, Source::Filtered { samples: None, .. })
     }
 
     pub(super) fn binding(&self) -> Binding<'_> {
@@ -104,6 +155,7 @@ impl Input {
                 let unit = &reader.channels()[*index].unit;
                 SignalType::Analog(Dimension::from_unit(unit).unwrap_or(Dimension::SCALAR))
             }
+            Source::Filtered { dimension, .. } => SignalType::Analog(*dimension),
             Source::Digital { .. } => SignalType::Digital,
         };
         Binding {
@@ -117,6 +169,7 @@ impl Input {
             Source::Analog { reader, index } => {
                 Some(reader.channels()[*index].interval_seconds.recip())
             }
+            Source::Filtered { rate, .. } => Some(*rate),
             Source::Digital { rate, .. } => *rate,
         }
         .filter(|rate| rate.is_finite() && *rate > 0.0)
@@ -126,6 +179,14 @@ impl Input {
         let native = translate(span, -self.offset);
         match &self.source {
             Source::Analog { reader, index } => self.read_analog(reader, *index, native, cancel),
+            Source::Filtered { samples, .. } => {
+                Ok(samples
+                    .as_ref()
+                    .map_or(Samples::Empty, |samples| Samples::Filtered {
+                        raw: samples.raw.clone(),
+                        offset: self.offset,
+                    }))
+            }
             Source::Digital { reader, index, .. } => reader.checked(cancel, |capture| {
                 let Some(bounds) = capture.time_bounds(*index) else {
                     return Ok(Samples::Empty);
@@ -189,6 +250,10 @@ impl Samples {
                 let position = (time - offset - channel.time_at(*first)) / channel.interval_seconds;
                 interpolate(values, position).map(Value::Numeric)
             }
+            Self::Filtered { raw, offset } => {
+                let position = (time - offset - raw.start) / raw.step;
+                interpolate(&raw.samples, position).map(Value::Numeric)
+            }
             Self::Digital {
                 trace,
                 native,
@@ -237,6 +302,54 @@ fn interpolate(values: &[f32], position: f64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changed_filter_results_keep_their_name_but_invalidate_derived_readers() {
+        let channels = [Channel {
+            name: "CH1".into(),
+            unit: "V".into(),
+            sample_count: 8,
+            start_seconds: 0.0,
+            interval_seconds: 0.25,
+        }];
+        let raw = Arc::new(RawChannel {
+            first: 2,
+            start: 0.5,
+            step: 0.25,
+            samples: vec![1.0, 2.0, f32::NAN],
+        });
+        let input = |generation: Option<u64>| {
+            Input::filtered(
+                3,
+                1.0,
+                "capture",
+                &channels,
+                FilteredChannel {
+                    channel: 0,
+                    name: "Example filter",
+                    samples: generation.map(|generation| FilterSamples {
+                        generation,
+                        raw: raw.clone(),
+                    }),
+                },
+            )
+            .unwrap()
+        };
+        let pending = input(None::<u64>);
+        let ready = input(Some(1));
+        let changed = input(Some(2));
+        assert_eq!(pending.alias, "s3_f1");
+        assert_eq!(pending.alias, ready.alias);
+        assert!(pending.signature() != ready.signature());
+        assert!(ready.signature() != changed.signature());
+        let cancelled = AtomicBool::new(false);
+        let span = 1.0..2.5;
+        let data = ready.read(&span, &cancelled).unwrap();
+        assert!(matches!(data.at(1.625), Some(Value::Numeric(1.5))));
+        assert!(data.at(1.4).is_none());
+        assert!(data.at(1.9).is_none());
+        assert!(pending.read(&span, &cancelled).unwrap().at(1.625).is_none());
+    }
 
     #[test]
     fn interpolation_keeps_native_observations_and_does_not_bridge_missing_samples() {
