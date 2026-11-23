@@ -3,8 +3,8 @@ use crate::{
     file_manager::capture_browse::table::{Columns, Page, Response},
     ui_appearance::WorkbenchColors,
 };
-use egui::{Rect, Ui};
-use little_clip_core::engineering::packets::PacketRow;
+use egui::{Color32, Rect, Ui, vec2};
+use little_clip_core::engineering::packets::{PacketRow, Protocol};
 
 const COLUMNS: Columns<6> = Columns {
     id: "packet rows",
@@ -20,6 +20,7 @@ pub(super) fn show<'a>(
     page: Page<'_>,
     origin: Option<i128>,
     colors: WorkbenchColors,
+    colorize: bool,
     row: impl Fn(u64) -> Option<&'a PacketRow>,
 ) -> Response {
     COLUMNS.show(
@@ -29,6 +30,16 @@ pub(super) fn show<'a>(
         row,
         |packet| packet.header.row,
         |ui, rect, packet| {
+            if colorize {
+                let color = protocol_color(packet.protocol.protocol);
+                let painter = ui.painter();
+                painter.rect_filled(rect, 0.0, color.gamma_multiply(0.13));
+                painter.rect_filled(
+                    Rect::from_min_size(rect.min, vec2(2.0, rect.height())),
+                    0.0,
+                    color,
+                );
+            }
             row_contents(ui, rect, packet, origin, colors);
         },
     )
@@ -64,4 +75,36 @@ fn row_contents(
         ],
         colors.text_primary,
     );
+}
+
+fn protocol_color(protocol: Protocol) -> Color32 {
+    let [r, g, b] = match protocol {
+        Protocol::Tcp => [125, 117, 245],
+        Protocol::Udp => [69, 160, 247],
+        Protocol::Dns => [54, 196, 181],
+        Protocol::Icmp | Protocol::Icmpv6 => [229, 155, 73],
+        Protocol::Arp => [226, 193, 73],
+        Protocol::Ipv4 | Protocol::Ipv6 => [98, 175, 121],
+        _ => [136, 137, 160],
+    };
+    Color32::from_rgb(r, g, b)
+}
+
+pub(super) fn layer_color(name: &str, dark: bool) -> Color32 {
+    let protocol = match name {
+        "TCP" => Protocol::Tcp,
+        "UDP" => Protocol::Udp,
+        "DNS" => Protocol::Dns,
+        "ARP" => Protocol::Arp,
+        "IPv4" => Protocol::Ipv4,
+        "IPv6" => Protocol::Ipv6,
+        "ICMP" | "ICMPv6" => Protocol::Icmp,
+        _ => Protocol::Unknown,
+    };
+    let backdrop = if dark {
+        Color32::from_gray(33)
+    } else {
+        Color32::from_gray(247)
+    };
+    backdrop.lerp_to_gamma(protocol_color(protocol), if dark { 0.27 } else { 0.30 })
 }

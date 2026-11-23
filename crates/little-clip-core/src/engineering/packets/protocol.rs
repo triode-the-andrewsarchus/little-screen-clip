@@ -1,6 +1,7 @@
 use std::{
     fmt,
     net::{Ipv4Addr, Ipv6Addr},
+    ops::Range,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,17 +71,34 @@ pub struct ProtocolFields {
 }
 
 pub(super) fn inspect(link: u16, bytes: &[u8]) -> ProtocolFields {
+    describe(link, bytes).0
+}
+
+#[derive(Default)]
+pub(super) struct Locations {
+    pub network: Option<(u16, usize)>,
+    pub transport: Option<(u8, Range<usize>)>,
+}
+
+pub(super) fn describe(link: u16, bytes: &[u8]) -> (ProtocolFields, Locations) {
     let mut data = ProtocolFields::default();
-    let network = link_header(link, bytes, &mut data);
-    if let Some((kind, bytes)) = network {
-        match kind {
-            0x0800 => ipv4(bytes, &mut data),
-            0x86dd => ipv6(bytes, &mut data),
-            0x0806 => arp(bytes, &mut data),
-            _ => {}
-        }
+    let mut locations = Locations::default();
+    if let Some((kind, network)) = link_header(link, bytes, &mut data) {
+        let offset = bytes.len() - network.len();
+        locations.network = Some((kind, offset));
+        let transport = match kind {
+            0x0800 => ipv4(network, &mut data),
+            0x86dd => ipv6(network, &mut data),
+            0x0806 => {
+                arp(network, &mut data);
+                None
+            }
+            _ => None,
+        };
+        locations.transport =
+            transport.map(|(kind, range)| (kind, range.start + offset..range.end + offset));
     }
-    data
+    (data, locations)
 }
 
 fn extract<const N: usize>(bytes: &[u8], offset: usize) -> Option<[u8; N]> {
@@ -150,17 +168,17 @@ fn arp(bytes: &[u8], data: &mut ProtocolFields) {
     }
 }
 
-fn ipv4(bytes: &[u8], data: &mut ProtocolFields) {
+fn ipv4(bytes: &[u8], data: &mut ProtocolFields) -> Option<(u8, Range<usize>)> {
     let Some(head) = bytes.first_chunk::<20>() else {
-        return;
+        return None;
     };
     let header = usize::from(head[0] & 0x0f) * 4;
     if head[0] >> 4 != 4 || header < 20 {
-        return;
+        return None;
     }
     let length = usize::from(u16::from_be_bytes([head[2], head[3]]));
     if length < header {
-        return;
+        return None;
     }
     data.protocol = Protocol::Ipv4;
     data.source = extract::<4>(head, 12).map(|address| Endpoint::V4(address.into()));
@@ -171,15 +189,17 @@ fn ipv4(bytes: &[u8], data: &mut ProtocolFields) {
         && let Some(layer) = bytes.get(header..length.min(bytes.len()))
     {
         transport(head[9], layer, data);
+        return Some((head[9], header..header + layer.len()));
     }
+    None
 }
 
-fn ipv6(bytes: &[u8], data: &mut ProtocolFields) {
+fn ipv6(bytes: &[u8], data: &mut ProtocolFields) -> Option<(u8, Range<usize>)> {
     let Some(head) = bytes.first_chunk::<40>() else {
-        return;
+        return None;
     };
     if head[0] >> 4 != 6 {
-        return;
+        return None;
     }
     data.protocol = Protocol::Ipv6;
     data.source = extract::<16>(head, 8).map(|address| Endpoint::V6(address.into()));
@@ -200,13 +220,13 @@ fn ipv6(bytes: &[u8], data: &mut ProtocolFields) {
             44 => {
                 data.fragmented = true;
                 if word(rest, 2).is_none_or(|fragment| fragment & 0xfff8 != 0) {
-                    return;
+                    return None;
                 }
                 Some(8)
             }
             _ => {
                 transport(kind, rest, data);
-                return;
+                return Some((kind, end - rest.len()..end));
             }
         };
         let Some((next, tail)) = rest
@@ -214,11 +234,12 @@ fn ipv6(bytes: &[u8], data: &mut ProtocolFields) {
             .copied()
             .zip(length.and_then(|length| rest.get(length..)))
         else {
-            return;
+            return None;
         };
         kind = next;
         rest = tail;
     }
+    None
 }
 
 fn transport(kind: u8, layer: &[u8], data: &mut ProtocolFields) {

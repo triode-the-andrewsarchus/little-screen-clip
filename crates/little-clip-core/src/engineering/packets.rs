@@ -1,10 +1,12 @@
 //! File-backed classic PCAP and PCAPNG inspection for recorded network packets.
 
+mod details;
 mod export;
 mod index;
 mod legacy;
 mod ng;
 mod protocol;
+pub use details::{Field, Layer};
 mod source;
 
 pub use index::{ActivityBin, Index};
@@ -151,6 +153,11 @@ pub struct Packet {
 impl Packet {
     pub fn protocol(&self) -> ProtocolFields {
         protocol::inspect(self.header.link_type, &self.bytes)
+    }
+
+    /// Decodes fields and their byte ranges in this packet.
+    pub fn layers(&self) -> Vec<Layer> {
+        details::layers(self)
     }
 }
 

@@ -1,3 +1,4 @@
+use super::display_filter::{self, DisplayFilter};
 use crate::file_source::{FileSource, ReadCheck};
 use little_clip_core::engineering::packets::{
     self, Format, Index, Packet, PacketRow, Protocol, Reader, Summary,
@@ -9,6 +10,7 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
 };
 
 const SCAN_LIMIT: u64 = 4_000_000;
@@ -123,8 +125,9 @@ impl Capture {
         filter: &Filter,
         cancel: &AtomicBool,
     ) -> Result<Filtered, String> {
+        let end = index.points().min(SCAN_LIMIT);
+        let display = self.prepare_display(&filter.display, end, cancel)?;
         self.read(cancel, |reader| {
-            let end = index.points().min(SCAN_LIMIT);
             let mut result = Filtered {
                 rows: Vec::new(),
                 scanned: 0,
@@ -134,7 +137,7 @@ impl Capture {
                 let page = reader.read_window(index, result.scanned..next, cancel)?;
                 for row in page {
                     result.scanned = row.header.row + 1;
-                    if filter.matches(&row) {
+                    if filter.matches(&row) && display.matches(&row) {
                         result.rows.push(row);
                         if result.rows.len() == MATCH_LIMIT {
                             return Ok(result);
@@ -145,12 +148,70 @@ impl Capture {
             Ok(result)
         })
     }
+    fn prepare_display(
+        &self,
+        input: &str,
+        limit: u64,
+        cancel: &AtomicBool,
+    ) -> Result<DisplayMatches, String> {
+        if input.is_empty() || limit == 0 {
+            return Ok(DisplayMatches::All);
+        }
+        if let Some(filter) = DisplayFilter::compile(input) {
+            return Ok(DisplayMatches::Native(filter));
+        }
+        let tshark = little_clip_core::command_available("tshark").ok_or(
+            "This expression requires TShark. The built-in filter supports protocol names, IP addresses, TCP/UDP ports, TCP flags, frame lengths, and boolean operators."
+        )?;
+        let (file, _) = self.check.open(&self.path, Some(&self.revision), cancel)?;
+        let source = file.try_clone().map_err(message)?;
+        let output = little_clip_core::CommandRequest::new(tshark)
+            .args(["-n", "-r"])
+            .arg_owned_content_file(source)
+            .map_err(message)?
+            .arg("-c")
+            .arg(limit.to_string())
+            .arg("-Y")
+            .arg(input)
+            .args(["-T", "fields", "-e", "frame.number"])
+            .timeout(Duration::from_secs(80))
+            .max_output_bytes(32 * 1024 * 1024)
+            .die_with_parent()
+            .run_cancellable(cancel)
+            .map_err(message)?;
+        self.validate(&file, cancel)?;
+        if !output.status.success() {
+            let detail = output.stderr_lossy();
+            let detail = detail.trim();
+            return Err(format!(
+                "Display filter: {}",
+                &detail[..detail.floor_char_boundary(detail.len().min(512))]
+            ));
+        }
+        if output.stdout_truncated {
+            return Err("Display filter exceeded the result limit".into());
+        }
+        let text = std::str::from_utf8(&output.stdout).map_err(message)?;
+        let mut rows = Vec::new();
+        for number in text.lines() {
+            let number: u32 = number.parse().map_err(message)?;
+            if number == 0
+                || u64::from(number) > limit
+                || rows.last().is_some_and(|&last| last >= number)
+            {
+                return Err("TShark returned inconsistent frame numbers".into());
+            }
+            rows.push(number);
+        }
+        Ok(DisplayMatches::Frames(rows))
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct Filter {
     pub protocol: Option<Protocol>,
     endpoint: EndpointFilter,
+    display: String,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -162,7 +223,7 @@ enum EndpointFilter {
 }
 
 impl Filter {
-    pub fn new(protocol: Option<Protocol>, endpoint: &str) -> Self {
+    pub fn new(protocol: Option<Protocol>, endpoint: &str, display: &str) -> Self {
         let endpoint = endpoint.trim();
         let endpoint = if endpoint.is_empty() {
             EndpointFilter::Any
@@ -173,11 +234,15 @@ impl Filter {
         } else {
             EndpointFilter::Fragment(endpoint.to_ascii_lowercase())
         };
-        Self { protocol, endpoint }
+        Self {
+            protocol,
+            endpoint,
+            display: display.trim().to_owned(),
+        }
     }
 
     pub fn active(&self) -> bool {
-        self.protocol.is_some() || self.endpoint != EndpointFilter::Any
+        self.protocol.is_some() || self.endpoint != EndpointFilter::Any || !self.display.is_empty()
     }
 
     fn matches(&self, row: &PacketRow) -> bool {
@@ -185,7 +250,7 @@ impl Filter {
         let data = row.protocol;
         if self
             .protocol
-            .is_some_and(|protocol| protocol != data.protocol)
+            .is_some_and(|protocol| !display_filter::has_protocol(row, protocol))
         {
             return false;
         }
@@ -203,6 +268,22 @@ impl Filter {
                 .into_iter()
                 .flatten()
                 .any(|endpoint| endpoint.to_string().contains(fragment)),
+        }
+    }
+}
+
+enum DisplayMatches {
+    All,
+    Native(DisplayFilter),
+    Frames(Vec<u32>),
+}
+
+impl DisplayMatches {
+    fn matches(&self, row: &PacketRow) -> bool {
+        match self {
+            Self::All => true,
+            Self::Native(filter) => filter.matches(row),
+            Self::Frames(frames) => frames.binary_search(&((row.header.row + 1) as u32)).is_ok(),
         }
     }
 }

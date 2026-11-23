@@ -2,6 +2,7 @@
 
 mod activity;
 mod capture;
+mod display_filter;
 mod inspect;
 pub(super) mod strip;
 mod table;
@@ -50,6 +51,9 @@ pub(super) struct Viewer {
     packet: Option<Packet>,
     packet_job: Option<(u64, Job<Packet>)>,
     packet_failed: Option<u64>,
+    inspector: inspect::Inspector,
+    display_filter: String,
+    protocol_colors: bool,
     filter_protocol: Option<Protocol>,
     endpoint: String,
     filter: Option<Filter>,
@@ -82,6 +86,9 @@ impl Viewer {
             packet: None,
             packet_job: None,
             packet_failed: None,
+            inspector: inspect::Inspector::default(),
+            display_filter: String::new(),
+            protocol_colors: true,
             filter_protocol: None,
             endpoint: String::new(),
             filter: None,
@@ -223,8 +230,18 @@ impl Viewer {
                     .char_limit(80)
                     .desired_width(155.0),
             );
-            let submitted =
-                search.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let display = ui.add(
+                egui::TextEdit::singleline(&mut self.display_filter)
+                    .id_salt("packet display filter")
+                    .hint_text("Display filter  e.g. tcp.port == 443")
+                    .char_limit(2048)
+                    .desired_width((ui.available_width() - 65.0).clamp(210.0, 470.0)),
+            ).on_hover_text("Protocol names, IPs, ports, TCP flags, frame lengths, comparisons and boolean operators. TShark expands support for Wireshark display filters.");
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+                display.request_focus();
+            }
+            let submitted = (display.lost_focus() || search.lost_focus())
+                && ui.input(|input| input.key_pressed(egui::Key::Enter));
             if ui
                 .add_enabled(self.index.is_some(), egui::Button::new("Filter"))
                 .clicked()
@@ -235,8 +252,10 @@ impl Viewer {
             if self.filter.is_some() && ui.small_button("Clear").clicked() {
                 self.filter_protocol = None;
                 self.endpoint.clear();
+                self.display_filter.clear();
                 self.clear_filter();
             }
+            ui.checkbox(&mut self.protocol_colors, "Protocol colors");
             if self.filter_job.is_some() {
                 ui.weak("Filtering…");
             } else if let Some(result) = &self.filtered {
@@ -374,6 +393,7 @@ impl Viewer {
             },
             self.origin(),
             colors,
+            self.protocol_colors,
             |index| self.row_at(index),
         );
         if let Some((ordinal, extend)) = output.clicked {
@@ -382,7 +402,7 @@ impl Viewer {
         self.request_rows(ui.ctx(), output.visible);
     }
 
-    fn inspector(&self, ui: &mut Ui) {
+    fn inspector(&mut self, ui: &mut Ui) {
         let Some(row) = self.selected else {
             ui.weak("Select a packet to inspect its captured bytes");
             return;
@@ -403,7 +423,13 @@ impl Viewer {
                         .iter()
                         .find(|interface| interface.id == id)
                 });
-            inspect::show(ui, packet, interface, self.origin());
+            let origin = self.origin();
+            if let Some(expression) = self.inspector.show(ui, packet, interface, origin) {
+                self.display_filter = expression;
+                self.filter_protocol = None;
+                self.endpoint.clear();
+                self.apply_filter(ui.ctx());
+            }
         } else if self.packet_failed == Some(row) {
             ui.weak(format!("Packet {} unavailable", row + 1));
         } else {
@@ -533,7 +559,7 @@ impl Viewer {
         let Some(index) = self.index.clone() else {
             return;
         };
-        let filter = Filter::new(self.filter_protocol, &self.endpoint);
+        let filter = Filter::new(self.filter_protocol, &self.endpoint, &self.display_filter);
         if !filter.active() {
             self.clear_filter();
             return;
@@ -635,6 +661,11 @@ impl Viewer {
                         .map(|row| row.header.row)
                     {
                         self.focus_packet(ordinal);
+                    } else {
+                        self.selected = None;
+                        self.range = None;
+                        self.packet = None;
+                        self.packet_job = None;
                     }
                 }
                 Err(error) => self.error = Some(error),
