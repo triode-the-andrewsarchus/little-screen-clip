@@ -97,6 +97,7 @@ impl Inspector {
         }
         if let Some(target) = target {
             self.select(target, false);
+            self.reveal_field = true;
         }
     }
 
@@ -110,22 +111,24 @@ impl Inspector {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (index, layer) in self.layers.iter().enumerate() {
-                    if layer.fields.is_empty() {
-                        if ui
-                            .selectable_label(
-                                self.selection.as_ref() == Some(&layer.bytes),
-                                format!("{} · {} bytes", layer.name, layer.bytes.len()),
-                            )
-                            .clicked()
-                        {
-                            selection = Some(layer.bytes.clone());
-                        }
-                        continue;
-                    }
                     let expanded = self
                         .selection
                         .as_ref()
                         .is_some_and(|bytes| overlaps(bytes, &layer.bytes));
+                    if layer.fields.is_empty() {
+                        let response = ui.selectable_label(
+                            expanded,
+                            format!("{} · {} bytes", layer.name, layer.bytes.len()),
+                        );
+                        if expanded && self.reveal_field {
+                            response.scroll_to_me(None);
+                            self.reveal_field = false;
+                        }
+                        if response.clicked() {
+                            selection = Some(layer.bytes.clone());
+                        }
+                        continue;
+                    }
                     let mut header = egui::CollapsingHeader::new(format!(
                         "{} · {} bytes",
                         layer.name,
