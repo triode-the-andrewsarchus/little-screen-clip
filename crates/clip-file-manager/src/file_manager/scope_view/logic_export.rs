@@ -196,3 +196,37 @@ fn convert(
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file_source::ReadCheck;
+    use little_clip_core::engineering::logic::{Capture, Level};
+
+    #[test]
+    fn waveform_predicate_emits_a_readable_transition_exact_vcd() {
+        let mut sample = tempfile::Builder::new().suffix(".csv").tempfile().unwrap();
+        sample.write_all(b"X,CH1,Start,Increment,\nSequence,Volt,-0.000002,0.000001\n0,0,\n1,2,\n2,2,\n3,0,\n4,0,\n5,2,\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let recording = Recording::open(sample.path(), ReadCheck::default(), &cancel).unwrap();
+        let request = Request {
+            channel: 0,
+            span: -2e-6..4e-6,
+            expression: Expression::parse("CH1 > 1V", &["CH1"], 0).unwrap(),
+        };
+        let mut vcd = tempfile::Builder::new().suffix(".vcd").tempfile().unwrap();
+        request.write(&recording, &mut vcd, &cancel).unwrap();
+        let capture = Capture::open(std::fs::File::open(vcd.path()).unwrap(), vcd.path()).unwrap();
+        let edges = capture.read_edges(0, 0.0..6e-6, 20, &cancel).unwrap();
+        assert_eq!(edges.initial, Some(Level::Low));
+        let levels = edges
+            .edges
+            .iter()
+            .map(|edge| edge.level)
+            .collect::<Vec<_>>();
+        assert_eq!(levels, vec![Level::High, Level::Low, Level::High]);
+        for (edge, time) in edges.edges.iter().zip([1e-6, 3e-6, 5e-6]) {
+            assert!((edge.time_seconds - time).abs() <= 1e-12);
+        }
+    }
+}
