@@ -1,3 +1,5 @@
+mod handheld;
+
 use super::{Channel, Format, Plan, check_cancel};
 use std::{collections::BTreeMap, sync::atomic::AtomicBool};
 
@@ -83,15 +85,18 @@ pub(super) fn read(bytes: &[u8], cancel: &AtomicBool) -> Result<Plan, String> {
     if records.is_empty() {
         return Err("No addressed data in the Icom image".into());
     }
-    let model_name = if model == R8600 {
-        "IC-R8600".into()
+    let map_one = fields
+        .iter()
+        .any(|(field, value)| field.eq_ignore_ascii_case("MapRev") && value.trim() == "1");
+    let (model_name, channels) = if model == R8600 {
+        (
+            "IC-R8600".to_owned(),
+            r8600_channels(&records).unwrap_or_default(),
+        )
+    } else if map_one && let Some((model, channels)) = handheld::decode(model, &records) {
+        (model.to_owned(), channels)
     } else {
-        model.to_owned()
-    };
-    let channels = if model == R8600 {
-        r8600_channels(&records).unwrap_or_default()
-    } else {
-        Vec::new()
+        (model.to_owned(), Vec::new())
     };
     Ok(Plan {
         format: Format::Icom,
