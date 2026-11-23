@@ -14,14 +14,11 @@ use super::{
 };
 use crate::file_source::ReadCheck;
 use egui::{Context, Ui};
-use little_clip_core::{
-    BackgroundJobs, engineering::waveforms::display_value, palette::AppPalette,
-};
+use little_clip_core::{engineering::waveforms::display_value, palette::AppPalette};
 use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
-    time::Duration,
 };
 use timeline::{Link, translate};
 
@@ -29,17 +26,12 @@ pub(super) const MAX_SOURCES: usize = 8;
 
 pub(super) struct Viewer {
     sources: Vec<Source>,
-    next_source: u64,
     derived: derived::Derived,
     alignment: alignment::Alignment,
     domain: Range<f64>,
     span: Range<f64>,
     probe: Option<f64>,
     reference: Option<Reference>,
-    add_path: String,
-    add_open: bool,
-    add_focus: bool,
-    adding: Option<Task<Result<Source, String>>>,
     error: Option<String>,
 }
 
@@ -95,7 +87,7 @@ pub(super) fn take_query_result<K, T: Send + 'static>(
 
 impl Viewer {
     pub(super) fn load(path: &Path, format: Format, cancel: &AtomicBool) -> Result<Self, String> {
-        let source = Source::load(path.to_owned(), Some(format), cancel)?;
+        let source = Source::load(path, Some(format), cancel)?;
         Ok(Self::new(vec![source]))
     }
 
@@ -105,7 +97,10 @@ impl Viewer {
         }
         paths
             .into_iter()
-            .map(|path| Source::load(path, None, cancel))
+            .map(|path| {
+                Source::load(&path, None, cancel)
+                    .map_err(|error| format!("{}: {error}", path.display()))
+            })
             .collect::<Result<_, _>>()
             .map(Self::new)
     }
@@ -115,20 +110,14 @@ impl Viewer {
             source.id = index as u64 + 1;
         }
         let domain = extent(&sources);
-        let next_source = sources.len() as u64 + 1;
         Self {
             sources,
-            next_source,
             derived: derived::Derived::default(),
             alignment: alignment::Alignment::default(),
             span: domain.clone(),
             domain,
             probe: None,
             reference: None,
-            add_path: String::new(),
-            add_open: false,
-            add_focus: false,
-            adding: None,
             error: None,
         }
     }
@@ -171,7 +160,6 @@ impl Viewer {
         palette: &AppPalette,
         copies: &mut Copies,
     ) {
-        self.poll_add(ui.ctx());
         let mut shell = crate::shell::StudioShell::new(
             "Signal analysis",
             crate::icons::Icon::Waves,
@@ -197,28 +185,11 @@ impl Viewer {
         } else {
             self.linked(ui, palette, copies);
         }
-        if self.add_open {
-            self.add_dialog(ui.ctx());
-        }
     }
 
     fn controls(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    self.adding.is_none() && self.sources.len() < MAX_SOURCES,
-                    egui::Button::new("Add source"),
-                )
-                .clicked()
-            {
-                self.add_open = true;
-                self.add_focus = true;
-            }
             self.derived.button(ui);
-            if self.adding.is_some() {
-                ui.spinner();
-                ui.weak("Opening recording…");
-            }
             if self.sources.len() > 1 {
                 if ui.button("Match timing").clicked() {
                     let pinned = self.reference_time();
@@ -270,87 +241,6 @@ impl Viewer {
                 Some("This offset cannot be represented on the current source timeline.".into());
         }
         ctx.request_repaint();
-    }
-
-    fn add_dialog(&mut self, ctx: &Context) {
-        let dialog = egui::Modal::new(egui::Id::unique("add-signal-source")).show(ctx, |ui| {
-            ui.heading("Add source");
-            let field = egui::Id::unique("signal-add-path");
-            if std::mem::take(&mut self.add_focus) {
-                ui.memory_mut(|mem| mem.request_focus(field));
-            }
-            let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
-            let entry = ui.add(
-                egui::TextEdit::singleline(&mut self.add_path)
-                    .id(field)
-                    .hint_text("File path")
-                    .desired_width(400.0),
-            );
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
-                    ui.close();
-                }
-                let enabled = !self.add_path.trim().is_empty();
-                let add = ui
-                    .add_enabled(enabled, egui::Button::new("Add recording"))
-                    .clicked();
-                add || (enabled && enter && (entry.has_focus() || entry.lost_focus()))
-            })
-            .inner
-        });
-        if dialog.inner {
-            self.add_open = false;
-            self.add(ctx);
-        } else if dialog.should_close() {
-            self.add_open = false;
-        }
-    }
-
-    fn add(&mut self, ctx: &Context) {
-        let Some(parent) = self.sources[0].path.parent() else {
-            return;
-        };
-        let input = self.add_path.trim();
-        if input.is_empty() {
-            return;
-        }
-        let path = parent.join(input);
-        if self.sources.iter().any(|source| source.path == path) {
-            self.error = Some("This recording is already open.".into());
-            return;
-        }
-        self.error = None;
-        let ctx = ctx.clone();
-        self.adding = Some(Task::start(
-            BackgroundJobs::global(),
-            Duration::from_secs(60),
-            move |cancel| {
-                let result = Source::load(path, None, cancel);
-                ctx.request_repaint();
-                result
-            },
-        ));
-    }
-
-    fn poll_add(&mut self, ctx: &Context) {
-        let Some(task) = &self.adding else { return };
-        if let Some(result) = task.poll() {
-            self.adding = None;
-            match result
-                .map_err(|error| error.to_string())
-                .and_then(|source| source)
-            {
-                Ok(mut source) => {
-                    source.id = self.next_source;
-                    self.next_source = self.next_source.saturating_add(1);
-                    self.sources.push(source);
-                    self.add_path.clear();
-                }
-                Err(error) => self.error = Some(error),
-            }
-        } else {
-            ctx.request_repaint_after(Duration::from_millis(35));
-        }
     }
 
     fn linked(&mut self, ui: &mut Ui, palette: &AppPalette, copies: &mut Copies) {
@@ -473,33 +363,30 @@ impl Viewer {
 }
 
 impl Source {
-    fn load(path: PathBuf, format: Option<Format>, cancel: &AtomicBool) -> Result<Self, String> {
+    fn load(path: &Path, format: Option<Format>, cancel: &AtomicBool) -> Result<Self, String> {
         let format = format
-            .or_else(|| little_clip_core::file_format::recognize_engineering(&path, cancel))
-            .or_else(|| Format::for_path(&path));
+            .or_else(|| little_clip_core::file_format::recognize_engineering(path, cancel))
+            .or_else(|| Format::for_path(path));
         let capture = match format {
             Some(Format::Oscilloscope | Format::PowerRecording) => {
-                Capture::Analog(Box::new(scope_view::Viewer::load(&path, cancel)?))
+                Capture::Analog(Box::new(scope_view::Viewer::load(path, cancel)?))
             }
             Some(Format::LogicCapture) => {
-                Capture::Digital(Box::new(logic_view::Viewer::load(&path, cancel)?))
+                Capture::Digital(Box::new(logic_view::Viewer::load(path, cancel)?))
             }
             None if path
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("wav")) =>
             {
-                Capture::Analog(Box::new(scope_view::Viewer::load(&path, cancel)?))
+                Capture::Analog(Box::new(scope_view::Viewer::load(path, cancel)?))
             }
             _ => {
-                return Err(format!(
-                    "{} is not a supported signal recording.",
-                    path.display()
-                ));
+                return Err("Unsupported signal recording.".into());
             }
         };
         Ok(Self {
             id: 0,
-            path,
+            path: path.to_path_buf(),
             offset: 0.0,
             capture,
         })

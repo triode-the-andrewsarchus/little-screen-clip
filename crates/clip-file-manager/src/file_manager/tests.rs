@@ -1416,6 +1416,33 @@ fn multiselection_ranges_toggles_select_all_and_refresh_preserve_valid_members()
 }
 
 #[test]
+fn opening_multiple_recordings_uses_the_existing_selection() {
+    let root = populated_folder(&["a.wfm", "b.vcd", "notes.txt"]);
+    let (mut browser, _jobs) = loaded(root.path());
+    let scope = root.path().join("a.wfm");
+    let logic = root.path().join("b.vcd");
+    let notes = root.path().join("notes.txt");
+
+    browser.select(scope.clone());
+    browser.open_selected();
+    assert_eq!(browser.open_file.take(), Some(scope.clone()));
+
+    browser.select_with(logic.clone(), true, false);
+    browser.open_selected();
+    assert!(matches!(
+        browser.engineering_selection.take(),
+        Some(EngineeringAction::Analyze)
+    ));
+    assert_eq!(browser.selected_paths(), [scope, logic]);
+    assert!(browser.open_file.is_none());
+
+    browser.select_with(notes, true, false);
+    browser.open_selected();
+    assert!(browser.engineering_selection.is_none());
+    assert_eq!(browser.selection_count(), 3);
+}
+
+#[test]
 fn quiet_external_refresh_preserves_unrelated_selection_and_address_draft() {
     let root = populated_folder(&["selected"]);
     let (mut browser, jobs) = loaded(root.path());

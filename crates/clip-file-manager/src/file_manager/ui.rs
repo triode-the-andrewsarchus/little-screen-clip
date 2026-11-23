@@ -315,7 +315,7 @@ impl FileManager {
         }
     }
 
-    fn browser_modal(&self) -> bool {
+    pub(super) fn browser_modal(&self) -> bool {
         self.edits.dialog.is_some()
             || self.transfers_modal()
             || self.search.preferences.open

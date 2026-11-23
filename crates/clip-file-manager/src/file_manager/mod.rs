@@ -1036,6 +1036,9 @@ impl FileManager {
 
     fn open_selected(&mut self) {
         if self.selection_count() != 1 {
+            if self.can_analyze_selection() {
+                self.engineering_selection = Some(EngineeringAction::Analyze);
+            }
             return;
         }
         let selected = self

@@ -90,6 +90,17 @@ impl FileManager {
             })
     }
 
+    pub(super) fn can_analyze_selection(&self) -> bool {
+        self.location().is_some_and(|location| {
+            (2..=super::signal_view::MAX_SOURCES).contains(&location.selection.len())
+                && location
+                    .selection
+                    .iter()
+                    .all(|path| super::signal_view::supports_path(path))
+                && self.comparison_paths().is_ok()
+        })
+    }
+
     pub(super) fn comparison_paths(&self) -> Result<Vec<PathBuf>, String> {
         let paths = self.selected_paths();
         let entries = self.displayed_entries();

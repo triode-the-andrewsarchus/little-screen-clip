@@ -489,16 +489,6 @@ impl FileManagerApp {
         if self.viewers.active() || !self.browser.can_compare_selection() {
             return;
         }
-        if self
-            .browser
-            .selected_paths()
-            .iter()
-            .all(|path| super::signal_view::supports_path(path))
-            && ui.button("Analyze signals together").clicked()
-        {
-            self.browser.engineering_selection = Some(super::EngineeringAction::Analyze);
-            ui.close();
-        }
         if ui.button("Compare selected files").clicked() {
             self.browser.engineering_selection = Some(super::EngineeringAction::Compare);
             ui.close();
@@ -859,16 +849,30 @@ impl eframe::App for FileManagerApp {
                         .inner_margin(egui::Margin::symmetric(8, 3)),
                 )
                 .show(root, |ui| {
+                    let analyze = self.browser.can_analyze_selection();
                     ui.allocate_ui_with_layout(
                         egui::vec2(
                             ui.available_width(),
-                            ui.text_style_height(&egui::TextStyle::Body),
+                            ui.text_style_height(&egui::TextStyle::Body)
+                                .max(clip_ui::ui_ext::COMPACT_CONTROL_HEIGHT),
                         ),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
                             ui.add(
                                 egui::Label::new(self.browser.selection_summary()).truncate(),
                             );
+                            if analyze
+                                && ui.add_enabled(
+                                    !self.browser.browser_modal(),
+                                    clip_ui::buttons::ButtonRole::Primary
+                                        .button("Analyze recordings", &self.palette)
+                                        .compact(),
+                                )
+                                .on_hover_text("Open the selected recordings on one timeline [Enter]")
+                                .clicked()
+                            {
+                                self.browser.open_selected();
+                            }
                             if self.browser.music.busy() || self.browser.music.copying() || self.browser.preview_copies.busy() { ui.spinner(); }
                             if let Some(error) = &self.browser.music.error {
                                 ui.separator();

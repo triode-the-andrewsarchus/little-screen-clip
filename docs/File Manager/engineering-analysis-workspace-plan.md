@@ -8,9 +8,9 @@ The branch adds four floating interfaces for adding a recording, editing equatio
 
 ## 1. Open a set of recordings from Files
 
-- [ ] Open a supported multi-selection with Enter or a visible action beside the selection count. Keep the normal single-file action and the explicit file comparison command.
-- [ ] Use the existing guarded background loader and identify a file by name if its contents fail to load. Return to the original selection when the viewer closes.
-- [ ] Remove the typed-path recording dialog. Exercise a mixed selection across expanded folders, mouse and keyboard opening, one unsupported recording and the return to Files.
+- [x] Open a supported multi-selection with Enter or a visible action beside the selection count. Keep the normal single-file action and the explicit file comparison command.
+- [x] Use the existing guarded background loader and identify a file by name if its contents fail to load. Return to the original selection when the viewer closes.
+- [x] Remove the typed-path recording dialog. Exercise a mixed selection across expanded folders, mouse and keyboard opening, one unsupported recording and the return to Files.
 
 ## 2. Make scope and equation state readable at the trace
 
