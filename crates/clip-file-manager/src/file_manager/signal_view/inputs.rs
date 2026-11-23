@@ -133,6 +133,10 @@ impl Input {
             .collect()
     }
 
+    pub(super) fn offset(&self) -> f64 {
+        self.offset
+    }
+
     pub(super) fn signature(&self) -> Signature {
         let generation = match &self.source {
             Source::Filtered { samples, .. } => samples.as_ref().map(|samples| samples.generation),

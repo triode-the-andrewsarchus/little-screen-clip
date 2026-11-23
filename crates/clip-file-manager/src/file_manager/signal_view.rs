@@ -1,5 +1,6 @@
 //! Mixed-signal analysis on a shared timeline with native source clocks.
 
+mod alignment;
 mod derived;
 pub(super) mod filter_editor;
 pub(super) mod frequency_plot;
@@ -30,6 +31,7 @@ pub(super) struct Viewer {
     sources: Vec<Source>,
     next_source: u64,
     derived: derived::Derived,
+    alignment: alignment::Alignment,
     domain: Range<f64>,
     span: Range<f64>,
     probe: Option<f64>,
@@ -118,6 +120,7 @@ impl Viewer {
             sources,
             next_source,
             derived: derived::Derived::default(),
+            alignment: alignment::Alignment::default(),
             span: domain.clone(),
             domain,
             probe: None,
@@ -177,6 +180,7 @@ impl Viewer {
         );
         shell.render_header(ui, |_| {});
         self.controls(ui);
+        self.align_recordings(ui.ctx());
         let inputs = if self.derived.editor_open() {
             self.sources.iter().flat_map(Source::inputs).collect()
         } else {
@@ -216,6 +220,10 @@ impl Viewer {
                 ui.weak("Opening recording…");
             }
             if self.sources.len() > 1 {
+                if ui.button("Match timing").clicked() {
+                    let pinned = self.reference_time();
+                    self.alignment.open_at(&self.span, pinned);
+                }
                 if ui.button("Fit all").clicked() {
                     self.span = extent(&self.sources);
                 }
@@ -227,6 +235,41 @@ impl Viewer {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
         });
+    }
+
+    fn align_recordings(&mut self, ctx: &Context) {
+        if !self.alignment.open {
+            return;
+        }
+        let entries = self
+            .sources
+            .iter()
+            .flat_map(|source| {
+                source
+                    .inputs()
+                    .into_iter()
+                    .filter(|input| !input.is_awaiting_filter())
+                    .map(|input| alignment::Entry {
+                        source: source.id,
+                        input,
+                    })
+            })
+            .collect::<Vec<_>>();
+        let pinned = self.reference_time();
+        let Some(suggestion) = self.alignment.window(ctx, &entries, &self.span, pinned) else {
+            return;
+        };
+        let applied = self
+            .sources
+            .iter_mut()
+            .find(|source| source.id == suggestion.source)
+            .filter(|source| source.offset == suggestion.base)
+            .is_some_and(|source| source.set_offset(suggestion.offset));
+        if !applied {
+            self.error =
+                Some("This offset cannot be represented on the current source timeline.".into());
+        }
+        ctx.request_repaint();
     }
 
     fn add_dialog(&mut self, ctx: &Context) {
@@ -319,6 +362,7 @@ impl Viewer {
         let mut next_probe = None;
         let mut action = None;
         let reference_time = self.reference_time();
+        let preview = self.alignment.preview();
         let may_remove = self.sources.len() > 1;
         let height = (ui.available_height() / self.sources.len() as f32 - 50.0).max(205.0);
         egui::ScrollArea::vertical()
@@ -332,29 +376,30 @@ impl Viewer {
                             .as_ref()
                             .is_some_and(|pin| pin.path == source.path);
                         if let Some(request) =
-                            source.controls(ui, may_remove, reference_time, is_reference)
+                            source.controls(ui, may_remove, reference_time, is_reference, preview)
                         {
                             action = Some((index, request));
                         }
-                        let previous = translate(&self.span, -source.offset);
+                        let offset = source.display_offset(preview);
+                        let previous = translate(&self.span, -offset);
                         *source.capture.span() = previous.clone();
                         let link = Link {
-                            domain: translate(&self.domain, -source.offset),
-                            offset: source.offset,
-                            probe: self.probe.map(|probe| probe - source.offset),
-                            reference: reference_time.map(|time| time - source.offset),
+                            domain: translate(&self.domain, -offset),
+                            offset,
+                            probe: self.probe.map(|probe| probe - offset),
+                            reference: reference_time.map(|time| time - offset),
                         };
                         let height = height.max(source.capture.min_height());
                         ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
                             if let Some(probe) =
                                 source.capture.content(ui, palette, copies, Some(&link))
                             {
-                                next_probe = Some(probe + source.offset);
+                                next_probe = Some(probe + offset);
                             }
                         });
                         let view = source.capture.span();
                         if *view != previous {
-                            self.span = translate(view, source.offset);
+                            self.span = translate(view, offset);
                             ui.ctx().request_repaint();
                         }
                         ui.separator();
@@ -494,6 +539,7 @@ impl Source {
         may_remove: bool,
         reference: Option<f64>,
         is_reference: bool,
+        preview: Option<alignment::Suggestion>,
     ) -> Option<SourceAction> {
         ui.horizontal(|ui| {
             let name = self
@@ -518,6 +564,10 @@ impl Source {
                 .changed()
             {
                 self.set_offset(proposed);
+            }
+            let displayed = self.display_offset(preview);
+            if displayed != self.offset {
+                ui.monospace(format!("Preview {}", display_value(displayed, "s")));
             }
             let align = ui
                 .menu_button(if is_reference { "Reference" } else { "Align" }, |ui| {
@@ -565,9 +615,20 @@ impl Source {
         .inner
     }
 
-    fn set_offset(&mut self, offset: f64) -> bool {
+    fn display_offset(&self, preview: Option<alignment::Suggestion>) -> f64 {
+        preview
+            .filter(|preview| preview.source == self.id && preview.base == self.offset)
+            .filter(|preview| self.accepts_offset(preview.offset))
+            .map_or(self.offset, |preview| preview.offset)
+    }
+
+    fn accepts_offset(&self, offset: f64) -> bool {
         let extent = translate(&self.capture.domain(), offset);
-        if extent.is_empty() || !extent.start.is_finite() || !extent.end.is_finite() {
+        !extent.is_empty() && extent.start.is_finite() && extent.end.is_finite()
+    }
+
+    fn set_offset(&mut self, offset: f64) -> bool {
+        if !self.accepts_offset(offset) {
             return false;
         }
         self.offset = offset;
