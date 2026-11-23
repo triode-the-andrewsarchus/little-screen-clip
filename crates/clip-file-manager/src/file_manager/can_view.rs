@@ -2,6 +2,8 @@
 
 mod activity;
 mod capture;
+mod database;
+mod signal_plot;
 pub(super) mod strip;
 mod table;
 
@@ -57,6 +59,7 @@ pub(super) struct Viewer {
     id_input: String,
     filtered: Option<Filtered>,
     filter_job: Option<Job<Filtered>>,
+    database: database::Panel,
     error: Option<String>,
 }
 
@@ -92,6 +95,7 @@ impl Viewer {
             id_input: String::new(),
             filtered: None,
             filter_job: None,
+            database: database::Panel::default(),
             error: None,
         })
     }
@@ -109,6 +113,7 @@ impl Viewer {
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette, copies: &mut Copies) {
         self.poll();
+        self.database.poll();
         let colors = WorkbenchColors::from_palette(palette);
         let mut shell = crate::shell::StudioShell::new(
             "CAN capture",
@@ -120,14 +125,17 @@ impl Viewer {
         self.toolbar(ui, copies);
         self.filter_controls(ui);
         self.timeline(ui, colors);
+        self.signal_plot(ui, colors, copies);
         self.navigation(ui);
         self.browser(ui, colors);
         self.request_index(ui.ctx());
         self.request_detail(ui.ctx());
+        self.database.dialog(ui.ctx(), &self.capture);
         if self.index_job.is_some()
             || self.windows.pending()
             || self.detail_job.is_some()
             || self.filter_job.is_some()
+            || self.database.pending()
         {
             ui.ctx().request_repaint_after(Duration::from_millis(24));
         }
@@ -245,6 +253,7 @@ impl Viewer {
                     };
                     ui.weak(label);
                 }
+                self.database.toolbar(ui);
                 (submitted || top.is_some() || clicked, clear)
             })
             .inner;
@@ -261,8 +270,13 @@ impl Viewer {
     fn timeline(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         let full = activity::domain(self.summary());
         let mut visible = self.viewport.clone().unwrap_or_else(|| full.clone());
+        let height = if self.database.plot_open() {
+            42.0
+        } else {
+            92.0
+        };
         let (rect, response) =
-            ui.allocate_exact_size(vec2(ui.available_width(), 92.0), Sense::click_and_drag());
+            ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
         if let Some(pointer) = response.hover_pos() {
             let delta = ui.input(|input| input.smooth_scroll_delta().y);
             if delta != 0.0 {
@@ -366,6 +380,37 @@ impl Viewer {
         }
     }
 
+    fn signal_plot(&mut self, ui: &mut Ui, colors: WorkbenchColors, copies: &mut Copies) {
+        let full = activity::domain(self.summary());
+        let viewport = signal_plot::Viewport {
+            span: self.viewport.as_ref().unwrap_or(&full),
+            selection: self.selected_span(),
+            selected_time: self
+                .selected
+                .and_then(|row| self.source_frame(row))
+                .map(|frame| frame.timestamp_ns),
+            origin: full.start,
+        };
+        if let Some(row) = self.database.plot(
+            ui,
+            &self.capture,
+            self.index.as_ref(),
+            viewport,
+            colors,
+            copies,
+        ) {
+            if self.filtered.as_ref().is_some_and(|filtered| {
+                filtered
+                    .frames
+                    .binary_search_by_key(&row, |frame| frame.row)
+                    .is_err()
+            }) {
+                self.clear_filter();
+            }
+            self.focus_frame(row);
+        }
+    }
+
     fn navigation(&mut self, ui: &mut Ui) {
         let count = self.table_count();
         let source = self
@@ -422,10 +467,14 @@ impl Viewer {
         let count = table_count.saturating_sub(self.page).min(PAGE_ROWS) as usize;
         let origin = activity::domain(self.summary()).start;
         let height = ui.available_height();
-        let details = if self.selected.is_some() {
-            (height * 0.34).clamp(70.0, 152.0)
-        } else {
+        let details = if self.selected.is_none() {
             0.0
+        } else if self.database.attached() {
+            (height * 0.56)
+                .clamp(184.0, 230.0)
+                .min((height - 80.0).max(105.0))
+        } else {
+            (height * 0.34).clamp(70.0, 152.0)
         };
         let table = table::show(
             ui,
@@ -451,8 +500,8 @@ impl Viewer {
         self.request_rows(ui.ctx(), table.visible);
         if let Some(row) = self.selected {
             ui.separator();
-            if let Some(frame) = self.source_frame(row) {
-                table::details(ui, frame, origin, details - 49.0);
+            if let Some(frame) = self.source_frame(row).cloned() {
+                self.database.inspect(ui, &frame, origin, details, colors);
             } else {
                 ui.weak(format!("Reading frame {}…", row + 1));
             }

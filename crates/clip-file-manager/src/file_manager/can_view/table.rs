@@ -64,7 +64,13 @@ fn contents(ui: &Ui, rect: Rect, frame: &Frame, origin: i128, colors: WorkbenchC
     );
 }
 
-pub(super) fn details(ui: &mut Ui, frame: &Frame, origin: i128, height: f32) {
+pub(super) fn details(
+    ui: &mut Ui,
+    frame: &Frame,
+    origin: i128,
+    height: f32,
+    field: Option<&little_clip_core::engineering::can::dbc::Field>,
+) {
     ui.horizontal_wrapped(|ui| {
         ui.strong(format!("Frame {}", frame.row + 1));
         ui.monospace(activity::time_label(frame.timestamp_ns - origin))
@@ -115,7 +121,6 @@ pub(super) fn details(ui: &mut Ui, frame: &Frame, origin: i128, height: f32) {
                 ui.weak("No payload bytes");
             }
             for (row, bytes) in frame.data.chunks(16).enumerate() {
-                let bytes_hex = hex(bytes);
                 let ascii: String = bytes
                     .iter()
                     .map(|byte| {
@@ -126,7 +131,48 @@ pub(super) fn details(ui: &mut Ui, frame: &Frame, origin: i128, height: f32) {
                         }
                     })
                     .collect();
-                ui.monospace(format!("{:04X}  {:47}  {ascii}", row * 16, bytes_hex));
+                if let Some(field) = field {
+                    highlight_payload(ui, row * 16, bytes, &ascii, field);
+                } else {
+                    ui.monospace(format!("{:04X}  {:47}  {ascii}", row * 16, hex(bytes)));
+                }
             }
         });
+}
+
+fn highlight_payload(
+    ui: &mut Ui,
+    start: usize,
+    bytes: &[u8],
+    ascii: &str,
+    field: &little_clip_core::engineering::can::dbc::Field,
+) {
+    use egui::text::{LayoutJob, TextFormat};
+    let mut layout = LayoutJob::default();
+    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+    let normal = TextFormat::simple(font_id, ui.visuals().text_color());
+    let mut marked = normal.clone();
+    marked.background = ui.visuals().selection.bg_fill.gamma_multiply(0.55);
+    let mut active = [0u8; 16];
+    for &bit in field.bits() {
+        let byte = usize::from(bit / 8);
+        if (start..start + 16).contains(&byte) {
+            active[byte - start] |= 1 << (bit % 8);
+        }
+    }
+    layout.append(&format!("{start:04X}  "), 0.0, normal.clone());
+    for (&byte, &mask) in bytes.iter().zip(&active) {
+        let style = if mask > 0 { &marked } else { &normal };
+        layout.append(&format!("{byte:02X}"), 0.0, style.clone());
+        layout.append(" ", 0.0, normal.clone());
+    }
+    let padding = " ".repeat((16 - bytes.len()) * 3 + 1);
+    layout.append(&format!("{padding}{ascii}"), 0.0, normal);
+    let mask = active[..bytes.len()]
+        .iter()
+        .map(|mask| format!("{mask:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    ui.label(layout)
+        .on_hover_text(format!("{} · bit mask {mask}", field.name));
 }

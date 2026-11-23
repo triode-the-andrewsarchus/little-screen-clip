@@ -1,7 +1,10 @@
+use super::signal_plot::Signal;
 use crate::file_source::{FileSource, ReadCheck};
-use little_clip_core::engineering::can::{self, Filter, Filtered, Frame, Index, Summary};
+use little_clip_core::engineering::can::{
+    self, Filter, Filtered, Frame, Index, Summary, dbc, series,
+};
 use std::{
-    io::{BufWriter, Write},
+    io::{BufWriter, Read, Write},
     ops::Range,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
@@ -49,6 +52,54 @@ impl Capture {
         self.revision.check()?;
         self.check.validate(cancel)?;
         Ok(result)
+    }
+
+    pub fn database(
+        &self,
+        path: &Path,
+        cancel: &AtomicBool,
+    ) -> Result<(PathBuf, dbc::Database), String> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or("CAN capture has no parent directory")?;
+        let path = parent.join(path);
+        let (file, revision) = self.check.open(&path, None, cancel)?;
+        let mut bytes = Vec::new();
+        (&file)
+            .take(dbc::MAX_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        let database = dbc::Database::parse(&bytes, cancel)?;
+        revision.check_file(&file)?;
+        revision.check()?;
+        self.check.validate(cancel)?;
+        Ok((path, database))
+    }
+
+    pub fn signal_series(
+        &self,
+        index: &Index,
+        database: &dbc::Database,
+        target: &Signal,
+        time_ns: Range<i128>,
+        cancel: &AtomicBool,
+    ) -> Result<series::Series, String> {
+        let message = database
+            .message(target.id)
+            .ok_or("The DBC message is unavailable")?;
+        self.read(cancel, |capture| {
+            capture.signal_series(
+                index,
+                series::Query {
+                    time_ns,
+                    channel: &target.channel,
+                    message,
+                    field: target.field,
+                },
+                cancel,
+            )
+        })
     }
 
     pub fn index(&self, cancel: &AtomicBool) -> Result<Index, String> {

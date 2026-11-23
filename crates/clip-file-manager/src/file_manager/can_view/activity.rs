@@ -22,7 +22,7 @@ pub(super) fn at(rect: Rect, span: &Domain, x: f32) -> i128 {
     span.start + ((span.end - span.start) as f64 * f64::from(fraction)).round() as i128
 }
 
-fn x(rect: Rect, span: &Domain, time: i128) -> f32 {
+pub(super) fn x(rect: Rect, span: &Domain, time: i128) -> f32 {
     let fraction = (time - span.start) as f64 / (span.end - span.start).max(1) as f64;
     rect.left() + rect.width() * (fraction as f32).clamp(0.0, 1.0)
 }
