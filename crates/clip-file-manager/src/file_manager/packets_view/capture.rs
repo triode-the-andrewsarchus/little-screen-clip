@@ -292,40 +292,71 @@ fn frame_numbers(output: &[u8], limit: u64) -> Result<Vec<u32>, String> {
     Ok(rows)
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub(super) struct Filter {
     pub protocol: Option<Protocol>,
     endpoint: EndpointFilter,
     display: String,
     conversation: Option<(ConversationKey, ConversationScope)>,
+    time_restriction: Option<TimeRestriction>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 enum EndpointFilter {
+    #[default]
     Any,
     Address(IpAddr),
     Port(u16),
     Fragment(String),
 }
 
-impl Filter {
-    pub fn new(protocol: Option<Protocol>, endpoint: &str, display: &str) -> Self {
-        let endpoint = endpoint.trim();
-        let endpoint = if endpoint.is_empty() {
-            EndpointFilter::Any
-        } else if let Ok(address) = endpoint.parse() {
-            EndpointFilter::Address(address)
-        } else if let Ok(port) = endpoint.parse() {
-            EndpointFilter::Port(port)
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct TimeRestriction {
+    pub bounds: [i128; 2],
+    pub rows: Range<u64>,
+}
+
+impl EndpointFilter {
+    fn parse(text: &str) -> Self {
+        let text = text.trim();
+        if text.is_empty() {
+            Self::Any
+        } else if let Ok(address) = text.parse() {
+            Self::Address(address)
+        } else if let Ok(port) = text.parse() {
+            Self::Port(port)
         } else {
-            EndpointFilter::Fragment(endpoint.to_ascii_lowercase())
-        };
-        Self {
-            protocol,
-            endpoint,
-            display: display.trim().to_owned(),
-            conversation: None,
+            Self::Fragment(text.to_ascii_lowercase())
         }
+    }
+
+    fn description(&self) -> Option<String> {
+        match self {
+            Self::Any => None,
+            Self::Address(address) => Some(address.to_string()),
+            Self::Port(port) => Some(format!("Port {port}")),
+            Self::Fragment(text) => Some(text.clone()),
+        }
+    }
+}
+
+impl Filter {
+    pub fn with_text(mut self, endpoint: &str, display: &str) -> Self {
+        self.endpoint = EndpointFilter::parse(endpoint);
+        self.display = display.trim().to_owned();
+        self
+    }
+
+    pub fn text_matches(&self, endpoint: &str, display: &str) -> bool {
+        self.display == display.trim() && self.endpoint == EndpointFilter::parse(endpoint)
+    }
+
+    pub fn display(&self) -> &str {
+        &self.display
+    }
+
+    pub fn endpoint_label(&self) -> Option<String> {
+        self.endpoint.description()
     }
 
     pub fn with_conversation(
@@ -336,29 +367,65 @@ impl Filter {
         self
     }
 
+    pub fn conversation(&self) -> Option<ConversationKey> {
+        self.conversation.as_ref().map(|(key, _)| *key)
+    }
+
+    pub fn with_time(mut self, restriction: Option<TimeRestriction>) -> Self {
+        self.time_restriction = restriction;
+        self
+    }
+
+    pub fn time(&self) -> Option<[i128; 2]> {
+        self.time_restriction.as_ref().map(|time| time.bounds)
+    }
+
     pub fn active(&self) -> bool {
         self.protocol.is_some()
             || self.endpoint != EndpointFilter::Any
             || !self.display.is_empty()
             || self.conversation.is_some()
+            || self.time_restriction.is_some()
+    }
+
+    fn source_span(&self, total: u64) -> Range<u64> {
+        let mut range = 0..total;
+        if let Some((_, scope)) = &self.conversation {
+            range = intersect_rows(
+                range,
+                scope.rows.start..scope.rows.start.saturating_add(scope.total),
+            );
+        }
+        if let Some(time) = &self.time_restriction {
+            range = intersect_rows(range, time.rows.clone());
+        }
+        range
     }
 
     fn rows(&self, total: u64) -> Range<u64> {
-        self.conversation
-            .as_ref()
-            .map_or(0..total.min(SCAN_LIMIT), |(_, scope)| scope.rows.clone())
+        let range = self.source_span(total);
+        let limit = if self.conversation.is_some() {
+            CONVERSATION_SCAN_LIMIT
+        } else {
+            SCAN_LIMIT
+        };
+        range.start..range.end.min(range.start.saturating_add(limit))
     }
 
     fn scope_size(&self, total: u64) -> u64 {
-        self.conversation
-            .as_ref()
-            .map_or(total, |(_, scope)| scope.total)
+        let range = self.source_span(total);
+        range.end - range.start
     }
 
     fn matches(&self, row: &PacketRow) -> bool {
         if let Some((key, scope)) = &self.conversation
             && (!scope.contains(row)
                 || !ConversationKey::identify(row.protocol).is_some_and(|(found, _)| found == *key))
+        {
+            return false;
+        }
+        if let Some(time) = &self.time_restriction
+            && !has_time(row, time.bounds)
         {
             return false;
         }
@@ -386,6 +453,17 @@ impl Filter {
                 .any(|endpoint| endpoint.to_string().contains(fragment)),
         }
     }
+}
+
+fn intersect_rows(left: Range<u64>, right: Range<u64>) -> Range<u64> {
+    let start = left.start.max(right.start);
+    start..left.end.min(right.end).max(start)
+}
+
+fn has_time(row: &PacketRow, [low, high]: [i128; 2]) -> bool {
+    row.header
+        .time
+        .is_some_and(|time| (low..=high).contains(&time.unix_nanoseconds()))
 }
 
 enum DisplayMatches {
@@ -432,11 +510,7 @@ impl ConversationScope {
     }
 
     fn contains(&self, row: &PacketRow) -> bool {
-        self.time.is_none_or(|[low, high]| {
-            row.header
-                .time
-                .is_some_and(|time| (low..=high).contains(&time.unix_nanoseconds()))
-        })
+        self.time.is_none_or(|bounds| has_time(row, bounds))
     }
 }
 
@@ -468,4 +542,63 @@ pub(super) fn name(format: Format) -> &'static str {
 
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_restrictions_preserve_the_predicate_and_inspect_only_their_source_range() {
+        let query = Filter::default().with_text("443", "tcp");
+        let narrowed = query.clone().with_time(Some(TimeRestriction {
+            bounds: [20, 40],
+            rows: 100..200,
+        }));
+        assert_eq!(narrowed.rows(250), 100..200);
+        assert_eq!(narrowed.scope_size(250), 100);
+        assert_eq!(narrowed.with_time(None).display(), "tcp");
+        assert!(query.text_matches("443", "tcp"));
+
+        let mut row = PacketRow {
+            header: packets::PacketHeader {
+                row: 170,
+                interface: packets::InterfaceId {
+                    section: 0,
+                    ordinal: 0,
+                },
+                link_type: 1,
+                time: None,
+                captured_len: 60,
+                original_len: 60,
+            },
+            protocol: packets::ProtocolFields {
+                destination_port: Some(443),
+                ..Default::default()
+            },
+        };
+        let filter = query.with_time(Some(TimeRestriction {
+            bounds: [20, 40],
+            rows: 100..200,
+        }));
+        assert!(!filter.matches(&row));
+        row.header.time = Some(packets::Timestamp {
+            ticks: 30,
+            resolution: packets::Resolution::Decimal(9),
+            offset_seconds: 0,
+        });
+        assert!(filter.matches(&row));
+        row.header.time.as_mut().unwrap().ticks = 41;
+        assert!(!filter.matches(&row));
+    }
+
+    #[test]
+    fn narrowing_a_bounded_scan_keeps_the_correct_coverage_denominator() {
+        let filter = Filter::default().with_time(Some(TimeRestriction {
+            bounds: [0, 100],
+            rows: 1_000_000..9_000_000,
+        }));
+        assert_eq!(filter.rows(10_000_000), 1_000_000..1_000_000 + SCAN_LIMIT);
+        assert_eq!(filter.scope_size(10_000_000), 8_000_000);
+    }
 }

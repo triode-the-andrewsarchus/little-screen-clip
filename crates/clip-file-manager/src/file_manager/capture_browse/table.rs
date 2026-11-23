@@ -1,5 +1,5 @@
 use crate::ui_appearance::WorkbenchColors;
-use egui::{Align2, Color32, FontId, Rect, ScrollArea, Sense, Ui, pos2, vec2};
+use egui::{Color32, FontId, Rect, ScrollArea, Sense, Ui, pos2, text::LayoutJob, vec2};
 use std::ops::Range;
 
 const ROW_HEIGHT: f32 = 21.0;
@@ -98,13 +98,16 @@ impl<const N: usize> Columns<N> {
         for (value, fraction) in values.into_iter().zip(self.fractions) {
             let right = left + fraction * rect.width();
             let cell = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
-            ui.painter().with_clip_rect(cell).text(
-                pos2(left + 3.0, rect.center().y),
-                Align2::LEFT_CENTER,
-                value,
-                FontId::monospace(10.5),
-                color,
-            );
+            let painter = ui.painter().with_clip_rect(cell);
+            let inset = 3.0;
+            let width = (cell.width() - 2.0 * inset).max(0.0);
+            let mut job =
+                LayoutJob::simple(value.to_owned(), FontId::monospace(10.5), color, width);
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            let text = painter.layout_job(job);
+            let y = cell.center().y - text.size().y * 0.5;
+            painter.galley(pos2(left + inset, y), text, color);
             left = right;
         }
     }

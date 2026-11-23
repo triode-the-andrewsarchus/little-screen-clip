@@ -39,7 +39,7 @@ pub(super) fn source_span(bins: &[ActivityBin], [start, end]: Bounds) -> Option<
     let high = start.max(end);
     let mut first = u64::MAX;
     let mut last = 0;
-    let position = bins.partition_point(|bin| bin.end_ns <= low);
+    let position = bins.partition_point(|bin| bin.end_ns < low);
     for bin in bins[position..]
         .iter()
         .take_while(|bin| bin.start_ns <= high)
@@ -113,6 +113,31 @@ pub(super) fn highlight(
     );
 }
 
+pub(super) fn highlight_filter(
+    painter: &Painter,
+    rect: Rect,
+    domain: Bounds,
+    band: Bounds,
+    colors: WorkbenchColors,
+) {
+    let [left, right] = band.map(|time| x_at(rect, domain, time).clamp(rect.left(), rect.right()));
+    let painter = painter.with_clip_rect(rect);
+    // The top bracket denotes a query restriction. A filled band still
+    // denotes the source selection used for inspection or copying.
+    painter.hline(
+        left..=right,
+        rect.top() + 2.0,
+        Stroke::new(2.0, colors.warning),
+    );
+    for x in [left, right] {
+        painter.vline(
+            x,
+            rect.top()..=rect.top() + 9.0,
+            Stroke::new(1.0, colors.warning),
+        );
+    }
+}
+
 pub(super) fn with_mark(
     painter: &Painter,
     rect: Rect,
@@ -135,5 +160,25 @@ pub(super) fn relative(ns: i128) -> String {
         format!("{:.3} µs", ns as f64 / 1_000.0)
     } else {
         format!("{ns} ns")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_span_includes_packets_on_both_time_boundaries() {
+        let bins = [10, 20, 30].map(|time| ActivityBin {
+            start_ns: time,
+            end_ns: time,
+            packets: 1,
+            captured_bytes: 54,
+            first_row: (time / 10 - 1) as u64,
+            last_row: (time / 10 - 1) as u64,
+        });
+        assert_eq!(source_span(&bins, [20, 10]), Some(0..2));
+        assert_eq!(source_span(&bins, [20, 20]), Some(1..2));
+        assert_eq!(source_span(&bins, [21, 29]), None);
     }
 }

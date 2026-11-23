@@ -10,6 +10,7 @@ pub(super) struct Inspector {
     row: Option<u64>,
     layers: Vec<Layer>,
     selection: Option<Range<usize>>,
+    field: Option<(usize, usize)>,
     reveal_byte: bool,
     reveal_field: bool,
 }
@@ -21,21 +22,24 @@ impl Inspector {
         packet: &Packet,
         interface: Option<&Interface>,
         origin: Option<i128>,
+        draft: bool,
     ) -> Option<String> {
         if self.row != Some(packet.header.row) {
             self.row = Some(packet.header.row);
             self.layers = packet.layers();
             self.selection = None;
+            self.field = None;
         }
         metadata(ui, packet, interface, origin);
         self.diagram(ui);
-        let filter = self.tree(ui);
+        let filter = self.tree(ui, draft);
         self.bytes(ui, packet);
         filter
     }
 
     fn select(&mut self, bytes: Range<usize>, from_hex: bool) {
         self.selection = Some(bytes);
+        self.field = None;
         self.reveal_byte = !from_hex;
         self.reveal_field = from_hex;
     }
@@ -101,7 +105,7 @@ impl Inspector {
         }
     }
 
-    fn tree(&mut self, ui: &mut Ui) -> Option<String> {
+    fn tree(&mut self, ui: &mut Ui, draft: bool) -> Option<String> {
         let mut filter = None;
         let mut selection = None;
         let height = (ui.available_height() * 0.53).max(52.0);
@@ -120,12 +124,9 @@ impl Inspector {
                             expanded,
                             format!("{} · {} bytes", layer.name, layer.bytes.len()),
                         );
-                        if expanded && self.reveal_field {
-                            response.scroll_to_me(None);
-                            self.reveal_field = false;
-                        }
+                        reveal_tree_row(&response, expanded, &mut self.reveal_field);
                         if response.clicked() {
-                            selection = Some(layer.bytes.clone());
+                            selection = Some((layer.bytes.clone(), None));
                         }
                         continue;
                     }
@@ -140,7 +141,8 @@ impl Inspector {
                         header = header.open(Some(true));
                     }
                     header.show(ui, |ui| {
-                        for field in &layer.fields {
+                        for (field_index, field) in layer.fields.iter().enumerate() {
+                            let addressed = (index, field_index);
                             let selected = self
                                 .selection
                                 .as_ref()
@@ -155,31 +157,26 @@ impl Inspector {
                                     field.bytes.start,
                                     field.bytes.end - 1
                                 ));
-                            if selected && self.reveal_field {
-                                response.scroll_to_me(None);
-                                self.reveal_field = false;
-                            }
                             if response.clicked() {
-                                selection = Some(field.bytes.clone());
+                                selection = Some((field.bytes.clone(), Some(addressed)));
                             }
-                            if let Some(expression) = &field.filter {
-                                response.context_menu(|ui| {
-                                    if ui.button("Apply as display filter").clicked() {
-                                        filter = Some(expression.clone());
-                                        ui.close();
-                                    }
-                                    if ui.button("Copy display filter").clicked() {
-                                        ui.ctx().copy_text(expression.clone());
-                                        ui.close();
-                                    }
-                                });
+                            let exact = self.field == Some(addressed);
+                            if let Some(expression) = field.filter.as_ref().filter(|_| exact) {
+                                if field_actions(ui, expression, draft, &mut self.reveal_field) {
+                                    filter = Some(expression.clone());
+                                }
+                            } else {
+                                let reveal = self.field.map_or(selected, |_| exact);
+                                reveal_tree_row(&response, reveal, &mut self.reveal_field);
                             }
                         }
                     });
                 }
             });
-        if let Some(selection) = selection {
+        if let Some((selection, field)) = selection {
             self.select(selection, false);
+            self.field = field;
+            self.reveal_field = field.is_some();
         }
         filter
     }
@@ -248,6 +245,31 @@ impl Inspector {
     }
 }
 
+fn reveal_tree_row(response: &egui::Response, selected: bool, pending: &mut bool) {
+    if selected && std::mem::take(pending) {
+        response.scroll_to_me(None);
+    }
+}
+
+fn field_actions(ui: &mut Ui, expression: &str, draft: bool, reveal: &mut bool) -> bool {
+    let actions = ui.horizontal_wrapped(|ui| {
+        let label = if draft {
+            "Add to filter draft"
+        } else {
+            "Filter by this field"
+        };
+        let applied = ui.small_button(label).clicked();
+        if ui.small_button("Copy filter").clicked() {
+            ui.ctx().copy_text(expression.to_owned());
+        }
+        ui.add(egui::Label::new(egui::RichText::new(expression).monospace()).truncate())
+            .on_hover_text(expression);
+        applied
+    });
+    reveal_tree_row(&actions.response, true, reveal);
+    actions.inner
+}
+
 fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
@@ -255,11 +277,18 @@ fn overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
 fn metadata(ui: &mut Ui, packet: &Packet, interface: Option<&Interface>, origin: Option<i128>) {
     let header = packet.header;
     let fields = packet.protocol();
-    ui.strong(format!("Packet {}", header.row + 1));
     ui.horizontal_wrapped(|ui| {
+        ui.strong(format!("Packet {}", header.row + 1));
         ui.label(format!("{} bytes captured", header.captured_len));
         if header.captured_len != header.original_len {
             ui.weak(format!("of {} bytes", header.original_len));
+        }
+        if let Some(relative) = header
+            .time
+            .zip(origin)
+            .map(|(time, origin)| activity::relative(time.unix_nanoseconds() - origin))
+        {
+            ui.weak(relative);
         }
     });
     if let Some(time) = header.time {
@@ -271,9 +300,6 @@ fn metadata(ui: &mut Ui, packet: &Packet, interface: Option<&Interface>, origin:
             "{} ticks · {resolution} per tick · offset {} s",
             time.ticks, time.offset_seconds,
         ));
-        if let Some(origin) = origin {
-            ui.weak(activity::relative(time.unix_nanoseconds() - origin));
-        }
     } else {
         ui.weak("No timestamp recorded");
     }

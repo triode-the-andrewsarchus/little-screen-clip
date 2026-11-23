@@ -4,6 +4,7 @@ mod activity;
 mod capture;
 mod conversations;
 mod display_filter;
+mod filter_ui;
 mod inspect;
 pub(super) mod strip;
 mod table;
@@ -19,9 +20,10 @@ use super::{
     preview_copy::{self, Copies},
 };
 use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
-use capture::{Capture, ConversationScope, Filter, Filtered};
+use capture::{Capture, ConversationScope, Filter, Filtered, TimeRestriction};
 use conversations::{Action as ConversationAction, Selection as ConversationSelection};
 use egui::{Context, Id, Layout, PointerButton, Sense, Ui, vec2};
+use filter_ui::AppliedFilter;
 use little_clip_core::{
     BackgroundJobs,
     engineering::packets::{
@@ -59,11 +61,10 @@ pub(super) struct Viewer {
     inspector: inspect::Inspector,
     display_filter: String,
     protocol_colors: bool,
-    filter_protocol: Option<Protocol>,
     endpoint: String,
-    filter: Option<Filter>,
-    filtered: Option<Filtered>,
-    filter_job: Option<Job<Filtered>>,
+    filtered: Option<AppliedFilter>,
+    filter_job: Option<(Filter, Job<Filtered>)>,
+    filter_error: Option<String>,
     conversation_panel: conversations::Panel,
     conversation: Option<ConversationSelection>,
     tcp_flow: tcp_flow::View,
@@ -97,11 +98,10 @@ impl Viewer {
             inspector: inspect::Inspector::default(),
             display_filter: String::new(),
             protocol_colors: true,
-            filter_protocol: None,
             endpoint: String::new(),
-            filter: None,
             filtered: None,
             filter_job: None,
+            filter_error: None,
             conversation_panel: conversations::Panel::default(),
             conversation: None,
             tcp_flow: tcp_flow::View::default(),
@@ -130,7 +130,11 @@ impl Viewer {
             close,
         );
         shell.render_header(ui, |_| {});
-        self.controls(ui, copies);
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 24.0;
+            ui.spacing_mut().button_padding.y = 2.0;
+            self.controls(ui, copies);
+        });
         self.timeline(ui, colors);
         self.conversations(ui, colors, copies);
         self.draw_tcp_flow(ui, colors, copies);
@@ -147,11 +151,13 @@ impl Viewer {
         ui.horizontal_wrapped(|ui| {
             ui.strong(capture::name(self.summary.format));
             if let Some(index) = &self.index {
-                ui.weak(format!(
-                    "{} packets · {} interfaces",
-                    index.points(),
-                    index.interfaces().count()
-                ));
+                let interfaces = index.interfaces().count();
+                let unit = if interfaces == 1 {
+                    "interface"
+                } else {
+                    "interfaces"
+                };
+                ui.weak(format!("{} packets · {interfaces} {unit}", index.points()));
                 if index.untimed_packets() > 0 {
                     ui.weak(format!("{} untimed", index.untimed_packets()));
                 }
@@ -178,7 +184,7 @@ impl Viewer {
             }
             self.copy_action(ui, copies);
             if ui
-                .selectable_label(self.conversation_panel.open, "Conversations")
+                .add(egui::Button::new("Conversations").selected(self.conversation_panel.open))
                 .clicked()
             {
                 if self.conversation_panel.open {
@@ -187,6 +193,7 @@ impl Viewer {
                     self.conversation_panel.open = true;
                 }
             }
+            ui.checkbox(&mut self.protocol_colors, "Protocol colors");
         });
         self.filter_controls(ui);
         if let Some(error) = self.error.as_deref() {
@@ -216,81 +223,6 @@ impl Viewer {
             let capture = self.capture.clone();
             copies.start(ui.ctx(), move |cancel| capture.copy(&index, rows, cancel));
         }
-    }
-
-    fn filter_controls(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("capture protocol")
-                .selected_text(
-                    self.filter_protocol
-                        .map_or("All protocols", Protocol::label),
-                )
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.filter_protocol, None, "All protocols");
-                    for protocol in [
-                        Protocol::Tcp,
-                        Protocol::Udp,
-                        Protocol::Dns,
-                        Protocol::Icmp,
-                        Protocol::Icmpv6,
-                        Protocol::Arp,
-                        Protocol::Ipv4,
-                        Protocol::Ipv6,
-                        Protocol::Ethernet,
-                        Protocol::Unknown,
-                    ] {
-                        ui.selectable_value(
-                            &mut self.filter_protocol,
-                            Some(protocol),
-                            protocol.label(),
-                        );
-                    }
-                });
-            let search = ui.add(
-                egui::TextEdit::singleline(&mut self.endpoint)
-                    .hint_text("Address or port")
-                    .id_salt("capture endpoint")
-                    .char_limit(80)
-                    .desired_width(155.0),
-            );
-            let display = ui.add(
-                egui::TextEdit::singleline(&mut self.display_filter)
-                    .id_salt("packet display filter")
-                    .hint_text("Display filter  e.g. tcp.port in {80,443}")
-                    .char_limit(2048)
-                    .desired_width((ui.available_width() - 65.0).clamp(210.0, 470.0)),
-            ).on_hover_text("Protocol names, IPs, ports, TCP flags, frame lengths, comparisons and boolean operators. TShark expands support for Wireshark display filters.");
-            if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
-                display.request_focus();
-            }
-            let submitted = (display.lost_focus() || search.lost_focus())
-                && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if ui
-                .add_enabled(self.index.is_some(), egui::Button::new("Filter"))
-                .clicked()
-                || submitted
-            {
-                self.apply_filter(ui.ctx());
-            }
-            if self.filter.is_some() && ui.small_button("Clear").clicked() {
-                self.filter_protocol = None;
-                self.endpoint.clear();
-                self.display_filter.clear();
-                self.conversation = None;
-                self.conversation_panel.highlight(None);
-                self.clear_filter();
-            }
-            ui.checkbox(&mut self.protocol_colors, "Protocol colors");
-            if self.filter_job.is_some() {
-                ui.weak("Filtering…");
-            } else if let Some(result) = &self.filtered {
-                let matches = egui::RichText::new(format!("{} matches", result.rows.len())).weak();
-                ui.add(egui::Label::new(matches).extend());
-                if result.scanned < result.scope_size {
-                    ui.weak(format!("{} of {} source packets searched", result.scanned, result.scope_size));
-                }
-            }
-        });
     }
 
     fn conversations(&mut self, ui: &mut Ui, colors: WorkbenchColors, copies: &mut Copies) {
@@ -386,7 +318,12 @@ impl Viewer {
             active.bounds = self.conversation_panel.bounds(active).or(active.bounds);
         }
         self.conversation = selection;
-        self.apply_filter(ctx);
+        let scope = self
+            .conversation
+            .as_ref()
+            .map(|active| (active.key, active.scope.clone()));
+        let query = self.filter_basis().with_conversation(scope);
+        self.request_filter(ctx, query);
     }
 
     fn timeline(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
@@ -401,15 +338,13 @@ impl Viewer {
         let modified = ui.input(|input| input.modifiers.command || input.modifiers.alt);
         let (_, drag) =
             preview_copy::drag_range(ui, &response, Id::unique("capture brush"), modified);
+        let brush = drag.map(|(a, b)| {
+            [a, b].map(|end| activity::at(rect, domain, rect.left() + rect.width() * end))
+        });
         let mut picked = None;
-        if let Some((a, b)) = drag {
-            let band = [
-                activity::at(rect, domain, rect.left() + rect.width() * a),
-                activity::at(rect, domain, rect.left() + rect.width() * b),
-            ];
-            self.brushed = Some(band);
+        if let Some(band) = brush {
             if response.drag_stopped_by(PointerButton::Primary)
-                && let Some(range) = activity::source_span(self.bins(), band)
+                && let Some(range) = activity::source_span(bins, band)
             {
                 picked = Some((range.start, Some((range, band))));
             }
@@ -418,7 +353,6 @@ impl Viewer {
             && let Some(bin) = activity::nearest(bins, activity::at(rect, domain, pos.x))
         {
             picked = Some((bin.first_row, None));
-            self.brushed = None;
         }
         if let Some(band) = self
             .conversation
@@ -427,7 +361,14 @@ impl Viewer {
         {
             activity::highlight(&painter, rect, domain, band, colors);
         }
-        if let Some(band) = self.selection_time() {
+        if let Some(band) = self
+            .filtered
+            .as_ref()
+            .and_then(|applied| applied.query.time())
+        {
+            activity::highlight_filter(&painter, rect, domain, band, colors);
+        }
+        if let Some(band) = brush.or_else(|| self.selection_time()) {
             activity::highlight(&painter, rect, domain, band, colors);
         }
         if let Some((row, span)) = picked {
@@ -560,6 +501,8 @@ impl Viewer {
     }
 
     fn inspector(&mut self, ui: &mut Ui) {
+        ui.spacing_mut().interact_size.y = 21.0;
+        ui.spacing_mut().button_padding.y = 2.0;
         let Some(row) = self.selected else {
             ui.weak("Select a packet to inspect its captured bytes");
             return;
@@ -582,11 +525,9 @@ impl Viewer {
                         .find(|interface| interface.id == id)
                 });
             let origin = self.origin();
-            if let Some(expression) = self.inspector.show(ui, packet, interface, origin) {
-                self.display_filter = expression;
-                self.filter_protocol = None;
-                self.endpoint.clear();
-                self.apply_filter(ui.ctx());
+            let draft = self.draft_changed();
+            if let Some(expression) = self.inspector.show(ui, packet, interface, origin, draft) {
+                self.use_field_filter(ui.ctx(), expression);
             }
         } else if self.packet_failed == Some(row) {
             ui.weak(format!("Packet {} unavailable", row + 1));
@@ -604,12 +545,14 @@ impl Viewer {
     fn visible_rows(&self) -> u64 {
         self.filtered
             .as_ref()
-            .map_or(self.source_rows(), |filtered| filtered.rows.len() as u64)
+            .map_or(self.source_rows(), |filtered| {
+                filtered.result.rows.len() as u64
+            })
     }
 
     fn row_at(&self, view_row: u64) -> Option<&PacketRow> {
         if let Some(filtered) = &self.filtered {
-            return filtered.rows.get(view_row as usize);
+            return filtered.result.rows.get(view_row as usize);
         }
         self.source_row(view_row)
     }
@@ -681,11 +624,7 @@ impl Viewer {
 
     fn reveal(&mut self, ordinal: u64) {
         let view_row = if let Some(filtered) = &self.filtered {
-            filtered
-                .rows
-                .binary_search_by_key(&ordinal, |row| row.header.row)
-                .ok()
-                .map(|row| row as u64)
+            filtered.ordinal_index(ordinal).map(|row| row as u64)
         } else {
             Some(ordinal)
         };
@@ -698,41 +637,6 @@ impl Viewer {
     fn set_page(&mut self, start: u64) {
         self.page = start;
         self.scroll_to = Some(0);
-    }
-
-    fn clear_filter(&mut self) {
-        self.filter = None;
-        self.filter_job = None;
-        self.filtered = None;
-        self.error = None;
-        self.generation += 1;
-        if let Some(ordinal) = self.selected {
-            self.reveal(ordinal);
-        } else {
-            self.set_page(0);
-        }
-    }
-
-    fn apply_filter(&mut self, ctx: &Context) {
-        let Some(index) = self.index.clone() else {
-            return;
-        };
-        let conversation = self
-            .conversation
-            .as_ref()
-            .map(|active| (active.key, active.scope.clone()));
-        let filter = Filter::new(self.filter_protocol, &self.endpoint, &self.display_filter)
-            .with_conversation(conversation);
-        if !filter.active() {
-            self.clear_filter();
-            return;
-        }
-        self.filter = Some(filter.clone());
-        self.error = None;
-        let capture = self.capture.clone();
-        self.filter_job = Some(start(&JOBS, ctx, Duration::from_secs(90), move |cancel| {
-            capture.filter(&index, &filter, cancel)
-        }));
     }
 
     fn request_index(&mut self, ctx: &Context) {
@@ -813,33 +717,7 @@ impl Viewer {
         }
         self.conversation_panel.poll(self.conversation.as_mut());
         self.tcp_flow.poll();
-        if let Some(filtered) = poll(&mut self.filter_job) {
-            match filtered {
-                Ok(filtered) => {
-                    let selected = self
-                        .selected
-                        .filter(|ordinal| {
-                            filtered
-                                .rows
-                                .binary_search_by_key(ordinal, |row| row.header.row)
-                                .is_ok()
-                        })
-                        .or_else(|| filtered.rows.first().map(|row| row.header.row));
-                    self.filtered = Some(filtered);
-                    self.generation += 1;
-                    self.set_page(0);
-                    if let Some(ordinal) = selected {
-                        self.focus_packet(ordinal);
-                    } else {
-                        self.selected = None;
-                        self.range = None;
-                        self.packet = None;
-                        self.packet_job = None;
-                    }
-                }
-                Err(error) => self.error = Some(error),
-            }
-        }
+        self.poll_filter();
     }
 
     fn pending(&self) -> bool {

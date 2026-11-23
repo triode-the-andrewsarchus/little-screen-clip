@@ -9,7 +9,7 @@ use little_clip_core::engineering::packets::{PacketRow, Protocol};
 const COLUMNS: Columns<6> = Columns {
     id: "packet rows",
     headings: ["No.", "Time", "Protocol", "Source", "Destination", "Bytes"],
-    fractions: [0.10, 0.17, 0.13, 0.22, 0.23, 0.15],
+    fractions: [0.09, 0.17, 0.12, 0.255, 0.255, 0.11],
     min_height: 50.0,
     selected_fill: 0.48,
     hover_fill: 0.20,
