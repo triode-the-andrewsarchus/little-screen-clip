@@ -256,7 +256,7 @@ impl Viewer {
             let display = ui.add(
                 egui::TextEdit::singleline(&mut self.display_filter)
                     .id_salt("packet display filter")
-                    .hint_text("Display filter  e.g. tcp.port == 443")
+                    .hint_text("Display filter  e.g. tcp.port in {80,443}")
                     .char_limit(2048)
                     .desired_width((ui.available_width() - 65.0).clamp(210.0, 470.0)),
             ).on_hover_text("Protocol names, IPs, ports, TCP flags, frame lengths, comparisons and boolean operators. TShark expands support for Wireshark display filters.");

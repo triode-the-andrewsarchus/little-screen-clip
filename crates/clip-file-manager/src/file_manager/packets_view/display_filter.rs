@@ -6,10 +6,28 @@ pub(super) struct DisplayFilter(Expr);
 
 enum Expr {
     Test(Field, Option<(Compare, Literal)>),
+    In(Field, Vec<Member>),
     Not(Box<Expr>),
     Both(Box<Expr>, Box<Expr>),
     Either(Box<Expr>, Box<Expr>),
     Xor(Box<Expr>, Box<Expr>),
+}
+
+enum Member {
+    Value(Literal),
+    Range(Literal, Literal),
+}
+
+impl Member {
+    fn contains(&self, value: Literal) -> bool {
+        match *self {
+            Self::Value(target) => value.compare(target).is_some_and(Ordering::is_eq),
+            Self::Range(first, last) => {
+                value.compare(first).is_some_and(|order| !order.is_lt())
+                    && value.compare(last).is_some_and(|order| !order.is_gt())
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +66,13 @@ impl Literal {
             None => max,
         };
         Some(Self::Address(address, prefix))
+    }
+
+    fn exact(self) -> bool {
+        matches!(
+            self,
+            Self::Integer(_) | Self::Address(IpAddr::V4(_), 32) | Self::Address(IpAddr::V6(_), 128)
+        )
     }
 
     fn compare(self, rhs: Self) -> Option<Ordering> {
@@ -195,6 +220,14 @@ impl Field {
         }
     }
 
+    fn literal(self, text: &str) -> Option<Literal> {
+        if matches!(self, Self::Protocol(_)) {
+            return None;
+        }
+        let value = Literal::parse(text)?;
+        (matches!(self, Self::Ip(..)) == matches!(value, Literal::Address(..))).then_some(value)
+    }
+
     fn values(self, row: &PacketRow) -> [Option<Literal>; 2] {
         let data = row.protocol;
         let number = |value| [Some(Literal::Integer(value)), None];
@@ -292,6 +325,11 @@ impl Expr {
             Self::Both(left, right) => left.matches(row) && right.matches(row),
             Self::Either(left, right) => left.matches(row) || right.matches(row),
             Self::Xor(left, right) => left.matches(row) != right.matches(row),
+            Self::In(field, set) => field
+                .values(row)
+                .into_iter()
+                .flatten()
+                .any(|value| set.iter().any(|item| item.contains(value))),
             Self::Test(field, test) => {
                 let mut values = field.values(row).into_iter().flatten();
                 let Some((operation, target)) = test else {
@@ -363,27 +401,51 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let field = Field::parse(token)?;
+                if self.consume("in") {
+                    return Some(Expr::In(field, self.members(field)?));
+                }
                 let test = match self
                     .tokens
                     .get(self.cursor)
                     .and_then(|token| Compare::parse(token))
                 {
                     Some(op) => {
-                        if matches!(field, Field::Protocol(_)) {
-                            return None;
-                        }
                         self.cursor += 1;
-                        let literal = Literal::parse(self.take()?)?;
-                        if matches!(field, Field::Ip(..)) != matches!(literal, Literal::Address(..))
-                        {
-                            return None;
-                        }
-                        Some((op, literal))
+                        Some((op, field.literal(self.take()?)?))
                     }
                     None => None,
                 };
                 Some(Expr::Test(field, test))
             }
+        }
+    }
+    fn consume(&mut self, expected: &str) -> bool {
+        if self.tokens.get(self.cursor) != Some(&expected) {
+            return false;
+        }
+        self.cursor += 1;
+        true
+    }
+
+    fn members(&mut self, field: Field) -> Option<Vec<Member>> {
+        self.consume("{").then_some(())?;
+        let mut set = Vec::new();
+        loop {
+            let first = field.literal(self.take()?)?;
+            let item = if self.consume("..") {
+                let last = field.literal(self.take()?)?;
+                if !first.exact() || !last.exact() || first.compare(last)?.is_gt() {
+                    return None;
+                }
+                Member::Range(first, last)
+            } else {
+                Member::Value(first)
+            };
+            set.push(item);
+            if self.consume("}") {
+                return Some(set);
+            }
+            self.consume(",").then_some(())?;
         }
     }
 }
@@ -394,13 +456,17 @@ fn lex(text: &str) -> Option<Vec<&str>> {
     while !rest.is_empty() && tokens.len() < 192 {
         let first = rest.as_bytes()[0];
         let size = match first {
-            b'(' | b')' => 1,
+            b'(' | b')' | b'{' | b'}' | b',' => 1,
+            b'.' if rest.starts_with("..") => 2,
             b'!' | b'<' | b'>' | b'=' => 1 + usize::from(rest.as_bytes().get(1) == Some(&b'=')),
             b'&' | b'|' | b'^' if rest.as_bytes().get(1) == Some(&first) => 2,
-            _ => rest
-                .bytes()
-                .take_while(|c| c.is_ascii_alphanumeric() || b"._:/".contains(c))
-                .count(),
+            _ => {
+                let word = rest
+                    .bytes()
+                    .take_while(|c| c.is_ascii_alphanumeric() || b"._:/".contains(c))
+                    .count();
+                rest[..word].find("..").unwrap_or(word)
+            }
         };
         if size == 0 {
             return None;
@@ -460,6 +526,15 @@ mod tests {
             "tcp.seq_raw == 4294967294 and tcp.ack_raw == 0 and tcp.len > 0 and tcp.window_size_value == 4096"
         ));
         assert!(!matches("tcp.len == 0 or tcp.seq_raw < 123"));
+        assert!(matches(
+            "tcp.port in {80, 443, 4000..4500} && frame.len in { 50 .. 70 }"
+        ));
+        assert!(matches("ip.addr in {192.168.1.3..192.168.1.5, 127.0.0.1}"));
+        assert!(matches("ip.src in {192.168.1.0/24}"));
+        assert!(!matches("tcp.port in { 500 .. 3000 }")); // A single endpoint must satisfy both bounds.
+        assert!(!matches("udp.port in { 1..65535 }"));
+        assert!(DisplayFilter::compile("tcp.port in {70..60}").is_none());
+        assert!(DisplayFilter::compile("tcp.port in {}").is_none());
         assert!(DisplayFilter::compile("http.host contains \"example\"").is_none());
     }
 }
