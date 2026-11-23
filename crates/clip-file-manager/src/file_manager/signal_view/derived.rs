@@ -125,10 +125,21 @@ impl Derived {
 
     pub(super) fn button(&mut self, ui: &mut Ui) {
         if ui
-            .add_enabled(!self.equations.editing(), egui::Button::new("Add equation"))
+            .add_enabled(self.can_add_equation(), egui::Button::new("Add equation"))
             .clicked()
         {
-            self.equations.add();
+            self.equations.add("");
+        }
+    }
+
+    pub(super) fn can_add_equation(&self) -> bool {
+        !self.equations.editing()
+    }
+
+    pub(super) fn add_predicate(&mut self, expression: &str, inputs: &[Input], span: &Range<f64>) {
+        if self.can_add_equation() {
+            self.equations.add(expression);
+            self.apply(equations::Action::Apply, inputs, span);
         }
     }
 
@@ -376,7 +387,7 @@ impl Derived {
                 }
             });
             if frame.is_some() && self.reveal_equation == Some(id) {
-                row.response.scroll_to_me(Some(egui::Align::Min));
+                row.response.scroll_to_me(None);
                 self.reveal_equation = None;
             }
         }

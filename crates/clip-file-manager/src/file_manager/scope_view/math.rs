@@ -68,16 +68,7 @@ impl Math {
             self.error = Some("This channel's unit is unavailable for arithmetic".into());
             return;
         }
-        let bindings: Vec<_> = channels
-            .iter()
-            .map(|channel| {
-                let dimension = Dimension::from_unit(&channel.unit);
-                Binding {
-                    name: dimension.map_or("", |_| channel.name.as_str()),
-                    signal_type: SignalType::Analog(dimension.unwrap_or(Dimension::SCALAR)),
-                }
-            })
-            .collect();
+        let bindings = bindings(channels);
         match Expression::parse_bound(input, &bindings, active) {
             Ok(expression) => {
                 self.simple = expression.is_predicate() && monotone_shorthand(input);
@@ -225,9 +216,31 @@ impl Math {
             .filter(|expression| expression.is_predicate())
     }
 
+    pub(super) fn explicit_predicate(
+        &self,
+        channels: &[Channel],
+        names: &[String],
+    ) -> Result<String, String> {
+        Expression::bind_input_names(&self.input, &bindings(channels), self.channel, names)
+            .map_err(|error| error.to_string())
+    }
+
     fn map_for(&self, rows: &Range<u64>) -> Option<&Map> {
         self.ready.as_ref().filter(|map| map.covers(rows))
     }
+}
+
+fn bindings(channels: &[Channel]) -> Vec<Binding<'_>> {
+    channels
+        .iter()
+        .map(|channel| {
+            let dimension = Dimension::from_unit(&channel.unit);
+            Binding {
+                name: dimension.map_or("", |_| channel.name.as_str()),
+                signal_type: SignalType::Analog(dimension.unwrap_or(Dimension::SCALAR)),
+            }
+        })
+        .collect()
 }
 
 /// Only ordering comparisons against a numeric literal are sound to test at

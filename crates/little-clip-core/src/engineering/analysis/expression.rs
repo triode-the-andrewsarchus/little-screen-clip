@@ -107,6 +107,20 @@ impl Expression {
         parser::parse(input, bindings, active, false)
     }
 
+    /// Expands the local channel names and implicit active-channel comparisons
+    /// into explicit names so the expression can be reused in another graph.
+    ///
+    /// # Errors
+    /// Returns a parse error or an error if a name is missing for a binding.
+    pub fn bind_input_names(
+        input: &str,
+        bindings: &[Binding<'_>],
+        active: usize,
+        names: &[String],
+    ) -> Result<String, ExpressionError> {
+        parser::bind_input_names(input, bindings, active, names)
+    }
+
     /// Compiles the numeric subset shared by scalar configuration expressions.
     pub(crate) fn parse_scalar(
         input: &str,
@@ -484,6 +498,38 @@ mod tests {
             Some(Value::Predicate(true))
         );
         assert_eq!(evaluate("A xor B", [None, Some(true)]), None);
+    }
+
+    #[test]
+    fn bound_predicate_keeps_nested_comparisons_and_the_original_active_channel() {
+        let bindings = ["CH1", "CH2"].map(|name| Binding {
+            name,
+            signal_type: SignalType::Analog(Dimension::VOLTAGE),
+        });
+        let names = ["s7_c1".to_owned(), "s7_c2".to_owned()];
+        let rebound = [
+            Binding {
+                name: "s7_c1",
+                ..bindings[0]
+            },
+            Binding {
+                name: "s7_c2",
+                ..bindings[1]
+            },
+        ];
+        for source in ["> 1V", "!(> 1V) | (CH1 > X)", "!> 1V & (X != CH1)"] {
+            let original = Expression::parse_bound(source, &bindings, 1).unwrap();
+            let stable = Expression::bind_input_names(source, &bindings, 1, &names).unwrap();
+            let moved = Expression::parse_bound(&stable, &rebound, 0).unwrap();
+            for (a, b) in [(0.0, 2.0), (4.0, 1.0), (0.5, 0.5), (0.2, 0.6)] {
+                let sample = |index| [a, b].get(index).copied();
+                assert_eq!(
+                    original.evaluate(sample),
+                    moved.evaluate(sample),
+                    "{stable}"
+                );
+            }
+        }
     }
 
     #[test]

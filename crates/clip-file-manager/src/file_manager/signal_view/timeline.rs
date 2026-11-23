@@ -18,6 +18,7 @@ pub(in crate::file_manager) struct Link {
 pub(in crate::file_manager) struct Interaction {
     pub probe: Option<f64>,
     pub share: Option<Range<f64>>,
+    pub derive_predicate: bool,
 }
 
 #[derive(Clone, Copy)]

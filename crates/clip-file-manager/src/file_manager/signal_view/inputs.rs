@@ -155,6 +155,10 @@ impl Input {
         }
     }
 
+    pub(super) fn analog_alias(id: u64, index: usize) -> String {
+        format!("s{id}_c{}", index + 1)
+    }
+
     pub(super) fn analog(id: u64, clock: Clock, label: &str, reader: &Arc<Recording>) -> Vec<Self> {
         reader
             .channels()
@@ -163,7 +167,7 @@ impl Input {
             .filter_map(|(index, channel)| {
                 Dimension::from_unit(&channel.unit)?;
                 Some(Self {
-                    alias: format!("s{id}_c{}", index + 1),
+                    alias: Self::analog_alias(id, index),
                     label: format!("{label} · {}", channel.name),
                     clock,
                     source: Source::Analog {

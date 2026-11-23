@@ -39,7 +39,6 @@ use little_clip_core::{
             time_span,
         },
     },
-    palette::AppPalette,
 };
 use reads::{AnalysisRequest, Measurements, RawChannel};
 use snap::CursorSnap;
@@ -86,7 +85,6 @@ pub(super) struct Viewer {
     display_offsets: Vec<f32>,
     trace_fft: std::collections::BTreeMap<ScopeTrace, trace_fft::TraceSpectrum>,
     hover: hover::Hover,
-    conversion: logic_export::Conversion,
     digital: digital::Digital,
     drag: Option<CursorDrag>,
     index: Option<Vec<Envelope>>,
@@ -163,7 +161,6 @@ impl Viewer {
             display_offsets,
             trace_fft: Default::default(),
             hover: hover::Hover::default(),
-            conversion: logic_export::Conversion::default(),
             digital,
             drag: None,
             index: None,
@@ -242,36 +239,35 @@ impl Viewer {
     pub(super) fn content(
         &mut self,
         ui: &mut Ui,
-        palette: &AppPalette,
         copies: &mut Copies,
         link: Option<&Link>,
+        can_add_equation: bool,
     ) -> Interaction {
         if link.is_none() {
             return egui::ScrollArea::vertical()
                 .id_salt("scope-content")
                 .auto_shrink([false, false])
-                .show(ui, |ui| self.capture_ui(ui, palette, copies, None))
+                .show(ui, |ui| self.capture_ui(ui, copies, None, can_add_equation))
                 .inner;
         }
-        self.capture_ui(ui, palette, copies, link)
+        self.capture_ui(ui, copies, link, can_add_equation)
     }
 
     fn capture_ui(
         &mut self,
         ui: &mut Ui,
-        palette: &AppPalette,
         copies: &mut Copies,
         link: Option<&Link>,
+        can_add_equation: bool,
     ) -> Interaction {
         self.poll(ui.ctx());
-        if self.logic_subview(ui, palette, copies) {
-            return Interaction::default();
-        }
-        let spectrum_opened = ui
+        let (spectrum_opened, derive_predicate) = ui
             .scope(|ui| {
                 ui.spacing_mut().interact_size.y = 24.0;
                 ui.spacing_mut().button_padding.y = 2.0;
-                self.toolbar(ui, copies)
+                let spectrum_opened = self.toolbar(ui, copies);
+                let derive_predicate = self.math_controls(ui, copies, can_add_equation);
+                (spectrum_opened, derive_predicate)
             })
             .inner;
         self.power_totals(ui);
@@ -311,11 +307,18 @@ impl Viewer {
                 .inner;
             self.digital
                 .table(ui, &mut self.span, &domain, probe, clock);
-            Interaction { probe, share }
+            Interaction {
+                probe,
+                share,
+                derive_predicate,
+            }
         } else {
             self.hover.time = None;
             self.digital.suspend();
-            Interaction::default()
+            Interaction {
+                derive_predicate,
+                ..Interaction::default()
+            }
         };
         if showing_spectrum {
             let filter_added = std::mem::take(&mut self.filters.reveal_spectrum);
@@ -397,8 +400,6 @@ impl Viewer {
         if self.filters.any() {
             ui.horizontal_wrapped(|ui| self.filters.visibility_controls(ui));
         }
-        self.math_controls(ui);
-        self.logic_menu(ui, copies);
         spectrum_opened
     }
 
@@ -420,44 +421,54 @@ impl Viewer {
         }
     }
 
-    fn math_controls(&mut self, ui: &mut Ui) {
-        let channel = &self.overview.channels[self.active];
-        if Dimension::from_unit(&channel.unit).is_some() {
-            let status = self
-                .math_state
-                .status(channel, &self.span, self.math_envelope());
-            ui.horizontal(|ui| {
-                ui.label("Math");
-                let hint: String = match channel.unit.as_str() {
-                    "V" if !self.recording.power_recording() => "> 1V or CH1 - CH2".into(),
-                    "FS" => "abs(x) > 0.1 FS".into(),
-                    "" => "abs(x) > 0.1".into(),
-                    unit => format!("x > 1{unit}"),
+    fn math_controls(&mut self, ui: &mut Ui, copies: &mut Copies, can_add_equation: bool) -> bool {
+        let promote = ui
+            .horizontal_wrapped(|ui| {
+                let channel = &self.overview.channels[self.active];
+                if Dimension::from_unit(&channel.unit).is_some() {
+                    ui.label("Math");
+                    let hint: String = match channel.unit.as_str() {
+                        "V" if !self.recording.power_recording() => "> 1V or CH1 - CH2".into(),
+                        "FS" => "abs(x) > 0.1 FS".into(),
+                        "" => "abs(x) > 0.1".into(),
+                        unit => format!("x > 1{unit}"),
+                    };
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.math)
+                            .id_salt("scope_math_expression")
+                            .hint_text(hint)
+                            .char_limit(256)
+                            .desired_width((ui.available_width() - 10.0).clamp(140.0, 320.0)),
+                    );
+                }
+                let input = if self.recording.power_recording() && channel.unit != "V" {
+                    ""
+                } else {
+                    &self.math
                 };
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.math)
-                        .id_salt("scope_math_expression")
-                        .hint_text(hint)
-                        .char_limit(256)
-                        .desired_width((ui.available_width() - 10.0).min(420.0)),
-                );
-                if let Some(status) = status {
+                self.math_state
+                    .compile(input, self.active, &self.overview.channels);
+                let promote = self.predicate_actions(ui, copies, can_add_equation);
+                if let Some(status) =
+                    self.math_state
+                        .status(channel, &self.span, self.math_envelope())
+                {
                     ui.weak(status);
                 }
-            });
-        }
-        let input = if self.recording.power_recording() && channel.unit != "V" {
-            ""
-        } else {
-            &self.math
-        };
-        self.math_state
-            .compile(input, self.active, &self.overview.channels);
+                promote
+            })
+            .inner;
         if let Some(message) = self.math_state.error().or(self.error.as_deref()) {
             ui.colored_label(ui.visuals().error_fg_color, message);
         } else if self.index_job.is_some() {
             ui.weak("Refining overview…");
         }
+        promote
+    }
+
+    pub(super) fn explicit_predicate(&self, names: &[String]) -> Result<String, String> {
+        self.math_state
+            .explicit_predicate(&self.overview.channels, names)
     }
 
     fn math_envelope(&self) -> &Envelope {

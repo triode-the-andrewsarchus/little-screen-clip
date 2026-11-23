@@ -21,14 +21,64 @@ pub(super) fn parse(
     active: usize,
     history: bool,
 ) -> Result<Expression> {
-    parse_with(source, channels, Mode::Signal { active, history })
+    parse_with(source, channels, Mode::Signal { active, history }, None)
 }
 
 pub(super) fn parse_scalar(source: &str, bindings: &[Binding<'_>]) -> Result<Expression> {
-    parse_with(source, bindings, Mode::Scalar)
+    parse_with(source, bindings, Mode::Scalar, None)
 }
 
-fn parse_with(source: &str, channels: &[Binding<'_>], mode: Mode) -> Result<Expression> {
+pub(super) fn bind_input_names(
+    source: &str,
+    channels: &[Binding<'_>],
+    active: usize,
+    names: &[String],
+) -> Result<String> {
+    if channels.len() != names.len() {
+        return Err(error(0, "Missing persistent waveform names"));
+    }
+    let mut comparisons = Vec::new();
+    parse_with(
+        source,
+        channels,
+        Mode::Signal {
+            active,
+            history: false,
+        },
+        Some(&mut comparisons),
+    )?;
+    let mut edits = Vec::with_capacity(comparisons.len() * 2);
+    for span in comparisons {
+        edits.push((span.start, "(x "));
+        edits.push((source[..span.end].trim_end().len(), ")"));
+    }
+    edits.sort_by_key(|&(at, _)| at);
+    let mut explicit = String::with_capacity(source.len());
+    let mut previous = 0;
+    for (at, insert) in edits {
+        explicit.push_str(&source[previous..at]);
+        explicit.push_str(insert);
+        previous = at;
+    }
+    explicit.push_str(&source[previous..]);
+    rewrite_references(&explicit, |name| {
+        if name.eq_ignore_ascii_case("x") {
+            Some(names[active].as_str())
+        } else {
+            channels
+                .iter()
+                .position(|channel| channel.name.eq_ignore_ascii_case(name))
+                .map(|index| names[index].as_str())
+        }
+    })
+}
+
+fn parse_with(
+    source: &str,
+    channels: &[Binding<'_>],
+    mode: Mode,
+    comparisons: Option<&mut Vec<std::ops::Range<usize>>>,
+) -> Result<Expression> {
     if source.len() > MAX_BYTES {
         return Err(error(0, "Expression is too long"));
     }
@@ -60,6 +110,7 @@ fn parse_with(source: &str, channels: &[Binding<'_>], mode: Mode) -> Result<Expr
         tokens: &tokens,
         channels,
         mode,
+        comparisons,
     };
     let expression = parser.expression(1, 0)?;
     parser.expect(Token::End, "Unexpected text after the expression")?;
@@ -267,6 +318,7 @@ struct Parser<'a, 'input> {
     tokens: &'a [Lexeme<'input>],
     channels: &'a [Binding<'a>],
     mode: Mode,
+    comparisons: Option<&'a mut Vec<std::ops::Range<usize>>>,
 }
 
 impl<'input> Parser<'_, 'input> {
@@ -327,7 +379,12 @@ impl<'input> Parser<'_, 'input> {
                 let Mode::Signal { active, .. } = self.mode else {
                     return Err(error(at, "Scalar expressions use numeric arithmetic"));
                 };
-                self.binary(operator, self.channel(active, 0), at, depth)
+                let expression = self.binary(operator, self.channel(active, 0), at, depth)?;
+                let end = self.peek().at;
+                if let Some(comparisons) = &mut self.comparisons {
+                    comparisons.push(at..end);
+                }
+                Ok(expression)
             }
             _ => Err(error(at, "Expected a waveform, number, or expression")),
         }

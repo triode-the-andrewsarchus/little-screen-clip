@@ -141,13 +141,22 @@ The paired Rigol test hid the entire stack, restored one CH1 plot, switched it t
 
 - [x] Selecting a decoder annotation marks the event's interval on the digital lanes assigned to that decoder and on their originating voltage traces. The event's name and duration sit beside the decoder controls. Double-clicking an annotation zooms to its pulses and offers a return to the previous time range.
 - [x] Use a two-signal I²C capture plus an unrelated analog channel. Confirm that the address highlights clock and data, stays out of FFT lanes, and clears when switching to Edges.
-- [ ] Review the standalone logic and scope workflows after this change. Use the same timing and decode controls when possible, then migrate the scope's legacy math-to-logic popup to the inline equation and decoder workflow. Keep the range-to-VCD action alongside the available predicate.
+- [x] Move the quick scope predicate into the inline equation and decoder workflow. Keep exact range-to-VCD beside the predicate.
+- [ ] Compare the standalone logic and scope workflows and share their remaining timing controls where the interactions match.
 
 The decoder already retains its original result window while following a pulse. Use its event extent and wiring to paint the source interval. This allows a user to distinguish a decoded address from the following acknowledgement, inspect the matching edge positions, and get back to the transfer overview. The analog A/B selection still measures its own interval, and switching a trace to FFT keeps its frequency coordinates.
 
 In the three-channel capture, the address 0x42 ran from 33 to 113 µs and shaded that 80 µs interval on both digital lanes and both originating voltage traces. The unrelated 1.65 V channel kept its own raw probe readout without shading. Switching the clock voltage to FFT kept its spectrum clear while the data waveform still marked the address. Double-clicking the address zoomed to its edges, and Back restored the 238 µs view with the address still highlighted and the controls in place. Switching to Edges cleared the highlight. The decoder selection test also covers two events with coincident timestamps.
 
-For the quick scope predicate, put the action that adds a digital equation beside the predicate itself. Give the equation the currently selected channel's stable binding when the user writes a comparison such as `> 1V` or references `x`. Keep the waveform and predicate visible while the derived lane appears. The existing decoder picker should accept the new lane alongside thresholded inputs and other digital equations. Check mixed bitwise expressions, reopening the saved analysis and exporting the predicate's original range as VCD.
+A valid scope predicate now exposes Add digital lane and Copy VCD beside its equation. Adding the lane applies the equation directly and gives it stable source bindings. An active-channel comparison stays with that channel when the active trace changes. The derived lane joins the existing inline equation and decoder controls. Copy VCD reads the original sample cells in the brush or visible range.
+
+The private walkthrough added a CH2 threshold and then a CH1 expression with nested comparisons, Boolean operators and a reference to CH2. Both equations retained their channel bindings after saving and reopening the recipe. Wiring the promoted CH1 lane to Clock and the promoted CH2 lane to Data decoded address 0x42 and data 0xA5 with acknowledgements. The exported VCD matched all 91 selected CH2 sample cells and six transitions. At 800 × 620 the added equation and its source trace remained visible together, and closing opened the existing discard confirmation.
+
+## 15. Follow derived decoder events to their inputs
+
+Today an event decoded from an equation moves the shared time cursor, and its interval is visible in the derived plots. Review the path back to the recording with a two-equation bus and an unrelated trace. Put the input names beside the selected event and let each name reveal its recorded trace in the shared timeline. Reuse the equation graph’s resolved bindings so source reordering and clock correction preserve the link. Show the time extent supported by the inputs and explain when sample history or resampling extends that extent.
+
+Check the interaction with a direct threshold, a chained equation and a renamed source lane. The event should reach only the traces that supplied its decoder inputs. Returning to the transfer view should retain the event, its wiring and the working time range.
 
 ## Review after each addition
 

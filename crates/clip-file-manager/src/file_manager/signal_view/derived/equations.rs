@@ -72,7 +72,7 @@ impl Book {
         self.edit.is_some() || !self.rows.is_empty()
     }
 
-    pub fn add(&mut self) {
+    pub fn add(&mut self, expression: &str) {
         if self.edit.is_some() {
             return;
         }
@@ -85,7 +85,9 @@ impl Book {
                     .any(|row| row.name.eq_ignore_ascii_case(name))
             })
             .expect("bounded equation list");
-        self.edit = Some(Draft::new(None, format!("{name} = ")));
+        let mut draft = Draft::new(None, format!("{name} = "));
+        draft.text.push_str(expression);
+        self.edit = Some(draft);
     }
 
     pub fn editing(&self) -> bool {
@@ -391,7 +393,7 @@ mod tests {
         ];
         let aliases = [("ch1".into(), "s1_c1"), ("ch2".into(), "s1_c2")].into();
         let mut book = Book::default();
-        book.add();
+        book.add("");
         book.edit.as_mut().unwrap().text = "M1 = CH1 - ch2".into();
         let change = book.apply(Action::Apply, &bindings, &aliases).unwrap();
         assert_eq!(change.program, "M1 = s1_c1 - s1_c2");
@@ -400,7 +402,7 @@ mod tests {
     #[test]
     fn adding_and_removing_lanes_keeps_surviving_channel_identities() {
         let mut book = Book::default();
-        book.add();
+        book.add("");
         book.edit.as_mut().unwrap().text = "A = 1V\nB = 1V > 2V\nC = 2V".into();
         book.apply(Action::Apply, INPUTS, &Default::default())
             .unwrap();
@@ -419,7 +421,7 @@ mod tests {
     #[test]
     fn rejected_edit_keeps_the_last_applied_graph_and_draft() {
         let mut book = Book::default();
-        book.add();
+        book.add("");
         book.edit.as_mut().unwrap().text = "A = 1V\nB = A * 2".into();
         book.apply(Action::Apply, INPUTS, &Default::default())
             .unwrap();
@@ -440,7 +442,7 @@ mod tests {
     #[test]
     fn renaming_an_equation_rewrites_bindings_without_changing_its_identity() {
         let mut book = Book::default();
-        book.add();
+        book.add("");
         book.edit.as_mut().unwrap().text = "signal = input\nscaled = signal * 2".into();
         book.apply(Action::Apply, INPUTS, &Default::default())
             .unwrap();

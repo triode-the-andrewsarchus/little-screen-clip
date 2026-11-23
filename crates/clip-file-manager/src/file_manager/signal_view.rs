@@ -68,6 +68,7 @@ struct Reference {
 enum SourceAction {
     Pin(f64),
     Share(Range<f64>),
+    DerivePredicate,
     Align(Clock),
     ClearReference,
     Remove,
@@ -219,11 +220,18 @@ impl Viewer {
                 )
                 .on_hover_text(little_clip_core::path_address::display_path(&source.path));
             }
-            source.capture.content(ui, palette, copies, None);
+            let interaction =
+                source
+                    .capture
+                    .content(ui, copies, None, self.derived.can_add_equation());
             self.span = source.capture.span().clone();
             self.domain = source.capture.domain();
+            if interaction.derive_predicate {
+                self.apply_source_action(0, SourceAction::DerivePredicate);
+                ui.ctx().request_repaint();
+            }
         } else {
-            self.linked(ui, palette, copies);
+            self.linked(ui, copies);
         }
     }
 
@@ -325,7 +333,7 @@ impl Viewer {
                 .any(|source| matches!(source.capture, Capture::Analog(_)))
     }
 
-    fn linked(&mut self, ui: &mut Ui, palette: &AppPalette, copies: &mut Copies) {
+    fn linked(&mut self, ui: &mut Ui, copies: &mut Copies) {
         let preview = self.alignment.preview(&self.sources);
         let domain = extent_on(&self.sources, preview);
         if self.span == self.domain {
@@ -342,7 +350,19 @@ impl Viewer {
             shared: shared.as_ref(),
             reference: self.reference_time_on(preview),
         };
-        let height = (ui.available_height() / self.sources.len() as f32 - 50.0).max(205.0);
+        let available = ui.available_height();
+        let height = if matches!(
+            self.sources.as_slice(),
+            [Source {
+                capture: Capture::Analog(_),
+                ..
+            }]
+        ) && self.derived.open()
+        {
+            (available * 0.62).max(205.0)
+        } else {
+            (available / self.sources.len() as f32 - 50.0).max(205.0)
+        };
         let grouped = self.compares_analog();
         let scroll = self.session.scroll.area(ui).show(ui, |ui| {
             if grouped {
@@ -355,7 +375,7 @@ impl Viewer {
                 let id = self.sources[index].id;
                 let (probe, request) = ui
                     .push_id(id, |ui| {
-                        self.linked_source(ui, palette, copies, index, height, timeline)
+                        self.linked_source(ui, copies, index, height, timeline)
                     })
                     .inner;
                 next_probe = probe.or(next_probe);
@@ -403,7 +423,6 @@ impl Viewer {
     fn linked_source(
         &mut self,
         ui: &mut Ui,
-        palette: &AppPalette,
         copies: &mut Copies,
         index: usize,
         height: f32,
@@ -435,12 +454,17 @@ impl Viewer {
         let previous = link.clock.native_range(&self.span);
         *source.capture.span() = previous.clone();
         let height = height.max(source.capture.min_height());
+        let can_add_equation = self.derived.can_add_equation();
         let interaction = ui
             .allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
-                source.capture.content(ui, palette, copies, Some(&link))
+                source
+                    .capture
+                    .content(ui, copies, Some(&link), can_add_equation)
             })
             .inner;
-        if let Some(range) = interaction.share {
+        if interaction.derive_predicate {
+            action = Some(SourceAction::DerivePredicate);
+        } else if let Some(range) = interaction.share {
             action = Some(SourceAction::Share(range));
         }
         if reveal {
@@ -497,6 +521,28 @@ impl Viewer {
         Some(source.display_clock(preview).to_workspace(pin.native_time))
     }
 
+    fn derive_predicate(&mut self, index: usize) {
+        let source = &self.sources[index];
+        let Capture::Analog(view) = &source.capture else {
+            return;
+        };
+        let names = (0..view.recording().channels().len())
+            .map(|index| inputs::Input::analog_alias(source.id, index))
+            .collect::<Vec<_>>();
+        match view.explicit_predicate(&names) {
+            Ok(expression) => {
+                let preview = self.alignment.preview(&self.sources);
+                let inputs = self
+                    .sources
+                    .iter()
+                    .flat_map(|source| source.inputs_on(source.display_clock(preview)))
+                    .collect::<Vec<_>>();
+                self.derived.add_predicate(&expression, &inputs, &self.span);
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+
     fn apply_source_action(&mut self, index: usize, action: SourceAction) {
         match action {
             SourceAction::Pin(native_time) => {
@@ -505,6 +551,7 @@ impl Viewer {
                     native_time,
                 });
             }
+            SourceAction::DerivePredicate => self.derive_predicate(index),
             SourceAction::Share(native) => self.shared.set(Some(interval::Pin {
                 source: self.sources[index].id,
                 native,
@@ -770,12 +817,12 @@ impl Capture {
     fn content(
         &mut self,
         ui: &mut Ui,
-        palette: &AppPalette,
         copies: &mut Copies,
         link: Option<&Link>,
+        can_add_equation: bool,
     ) -> Interaction {
         match self {
-            Self::Analog(view) => view.content(ui, palette, copies, link),
+            Self::Analog(view) => view.content(ui, copies, link, can_add_equation),
             Self::Digital(view) => view.content(ui, copies, link),
             Self::Unavailable(_) => Interaction::default(),
         }

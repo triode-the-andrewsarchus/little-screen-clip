@@ -245,7 +245,10 @@ impl Viewer {
             self.protocols.exit_inspection(&mut self.span);
             self.protocols.close();
             self.frequency(ui, link);
-            return Interaction { probe: None, share };
+            return Interaction {
+                share,
+                ..Interaction::default()
+            };
         }
         if self.protocols.decoder_buttons(ui, &self.overview.lanes) {
             self.channel_picker.close();
@@ -289,7 +292,11 @@ impl Viewer {
                 self.transitions(ui);
             }
         }
-        Interaction { probe, share }
+        Interaction {
+            probe,
+            share,
+            ..Interaction::default()
+        }
     }
 
     fn toolbar(

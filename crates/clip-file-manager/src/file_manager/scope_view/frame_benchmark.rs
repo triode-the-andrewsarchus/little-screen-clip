@@ -22,7 +22,6 @@ fn scope_frame_benchmark() {
         viewer.index = Some(viewer.recording.index(&cancel).unwrap());
         let indexed = start.elapsed();
         viewer.index_started = true;
-        let palette = AppPalette::default();
         let mut copies = Copies::default();
         let ctx = Context::default();
         let domain = viewer.domain.end - viewer.domain.start;
@@ -58,7 +57,7 @@ fn scope_frame_benchmark() {
                     |ctx| {
                         ctx.root_ui(|ui| {
                             egui::CentralPanel::default().show(ui, |ui| {
-                                viewer.content(ui, &palette, &mut copies, None);
+                                viewer.content(ui, &mut copies, None, true);
                             });
                         });
                     },
