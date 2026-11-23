@@ -4,6 +4,7 @@ mod activity;
 mod audio;
 mod flowgraph;
 mod images;
+mod iq_power;
 mod logic_capture;
 mod pulse_signals;
 mod radio;
@@ -543,6 +544,10 @@ impl ScreenRenderer {
             }
             Some(Preview::Flowgraph(preview)) => {
                 self.draw_flowgraph_card(pixmap, preview, [rx, ry, rw, rh]);
+                true
+            }
+            Some(Preview::Iq(iq)) => {
+                self.draw_iq_card(pixmap, iq, [rx, ry, rw, rh]);
                 true
             }
             Some(Preview::Midi(score)) => {

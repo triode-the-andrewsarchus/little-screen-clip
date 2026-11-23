@@ -45,6 +45,7 @@ mod photo_ratings;
 use little_clip_core::jobs::task as preview_job;
 mod can_view;
 mod flowgraph_view;
+mod iq_view;
 mod logic_view;
 mod metadata;
 mod packets_view;
@@ -141,6 +142,14 @@ pub(super) enum DocumentPosition {
     ScopeSamples {
         first: u64,
         end: u64,
+        revision: u64,
+    },
+    IqSamples {
+        first: u64,
+        end: u64,
+        revision: u64,
+    },
+    RawIq {
         revision: u64,
     },
     FlowgraphBlock {

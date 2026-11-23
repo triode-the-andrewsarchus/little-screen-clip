@@ -62,6 +62,7 @@ enum Loaded {
     Tags(Box<super::tags_view::Viewer>),
     RadioProgramming(Box<super::radio_view::Viewer>),
     Flowgraph(Box<super::flowgraph_view::Viewer>),
+    IqCapture(Box<super::iq_view::Viewer>),
     Video(super::media::VideoMetadata),
     VideoAudio(video_audio::Prepared),
     External,
@@ -98,6 +99,7 @@ enum ViewerSession {
     Tags(Box<super::tags_view::Viewer>),
     RadioProgramming(Box<super::radio_view::Viewer>),
     Flowgraph(Box<super::flowgraph_view::Viewer>),
+    IqCapture(Box<super::iq_view::Viewer>),
     Video(video::Video),
 }
 struct Loading {
@@ -454,6 +456,10 @@ impl Viewers {
                 Some(ViewerSession::Flowgraph(state)),
                 Some(super::DocumentPosition::FlowgraphBlock { ordinal, .. }),
             ) => state.focus_block(ordinal),
+            (
+                Some(ViewerSession::IqCapture(state)),
+                Some(super::DocumentPosition::IqSamples { first, end, .. }),
+            ) => state.focus_samples(first, end),
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::SubtitleCue(cue))) => {
                 state.preview.select_subtitle(cue)
             }
@@ -501,6 +507,7 @@ impl Viewers {
                 | ViewerSession::Tags(_)
                 | ViewerSession::RadioProgramming(_)
                 | ViewerSession::Flowgraph(_)
+                | ViewerSession::IqCapture(_)
                 | ViewerSession::Sheet(_),
             )
             | None => {}
@@ -815,8 +822,9 @@ fn load_file_session(
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
     use super::DocumentPosition::{
-        ArchiveMember, CanFrame, CapturedPacket, FlowgraphBlock, LogicRegion, PulseSignal,
-        RadioChannel, ScopeSamples, TagRecord, TouchstoneBand, VideoAudioRange, VideoAudioTrack,
+        ArchiveMember, CanFrame, CapturedPacket, FlowgraphBlock, IqSamples, LogicRegion,
+        PulseSignal, RadioChannel, RawIq, ScopeSamples, TagRecord, TouchstoneBand, VideoAudioRange,
+        VideoAudioTrack,
     };
     let revision = match position {
         Some(
@@ -830,7 +838,9 @@ fn load_file_session(
             | PulseSignal { revision, .. }
             | TagRecord { revision, .. }
             | RadioChannel { revision, .. }
-            | FlowgraphBlock { revision, .. },
+            | FlowgraphBlock { revision, .. }
+            | IqSamples { revision, .. }
+            | RawIq { revision },
         ) => Some(revision),
         _ => None,
     };
@@ -849,6 +859,9 @@ fn load_file_session(
             Some((start_ms, end_ms)),
             cancelled,
         )?),
+        Some(RawIq { .. }) => super::iq_view::Viewer::load_raw(source, cancelled)
+            .map(Box::new)
+            .map(Loaded::IqCapture)?,
         _ => load(source, config, cancelled)?,
     };
     let identity = if matches!(&loaded, Loaded::System(_) | Loaded::Minecraft(_)) {
@@ -951,6 +964,9 @@ fn load(
         Kind::Document(Format::Flowgraph) => super::flowgraph_view::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Flowgraph),
+        Kind::Document(Format::IqCapture) => super::iq_view::Viewer::load(path, cancelled)
+            .map(Box::new)
+            .map(Loaded::IqCapture),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
@@ -1084,6 +1100,10 @@ fn session(
         }
         Loaded::RadioProgramming(viewer) => ViewerSession::RadioProgramming(viewer),
         Loaded::Flowgraph(viewer) => ViewerSession::Flowgraph(viewer),
+        Loaded::IqCapture(mut viewer) => {
+            viewer.set_check(check);
+            ViewerSession::IqCapture(viewer)
+        }
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
@@ -1193,6 +1213,7 @@ fn render(
         ViewerSession::Tags(state) => state.ui(ui, close, palette, copies),
         ViewerSession::RadioProgramming(state) => state.ui(ui, close, palette),
         ViewerSession::Flowgraph(state) => state.ui(ui, close, palette),
+        ViewerSession::IqCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Video(state) => state.ui(ui, close, palette, copies),
     }
 }

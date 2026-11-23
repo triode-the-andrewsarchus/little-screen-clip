@@ -6616,6 +6616,7 @@ dependencies = [
  "roxmltree 0.21.2",
  "rusqlite",
  "rustchord",
+ "rustfft",
  "rustix 1.1.6",
  "scenix-loader",
  "scenix-mesh",

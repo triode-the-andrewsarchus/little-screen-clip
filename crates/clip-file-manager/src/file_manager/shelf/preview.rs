@@ -71,6 +71,7 @@ pub(in crate::file_manager) enum Source {
     Tags(PathBuf),
     RadioProgramming(PathBuf),
     Flowgraph(PathBuf),
+    IqCapture(PathBuf),
     Embroidery(PathBuf),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
@@ -138,6 +139,7 @@ impl Source {
             super::super::document_format::Format::Notebook => Source::Notebook(path),
             super::super::document_format::Format::Book => Source::Book(path),
             super::super::document_format::Format::Flowgraph => Source::Flowgraph(path),
+            super::super::document_format::Format::IqCapture => Source::IqCapture(path),
             super::super::document_format::Format::RadioProgramming => {
                 Source::RadioProgramming(path)
             }
@@ -204,6 +206,7 @@ impl Source {
             | Self::Tags(_)
             | Self::RadioProgramming(_)
             | Self::Flowgraph(_)
+            | Self::IqCapture(_)
             | Self::Embroidery(_)
             | Self::Multisample(_)
             | Self::Mail(_)
@@ -331,6 +334,7 @@ impl Source {
             Source::PulseSignals(path) => super::super::pulse_view::strip::load(&path, token),
             Source::Tags(path) => super::super::tags_view::strip::load(&path, token),
             Source::Flowgraph(path) => super::super::flowgraph_view::strip::load(&path, token),
+            Source::IqCapture(path) => super::super::iq_view::strip::load(&path, token),
             Source::RadioProgramming(path) => super::super::radio_view::strip::load(&path, token),
             Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),

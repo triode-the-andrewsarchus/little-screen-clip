@@ -43,6 +43,7 @@ toml_edit = { version = "0.25", features = ["serde"] }
 symphonia.workspace = true
 hound = "3.5.1"
 rustchord = "0.6.0"
+rustfft = "6.4.1"
 realfft = "3.5.1"
 rayon.workspace = true
 fearless_simd = "1.2"

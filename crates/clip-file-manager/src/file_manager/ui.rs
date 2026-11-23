@@ -1836,6 +1836,21 @@ impl ListActions {
         }
     }
 
+    fn raw_iq_menu(&mut self, ui: &mut Ui, entry: &super::filesystem::Entry) {
+        let candidate = entry.path.extension().is_some_and(|extension| {
+            ["cs8", "cu8", "iq", "bin"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        });
+        if entry.regular_file && candidate && ui.button("Open as raw I/Q").clicked() {
+            self.open = Some(entry.path.clone());
+            self.open_position = Some(super::DocumentPosition::RawIq {
+                revision: entry.revision,
+            });
+            ui.close();
+        }
+    }
+
     fn row_context_menu(
         &mut self,
         response: &egui::Response,
@@ -1872,6 +1887,7 @@ impl ListActions {
             }
 
             self.video_audio_menu(ui, entry);
+            self.raw_iq_menu(ui, entry);
 
             if entry.is_photo() && ui.button("Find similar photos in canvas").clicked() {
                 self.search_similar = Some(entry.path.clone());

@@ -26,6 +26,13 @@ pub(crate) struct Page {
     pub thumbnail: ImageThumbnail,
 }
 
+pub(crate) struct Iq {
+    pub power: little_clip_core::engineering::iq::PowerOverview,
+    pub rate: Option<f64>,
+    pub center: Option<f64>,
+    pub duration: Option<f64>,
+}
+
 pub(crate) enum Preview {
     Page(Page),
     Spreadsheet {
@@ -42,6 +49,7 @@ pub(crate) enum Preview {
     Tags(little_clip_core::engineering::tags::Document),
     Radio(little_clip_core::engineering::radio::Summary),
     Flowgraph(little_clip_core::engineering::flowgraph::Preview),
+    Iq(Iq),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -65,6 +73,7 @@ enum Kind {
     Tags,
     Radio,
     Flowgraph,
+    Iq,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -325,6 +334,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Radio
     } else if Format::for_path(path) == Some(Format::Flowgraph) {
         Kind::Flowgraph
+    } else if Format::for_path(path) == Some(Format::IqCapture) {
+        Kind::Iq
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
@@ -419,6 +430,22 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             let graph = flowgraph::preview(file.try_clone().ok()?, &cancel).ok()?;
             source.check_file(&file).ok()?;
             Some(Preview::Flowgraph(graph))
+        }
+        Kind::Iq => {
+            use little_clip_core::{engineering::iq, file_source::ReadCheck};
+            let cancel = AtomicBool::new(false);
+            let recording =
+                iq::Recording::open_sigmf(path, None, ReadCheck::default(), &cancel).ok()?;
+            recording
+                .checked(&cancel, |capture| {
+                    Ok(Preview::Iq(Iq {
+                        power: capture.overview(0..capture.sample_count(), 192, &cancel)?,
+                        rate: capture.metadata().sample_rate_hz,
+                        center: capture.tuning_at(0).and_then(|tuning| tuning.center_hz),
+                        duration: capture.duration_seconds(),
+                    }))
+                })
+                .ok()
         }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);

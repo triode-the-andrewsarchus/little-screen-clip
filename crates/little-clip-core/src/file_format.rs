@@ -5,6 +5,8 @@
 //! documents. Ambiguous sampler names require positive content identification;
 //! they retain their ordinary routing until a worker supplies that evidence.
 use std::{
+    borrow::Cow,
+    fs::File,
     io::Read,
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
@@ -36,19 +38,12 @@ pub enum Format {
     OneWire,
     RadioProgramming,
     Flowgraph,
+    IqCapture,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
     pub fn for_path(path: &Path) -> Option<Self> {
-        let extension = path.extension()?.to_str()?;
-        let lower;
-        let extension = if extension.bytes().any(|b| b.is_ascii_uppercase()) {
-            lower = extension.to_ascii_lowercase();
-            lower.as_str()
-        } else {
-            extension
-        };
-        match extension {
+        match lowercase_extension(path)?.as_ref() {
             "ttf" | "ttc" | "otf" | "otc" | "woff" | "woff2" => Some(Self::Font),
             "ipynb" => Some(Self::Notebook),
             "epub" | "cbz" => Some(Self::Book),
@@ -64,6 +59,7 @@ impl Format {
             "ir" => Some(Self::PulseSignals),
             "chirp" => Some(Self::RadioProgramming),
             "grc" => Some(Self::Flowgraph),
+            "sigmf-meta" | "sigmf-data" => Some(Self::IqCapture),
             _ if crate::engineering::touchstone::extension_ports(path).is_some() => {
                 Some(Self::Touchstone)
             }
@@ -76,24 +72,38 @@ impl Format {
             _ => crate::subtitles::is_subtitle_path(path).then_some(Self::Subtitle),
         }
     }
-}
-/// Whether an extension requires positive content evidence to override routing.
-pub fn ambiguous_engineering_path(path: &Path) -> bool {
-    packet_probe_path(path)
-        || crate::engineering::tags::is_candidate_path(path)
-        || path.extension().is_some_and(|extension| {
-            [
-                "csv", "bin", "ts", "dsl", "trace", "asc", "blf", "trc", "log", "candump", "sub",
-                "icf",
-            ]
-            .iter()
-            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-        })
+    /// Types whose previews show instrument or engineering data.
+    pub fn is_engineering(self) -> bool {
+        matches!(
+            self,
+            Self::Oscilloscope
+                | Self::PowerRecording
+                | Self::Touchstone
+                | Self::LogicCapture
+                | Self::PacketCapture
+                | Self::CanCapture
+                | Self::PulseSignals
+                | Self::TagCapture
+                | Self::OneWire
+                | Self::RadioProgramming
+                | Self::Flowgraph
+                | Self::IqCapture
+        )
+    }
 }
 
-fn packet_probe_path(path: &Path) -> bool {
-    crate::engineering::packets::is_candidate_path(path)
-        && Format::for_path(path) != Some(Format::PacketCapture)
+fn lowercase_extension(path: &Path) -> Option<Cow<'_, str>> {
+    let extension = path.extension()?.to_str()?;
+    Some(if extension.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        Cow::Owned(extension.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(extension)
+    })
+}
+
+/// Whether an extension requires positive content evidence to override routing.
+pub fn ambiguous_engineering_path(path: &Path) -> bool {
+    EngineeringProbe::for_path(path).is_some()
 }
 
 /// Check a bounded, identity-verified prefix on a content worker.
@@ -101,64 +111,106 @@ fn packet_probe_path(path: &Path) -> bool {
 /// No hint leaves existing routing in place. The successful decoder must still
 /// validate its own pinned input, including any format-specific offsets.
 pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format> {
-    use crate::{
-        engineering::{can, logic, packets, pulses, radio, scope, tags, touchstone},
-        file_source::ReadCheck,
-    };
-
-    if !ambiguous_engineering_path(path) || cancel.load(Ordering::Relaxed) {
-        return None;
-    }
-    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-    let packet = packet_probe_path(path);
-    let tag = tags::is_candidate_path(path);
-    let can = matches!(
-        extension.as_str(),
-        "trace" | "asc" | "blf" | "trc" | "log" | "candump"
-    );
-    let bound = if packet || extension == "ts" {
-        64 * 1024
-    } else if tag {
-        32 * 1024
-    } else if can || extension == "icf" {
-        can::HEADER_BYTES
-    } else {
-        scope::HEADER_BYTES
-    };
-    let check = ReadCheck::default();
-    let (file, source) = check.open(path, None, cancel).ok()?;
-    let length = file.metadata().ok()?.len();
-    let mut bytes = Vec::new();
-    (&file).take(bound as u64).read_to_end(&mut bytes).ok()?;
+    let probe = EngineeringProbe::for_path(path)?;
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
-    let format = match extension.as_str() {
-        _ if packet => packets::recognizes(&bytes, path).then_some(Format::PacketCapture),
-        _ if can && can::identify(&bytes).is_some() => Some(Format::CanCapture),
-        _ if tag => {
-            tags::recognizes_with_length(&bytes, path, length).then_some(if extension == "ibtn" {
-                Format::OneWire
-            } else {
-                Format::TagCapture
-            })
-        }
-        _ if can => None,
-        "ts" => touchstone::recognizes(&bytes, path).then_some(Format::Touchstone),
-        "icf" => radio::is_icf(&bytes).then_some(Format::RadioProgramming),
-        "csv" if radio::is_chirp_csv(&bytes) => Some(Format::RadioProgramming),
-        "sub" => matches!(
-            pulses::identify(&bytes),
-            Some(pulses::Format::RadioRaw | pulses::Format::RadioDecoded)
-        )
-        .then_some(Format::PulseSignals),
-        "dsl" => (bytes.starts_with(b"PK\x03\x04") && logic::probe(&file, path))
-            .then_some(Format::LogicCapture),
-        "bin" if logic::matches_binary_header(&bytes) => Some(Format::LogicCapture),
-        _ => scope::matches_header_with_len(&bytes, length).then_some(Format::Oscilloscope),
-    }?;
+    let (file, source) = crate::file_source::ReadCheck::default()
+        .open(path, None, cancel)
+        .ok()?;
+    let length = file.metadata().ok()?.len();
+    let mut bytes = Vec::new();
+    (&file)
+        .take(probe.byte_limit() as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let format = probe.identify(path, &file, &bytes, length)?;
     source.check_file(&file).ok()?;
     Some(format)
+}
+
+enum EngineeringProbe {
+    Csv,
+    Binary,
+    Touchstone,
+    DsView,
+    FlipperRadio,
+    Icom,
+    NetworkCapture,
+    Can,
+    Trace,
+    Tag(Format),
+}
+
+impl EngineeringProbe {
+    fn for_path(path: &Path) -> Option<Self> {
+        use crate::engineering::{packets, tags};
+
+        Some(match lowercase_extension(path)?.as_ref() {
+            "csv" => Self::Csv,
+            "bin" => Self::Binary,
+            "ts" => Self::Touchstone,
+            "dsl" => Self::DsView,
+            "sub" => Self::FlipperRadio,
+            "icf" => Self::Icom,
+            "pcap" | "pcapng" => return None,
+            "asc" | "blf" | "trc" | "log" | "candump" => Self::Can,
+            "trace" => Self::Trace,
+            "ibtn" => Self::Tag(Format::OneWire),
+            _ if tags::is_candidate_path(path) => Self::Tag(Format::TagCapture),
+            _ if packets::is_candidate_path(path) => Self::NetworkCapture,
+            _ => return None,
+        })
+    }
+
+    fn byte_limit(&self) -> usize {
+        use crate::engineering::{can, pulses, scope};
+
+        match self {
+            Self::Csv | Self::Binary => scope::HEADER_BYTES,
+            Self::Touchstone | Self::NetworkCapture => 64 * 1024,
+            Self::DsView => 4,
+            Self::FlipperRadio => pulses::HEADER_BYTES,
+            Self::Icom | Self::Can => can::HEADER_BYTES,
+            Self::Trace | Self::Tag(_) => 32 * 1024,
+        }
+    }
+
+    fn identify(&self, path: &Path, file: &File, bytes: &[u8], length: u64) -> Option<Format> {
+        use crate::engineering::{can, logic, packets, pulses, radio, scope, tags, touchstone};
+
+        let scope_format =
+            || scope::matches_header_with_len(bytes, length).then_some(Format::Oscilloscope);
+        let can_format = || can::identify(bytes).map(|_| Format::CanCapture);
+        let tag_format =
+            |format| tags::recognizes_with_length(bytes, path, length).then_some(format);
+        match self {
+            Self::Csv => radio::is_chirp_csv(bytes)
+                .then_some(Format::RadioProgramming)
+                .or_else(scope_format),
+            Self::Binary => logic::matches_binary_header(bytes)
+                .then_some(Format::LogicCapture)
+                .or_else(scope_format),
+            Self::Touchstone => touchstone::recognizes(bytes, path).then_some(Format::Touchstone),
+            Self::DsView => (bytes.starts_with(b"PK\x03\x04") && logic::probe(file, path))
+                .then_some(Format::LogicCapture),
+            Self::FlipperRadio => matches!(
+                pulses::identify(bytes),
+                Some(pulses::Format::RadioRaw | pulses::Format::RadioDecoded)
+            )
+            .then_some(Format::PulseSignals),
+            Self::Icom => radio::is_icf(bytes).then_some(Format::RadioProgramming),
+            Self::NetworkCapture => {
+                packets::recognizes(bytes, path).then_some(Format::PacketCapture)
+            }
+            Self::Can => can_format(),
+            Self::Trace => can_format().or_else(|| tag_format(Format::TagCapture)),
+            Self::Tag(format) => tag_format(*format),
+        }
+    }
 }
 
 /// Returns whether a path uses a Gaussian-capable scene container extension.
