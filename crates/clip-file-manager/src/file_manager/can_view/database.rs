@@ -9,16 +9,12 @@ use crate::{
     },
     ui_appearance::WorkbenchColors,
 };
-use egui::{Context, Ui};
+use egui::Ui;
 use little_clip_core::engineering::can::{
     Frame, Identifier, Index,
     dbc::{Database, Field, RawValue},
 };
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 const FIELDS: Columns<4> = Columns {
     id: "CAN signal fields",
@@ -31,7 +27,7 @@ const FIELDS: Columns<4> = Columns {
 
 #[derive(Default)]
 pub(super) struct Panel {
-    dialog: bool,
+    editing: bool,
     autofocus: bool,
     path: String,
     database: Option<(PathBuf, Arc<Database>)>,
@@ -64,7 +60,7 @@ impl Panel {
             })
             .clicked()
         {
-            self.dialog = true;
+            self.editing = true;
             self.autofocus = true;
         }
         if let Some((path, database)) = self.database.as_ref() {
@@ -94,46 +90,56 @@ impl Panel {
         }
     }
 
-    pub(super) fn dialog(&mut self, ctx: &Context, capture: &Arc<Capture>) {
-        if !self.dialog {
+    pub(super) fn attachment(&mut self, ui: &mut Ui, capture: &Arc<Capture>) {
+        if !self.editing {
             return;
         }
-        let dialog = egui::Modal::new(egui::Id::unique("attach-can-database")).show(ctx, |ui| {
-            ui.heading("Load a CAN database");
+        if self.path.is_empty() {
+            self.path = capture.database_hint();
+        }
+        let width = (ui.available_width() * 0.63).min(470.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("DBC path");
             let field = ui.add(
                 egui::TextEdit::singleline(&mut self.path)
+                    .id_salt("attach-can-database")
                     .hint_text("Path to a .dbc file")
-                    .desired_width(460.0),
+                    .desired_width(width),
             );
+            field
+                .clone()
+                .on_hover_text("Relative paths use the capture's folder.");
             if std::mem::take(&mut self.autofocus) {
                 field.request_focus();
             }
-            ui.weak("Relative paths use the capture's folder.");
-            ui.horizontal(|ui| {
-                let submitted =
-                    field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                let load = ui
-                    .add_enabled(!self.path.trim().is_empty(), egui::Button::new("Load DBC"))
-                    .clicked()
-                    || submitted;
-                if load && !self.path.trim().is_empty() {
-                    let source = Path::new(self.path.trim()).to_owned();
-                    let capture = capture.clone();
-                    self.loading =
-                        Some(start(&JOBS, ctx, Duration::from_secs(15), move |cancel| {
-                            capture.database(&source, cancel)
-                        }));
-                    self.error = None;
-                    self.dialog = false;
+            let submitted =
+                field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            let load = ui
+                .add_enabled(!self.path.trim().is_empty(), egui::Button::new("Attach"))
+                .clicked()
+                || submitted;
+            if load {
+                match little_clip_core::path_address::decode_path(self.path.trim()) {
+                    Ok(path) if !path.as_os_str().is_empty() => {
+                        let capture = capture.clone();
+                        self.loading = Some(start(
+                            &JOBS,
+                            ui.ctx(),
+                            Duration::from_secs(15),
+                            move |cancel| capture.database(&path, cancel),
+                        ));
+                        self.error = None;
+                        self.editing = false;
+                    }
+                    Ok(_) => self.error = Some("Enter a DBC path.".into()),
+                    Err(error) => self.error = Some(error),
                 }
-                if ui.button("Cancel").clicked() {
-                    self.dialog = false;
-                }
-            });
+            }
+            if ui.button("Cancel").clicked() {
+                self.editing = false;
+                self.error = None;
+            }
         });
-        if dialog.should_close() {
-            self.dialog = false;
-        }
     }
 
     pub(super) fn poll(&mut self) {
@@ -171,6 +177,7 @@ impl Panel {
         origin: i128,
         height: f32,
         colors: WorkbenchColors,
+        plot_action: bool,
     ) {
         let message = frame
             .id
@@ -181,7 +188,7 @@ impl Panel {
         }
         if ui.available_width() < 690.0 {
             table::details(ui, frame, origin, 45.0, self.field(frame));
-            self.fields(ui, frame, height - 90.0, colors);
+            self.fields(ui, frame, height - 90.0, colors, plot_action);
             return;
         }
         let width = ui.available_width();
@@ -196,7 +203,7 @@ impl Panel {
             );
             ui.separator();
             ui.vertical(|ui| {
-                self.fields(ui, frame, height - 24.0, colors);
+                self.fields(ui, frame, height - 24.0, colors, plot_action);
             });
         });
     }
@@ -206,7 +213,14 @@ impl Panel {
         self.database.as_ref()?.1.message(id)?.signals.get(field)
     }
 
-    fn fields(&mut self, ui: &mut Ui, frame: &Frame, height: f32, colors: WorkbenchColors) {
+    fn fields(
+        &mut self,
+        ui: &mut Ui,
+        frame: &Frame,
+        height: f32,
+        colors: WorkbenchColors,
+        plot_action: bool,
+    ) {
         let Some(id) = frame.id else { return };
         let Some(message) = self.database.as_ref().and_then(|entry| entry.1.message(id)) else {
             return;
@@ -217,7 +231,8 @@ impl Panel {
             .map(|(_, field)| field as u64);
         ui.horizontal(|ui| {
             ui.strong(&message.name);
-            if let Some(field) = selected.and_then(|index| message.signals.get(index as usize))
+            if plot_action
+                && let Some(field) = selected.and_then(|index| message.signals.get(index as usize))
                 && ui
                     .add_enabled(!field.bits().is_empty(), egui::Button::new("Plot signal"))
                     .on_hover_text(format!("Plot {} on {}", field.name, frame.channel))

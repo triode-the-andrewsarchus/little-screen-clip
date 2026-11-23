@@ -246,6 +246,21 @@ pub(super) fn scan_time(
     cancel: &AtomicBool,
     mut visit: impl FnMut(Frame) -> bool,
 ) -> Result<TimeScan, String> {
+    scan_candidates(capture, index, window, true, cancel, |frame| {
+        !window.contains(&frame.timestamp_ns) || visit(frame)
+    })
+}
+
+// Includes out-of-range rows inside admitted checkpoints so callers can
+// distinguish adjacent observations from holes cut by a time filter.
+pub(super) fn scan_candidates(
+    capture: &Capture,
+    index: &Index,
+    window: &Range<i128>,
+    retain_payload: bool,
+    cancel: &AtomicBool,
+    mut visit: impl FnMut(Frame) -> bool,
+) -> Result<TimeScan, String> {
     valid_index(capture, index)?;
     if window.start > window.end {
         return Err("Invalid CAN time interval".into());
@@ -279,17 +294,15 @@ pub(super) fn scan_time(
                 });
             }
             let (_, mut frame) = scanner
-                .next(true, cancel)?
+                .next(retain_payload, cancel)?
                 .ok_or("CAN frame index is incomplete")?;
             scanned += 1;
-            if window.contains(&frame.timestamp_ns) {
-                frame.row = row;
-                if !visit(frame) {
-                    return Ok(TimeScan {
-                        scanned,
-                        truncated: false,
-                    });
-                }
+            frame.row = row;
+            if !visit(frame) {
+                return Ok(TimeScan {
+                    scanned,
+                    truncated: false,
+                });
             }
         }
     }

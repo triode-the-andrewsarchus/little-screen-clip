@@ -3,6 +3,7 @@
 mod activity;
 mod capture;
 mod database;
+mod intervals;
 mod signal_plot;
 pub(super) mod strip;
 mod table;
@@ -60,6 +61,7 @@ pub(super) struct Viewer {
     filtered: Option<Filtered>,
     filter_job: Option<Job<Filtered>>,
     database: database::Panel,
+    intervals: intervals::Panel,
     error: Option<String>,
 }
 
@@ -96,6 +98,7 @@ impl Viewer {
             filtered: None,
             filter_job: None,
             database: database::Panel::default(),
+            intervals: intervals::Panel::default(),
             error: None,
         })
     }
@@ -122,15 +125,25 @@ impl Viewer {
             close,
         );
         shell.render_header(ui, |_| {});
-        self.toolbar(ui, copies);
-        self.filter_controls(ui);
-        self.timeline(ui, colors);
-        self.signal_plot(ui, colors, copies);
-        self.navigation(ui);
-        self.browser(ui, colors);
+        if self.intervals.visible()
+            && let Some(index) = &self.index
+        {
+            let full = activity::domain(&index.summary);
+            let origin = full.start;
+            let workspace = intervals::Workspace {
+                capture: &self.capture,
+                index,
+                full,
+                colors,
+            };
+            if let Some(frame) = self.intervals.show(ui, workspace) {
+                self.database
+                    .inspect(ui, frame, origin, ui.available_height(), colors, false);
+            }
+        } else {
+            self.frame_workspace(ui, colors, copies);
+        }
         self.request_index(ui.ctx());
-        self.request_detail(ui.ctx());
-        self.database.dialog(ui.ctx(), &self.capture);
         if self.index_job.is_some()
             || self.windows.pending()
             || self.detail_job.is_some()
@@ -141,6 +154,17 @@ impl Viewer {
         }
     }
 
+    fn frame_workspace(&mut self, ui: &mut Ui, colors: WorkbenchColors, copies: &mut Copies) {
+        self.toolbar(ui, copies);
+        self.filter_controls(ui);
+        self.database.attachment(ui, &self.capture);
+        self.timeline(ui, colors);
+        self.signal_plot(ui, colors, copies);
+        self.navigation(ui);
+        self.browser(ui, colors);
+        self.request_detail(ui.ctx());
+    }
+
     fn summary(&self) -> &Summary {
         self.index
             .as_ref()
@@ -149,25 +173,60 @@ impl Viewer {
 
     fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) {
         let summary = self.summary();
-        ui.horizontal_wrapped(|ui| {
-            ui.strong(summary.format.label());
-            let prefix = if summary.complete { "" } else { " initial" };
-            ui.weak(format!(
-                "{}{prefix} frames · {} buses",
-                summary.frames,
-                summary.channels.len()
-            ));
-            if summary.errors > 0 {
-                ui.weak(format!("{} errors", summary.errors));
-            }
-            if self.index_job.is_some() && !summary.complete {
-                ui.weak("Indexing all frames…");
-            }
-            self.copy_action(ui, copies);
-        });
+        let stream = ui
+            .horizontal_wrapped(|ui| {
+                ui.strong(summary.format.label());
+                let prefix = if summary.complete { "" } else { " initial" };
+                ui.weak(format!(
+                    "{}{prefix} frames · {} buses",
+                    summary.frames,
+                    summary.channels.len()
+                ));
+                if summary.errors > 0 {
+                    ui.weak(format!("{} errors", summary.errors));
+                }
+                if self.index_job.is_some() && !summary.complete {
+                    ui.weak("Indexing all frames…");
+                }
+                self.copy_action(ui, copies);
+                self.intervals_action(ui)
+            })
+            .inner;
+        if let Some(stream) = stream {
+            let full = activity::domain(self.summary());
+            let scope = self.selected_span().map_or_else(
+                || full.clone(),
+                |span| span.start.max(full.start)..span.end.min(full.end),
+            );
+            self.intervals
+                .open(stream, if scope.is_empty() { full } else { scope });
+            self.windows.clear_request();
+            ui.ctx().request_repaint();
+        }
         if let Some(error) = &self.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+    }
+
+    fn intervals_action(
+        &self,
+        ui: &mut Ui,
+    ) -> Option<little_clip_core::engineering::can::intervals::Stream> {
+        use little_clip_core::engineering::can::intervals::Stream;
+        let stream = self
+            .selected
+            .and_then(|row| self.source_frame(row))
+            .and_then(Stream::of)?;
+        ui.add_enabled(
+            self.index.is_some(),
+            egui::Button::new(format!("Intervals for {}", stream.id)),
+        )
+        .on_hover_text(format!(
+            "Measure adjacent observed frames on {}",
+            stream.channel
+        ))
+        .clicked()
+        .then_some(stream)
     }
 
     fn copy_action(&self, ui: &mut Ui, copies: &mut Copies) {
@@ -501,7 +560,8 @@ impl Viewer {
         if let Some(row) = self.selected {
             ui.separator();
             if let Some(frame) = self.source_frame(row).cloned() {
-                self.database.inspect(ui, &frame, origin, details, colors);
+                self.database
+                    .inspect(ui, &frame, origin, details, colors, true);
             } else {
                 ui.weak(format!("Reading frame {}…", row + 1));
             }

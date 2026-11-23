@@ -1,7 +1,7 @@
 use super::signal_plot::Signal;
 use crate::file_source::{FileSource, ReadCheck};
 use little_clip_core::engineering::can::{
-    self, Filter, Filtered, Frame, Index, Summary, dbc, series,
+    self, Filter, Filtered, Frame, Index, Summary, dbc, intervals, series,
 };
 use std::{
     io::{BufWriter, Read, Write},
@@ -122,6 +122,24 @@ impl Capture {
         cancel: &AtomicBool,
     ) -> Result<Filtered, String> {
         self.read(cancel, |capture| capture.filter(index, filter, cancel))
+    }
+
+    pub fn intervals(
+        &self,
+        index: &Index,
+        stream: &intervals::Stream,
+        time_ns: Range<i128>,
+        cancel: &AtomicBool,
+    ) -> Result<intervals::Report, String> {
+        self.read(cancel, |capture| {
+            capture.intervals(index, stream, time_ns, cancel)
+        })
+    }
+
+    pub fn database_hint(&self) -> String {
+        self.path.file_name().map_or_else(String::new, |name| {
+            little_clip_core::path_address::display_path(&Path::new(name).with_extension("dbc"))
+        })
     }
 
     pub fn copy(
