@@ -381,7 +381,11 @@ impl Viewer {
             (available / self.sources.len() as f32 - 50.0).max(205.0)
         };
         let grouped = self.compares_analog();
-        let scroll = self.session.scroll.area(ui).show(ui, |ui| {
+        let mut area = self.session.scroll.area(ui);
+        if let Some(offset) = self.shared.return_scroll() {
+            area = area.vertical_scroll_offset(offset);
+        }
+        let scroll = area.show(ui, |ui| {
             if grouped {
                 (next_probe, action) = self.analog_comparison(ui, copies, timeline);
             }
@@ -507,11 +511,13 @@ impl Viewer {
             clock,
             &mut self.span,
             &self.domain,
+            self.session.scroll.offset(),
         );
-        let reveal_input = self
+        let mut reveal_input = self
             .reveal_input
-            .take_if(|target| target.source == source.id);
-        let evidence = timeline
+            .take_if(|target| target.source == source.id)
+            .map(|target| target.channel);
+        let mut evidence: Vec<_> = timeline
             .evidence
             .iter()
             .filter_map(|window| {
@@ -522,6 +528,12 @@ impl Viewer {
                 })
             })
             .collect();
+        if let Some((marker, reveal)) = self.shared.evidence(source.id) {
+            if reveal {
+                reveal_input = Some(marker.channel);
+            }
+            evidence.push(marker);
+        }
         Link {
             domain: clock.native_range(&self.domain),
             clock,
@@ -530,7 +542,7 @@ impl Viewer {
             landmark: self.alignment.marker(source.id),
             shared,
             evidence,
-            reveal_input: reveal_input.map(|target| target.channel),
+            reveal_input,
             visiting_input: timeline
                 .visiting
                 .filter(|target| target.source == source.id)
@@ -594,6 +606,7 @@ impl Viewer {
             }
             SourceAction::ClearReference => self.reference = None,
             SourceAction::Relink(source) => {
+                self.shared.invalidate_source(self.sources[index].id);
                 self.sources[index] = source;
                 self.comparison.initialized = false;
             }

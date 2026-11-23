@@ -1,18 +1,19 @@
 //! One native interval projected onto the clocks of the linked recordings.
 
 mod measure;
+mod power;
 
-use super::{Capture, Source, alignment, take_query_result, timeline};
+use super::{Capture, Source, alignment, evidence, take_query_result, timeline};
 use crate::file_manager::preview_job::Task;
 use egui::{Context, Ui};
 use little_clip_core::{
     BackgroundJobs,
     engineering::{
         analysis::Clock,
-        waveforms::{Integral, PowerTotals, display_axis_value, display_value},
+        waveforms::{display_axis_value, display_value},
     },
 };
-use measure::{Figures, Input, Report, SampleReport};
+use measure::{Figures, Input, Measurement, Report, SampleReport};
 use std::{collections::BTreeMap, ops::Range, sync::LazyLock, time::Duration};
 
 static JOBS: LazyLock<BackgroundJobs> =
@@ -52,10 +53,27 @@ impl Pin {
     }
 }
 
+struct PowerVisit {
+    source: u64,
+    selection: power::Selection,
+    request: Range<f64>,
+    clock: Clock,
+    before: Range<f64>,
+    scroll: f32,
+    reveal: bool,
+}
+
+enum Reveal {
+    Span(Range<f64>),
+    Power(power::Selection),
+}
+
 #[derive(Default)]
 pub(super) struct Shared {
     pub pin: Option<Pin>,
     reads: BTreeMap<u64, Query>,
+    visit: Option<PowerVisit>,
+    restore_scroll: Option<f32>,
 }
 
 impl Shared {
@@ -69,10 +87,17 @@ impl Shared {
     pub fn set(&mut self, pin: Option<Pin>) {
         self.pin = pin;
         self.reads.clear();
+        self.visit = None;
+        self.restore_scroll = None;
+    }
+
+    pub fn invalidate_source(&mut self, id: u64) {
+        self.reads.remove(&id);
+        self.visit.take_if(|visit| visit.source == id);
     }
 
     pub fn remove_source(&mut self, id: u64) {
-        self.reads.remove(&id);
+        self.invalidate_source(id);
         if self.pin.as_ref().is_some_and(|pin| pin.source == id) {
             self.set(None);
         }
@@ -95,19 +120,21 @@ impl Shared {
                 if let Some(range) = &projected {
                     ui.monospace(times(range));
                     ui.weak(format!("From {}", origin.name()));
-                    if ui.button("Show shared range").clicked() {
+                    if ui.small_button("Show shared range").clicked() {
+                        self.visit = None;
                         focus(view, domain, range);
                     }
                 } else {
                     ui.weak(format!("{} · Range source unavailable", origin.name()));
                 }
-                ui.button("Clear shared range").clicked()
+                ui.small_button("Clear shared range").clicked()
             })
             .inner;
         if clear {
             self.set(None);
             return None;
         }
+        self.visit_controls(ui, sources, view, domain);
         projected
     }
 
@@ -119,13 +146,78 @@ impl Shared {
         clock: Clock,
         view: &mut Range<f64>,
         domain: &Range<f64>,
+        scroll: f32,
     ) -> Option<Range<f64>> {
         let native = self.pin.as_ref()?.native_for(source.id, clock, shared?);
-        if let Some(visit) = self.measurement_ui(ui, source, &native, clock) {
-            focus(view, domain, &clock.workspace_range(&visit));
-            ui.ctx().request_repaint();
+        self.visit.take_if(|visit| {
+            visit.source == source.id && (visit.request != native || visit.clock != clock)
+        });
+        match self.measurement_ui(ui, source, &native, clock) {
+            Some(Reveal::Span(span)) => {
+                self.visit = None;
+                focus(view, domain, &clock.workspace_range(&span));
+                ui.ctx().request_repaint();
+            }
+            Some(Reveal::Power(selection)) => {
+                let (before, scroll) = self.visit.take().map_or_else(
+                    || (view.clone(), scroll),
+                    |visit| (visit.before, visit.scroll),
+                );
+                focus(view, domain, &clock.workspace_range(&selection.native));
+                self.visit = Some(PowerVisit {
+                    source: source.id,
+                    selection,
+                    request: native.clone(),
+                    clock,
+                    before,
+                    scroll,
+                    reveal: true,
+                });
+                ui.ctx().request_repaint();
+            }
+            None => {}
         }
         Some(native)
+    }
+
+    pub fn evidence(&mut self, source: u64) -> Option<(evidence::Marker, bool)> {
+        let visit = self.visit.as_mut().filter(|visit| visit.source == source)?;
+        Some((
+            evidence::Marker {
+                channel: visit.selection.channel,
+                native: visit.selection.native.clone(),
+            },
+            std::mem::take(&mut visit.reveal),
+        ))
+    }
+
+    pub fn return_scroll(&mut self) -> Option<f32> {
+        self.restore_scroll.take()
+    }
+
+    fn visit_controls(
+        &mut self,
+        ui: &mut Ui,
+        sources: &[Source],
+        view: &mut Range<f64>,
+        domain: &Range<f64>,
+    ) {
+        let Some(visit) = &self.visit else { return };
+        let Some(source) = sources.iter().find(|source| source.id == visit.source) else {
+            return;
+        };
+        let back = ui
+            .horizontal_wrapped(|ui| {
+                ui.strong(format!("{} · {}", source.name(), visit.selection.signal));
+                ui.monospace(times(&visit.clock.workspace_range(&visit.selection.native)));
+                ui.small_button("Back to shared readings").clicked()
+            })
+            .inner;
+        if back && let Some(visit) = self.visit.take() {
+            *view = timeline::fit(domain, visit.before, 0.0);
+            self.restore_scroll = Some(visit.scroll);
+            ui.ctx().request_repaint();
+        }
     }
 
     fn measurement_ui(
@@ -134,7 +226,7 @@ impl Shared {
         source: &Source,
         requested: &Range<f64>,
         clock: Clock,
-    ) -> Option<Range<f64>> {
+    ) -> Option<Reveal> {
         let (input, name) = match &source.capture {
             Capture::Analog(view) => {
                 let channel = view.measurement_channel();
@@ -170,25 +262,42 @@ impl Shared {
                 native: requested.clone(),
             },
         );
-        let readout = ui.horizontal_wrapped(|ui| {
-            ui.colored_label(timeline::shared_color(ui.visuals()), name);
-            match query.result.as_ref().map(|(_, result)| result) {
-                None => {
-                    ui.weak("Measuring shared range…");
-                    None
-                }
-                Some(Ok(None)) => {
-                    ui.weak("Outside recording");
-                    None
-                }
-                Some(Err(error)) => {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                    None
-                }
-                Some(Ok(Some(report))) => readings(ui, report, requested, clock),
-            }
+        let result = query.result.as_ref().map(|(_, result)| result);
+        let readout = ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 22.0;
+            ui.spacing_mut().button_padding.y = 2.0;
+            let span = ui
+                .horizontal_wrapped(|ui| {
+                    ui.colored_label(
+                        timeline::shared_color(ui.visuals()),
+                        format!("{} · {name}", source.name()),
+                    );
+                    match result {
+                        None => {
+                            ui.weak("Measuring shared range…");
+                            None
+                        }
+                        Some(Err(error)) => {
+                            ui.colored_label(ui.visuals().error_fg_color, error);
+                            None
+                        }
+                        Some(Ok(measured)) => match measured.waveform.as_ref() {
+                            Some(report) => readings(ui, report, requested, clock),
+                            None => {
+                                ui.weak("Outside channel coverage");
+                                None
+                            }
+                        },
+                    }
+                })
+                .inner;
+            result
+                .and_then(|measured| measured.as_ref().ok()?.power.as_ref())
+                .and_then(|power| power::readings(ui, power, clock))
+                .map(Reveal::Power)
+                .or_else(|| span.map(Reveal::Span))
         });
-        if readout.inner.is_some() {
+        if matches!(readout.inner, Some(Reveal::Span(_))) {
             readout.response.scroll_to_me(Some(egui::Align::TOP));
         }
         readout.inner
@@ -201,12 +310,12 @@ struct Request {
     native: Range<f64>,
 }
 
-type Measurement = Result<Option<Report>, String>;
+type Outcome = Result<Measurement, String>;
 
 #[derive(Default)]
 struct Query {
-    pending: Option<(Request, Task<Measurement>)>,
-    result: Option<(Request, Measurement)>,
+    pending: Option<(Request, Task<Outcome>)>,
+    result: Option<(Request, Outcome)>,
 }
 
 impl Query {
@@ -239,7 +348,7 @@ fn readings(
     clock: Clock,
 ) -> Option<Range<f64>> {
     if report.coverage == *requested {
-        ui.weak("Full time span");
+        ui.weak("Full coverage");
     } else {
         ui.weak(format!(
             "Coverage {}",
@@ -257,10 +366,10 @@ fn readings(
         ));
     }
     match &report.figures {
-        Figures::Samples(samples) => sample_readings(ui, samples, &report.examined, clock),
+        Figures::Samples(samples) => sample_readings(ui, samples, &report.examined),
         Figures::Edges(count) => {
             ui.label(format!("{count} observed edges"));
-            ui.button("Show edges")
+            ui.small_button("Show edges")
                 .clicked()
                 .then(|| report.examined.clone())
         }
@@ -270,11 +379,11 @@ fn readings(
         } => {
             ui.label(format!("{cycles} complete cycles"));
             let visit = ui
-                .button(format!("Min duty {:.1}%", low.percent))
+                .small_button(format!("Min duty {:.1}%", low.percent))
                 .clicked()
                 .then(|| low.cycle.clone());
             let high = ui
-                .button(format!("Max duty {:.1}%", high.percent))
+                .small_button(format!("Max duty {:.1}%", high.percent))
                 .clicked()
                 .then(|| high.cycle.clone());
             visit.or(high)
@@ -290,14 +399,13 @@ fn sample_readings(
     ui: &mut Ui,
     samples: &SampleReport,
     examined: &Range<f64>,
-    clock: Clock,
 ) -> Option<Range<f64>> {
     let SampleReport {
         unit,
         valid,
         rows,
         extrema,
-        power,
+        ..
     } = samples;
     let count = rows.end - rows.start;
     let mut visit = None;
@@ -309,7 +417,7 @@ fn sample_readings(
         for (label, sample) in [("Min", low), ("Max", high)] {
             let value = display_value(f64::from(sample.value), unit);
             if ui
-                .button(format!("{label} {value}"))
+                .small_button(format!("{label} {value}"))
                 .on_hover_text(format!("Show sample {}", sample.sample))
                 .clicked()
             {
@@ -322,71 +430,10 @@ fn sample_readings(
     } else {
         ui.weak(format!("{valid} of {count} samples present"));
     }
-    if let Some(power) = power {
-        power_readings(ui, power, clock);
-    }
-    if count > 0 && ui.button("Show samples").clicked() {
+    if count > 0 && ui.small_button("Show samples").clicked() {
         visit = Some(examined.clone());
     }
     visit
-}
-
-fn power_readings(ui: &mut Ui, totals: &PowerTotals, clock: Clock) {
-    let charge = totals.charge.as_ref();
-    let energy = totals.energy.as_ref();
-    if let Some(reading) = charge {
-        let seconds = reading.time.end - reading.time.start;
-        if seconds > 0.0 {
-            integral_label(
-                ui,
-                reading,
-                "Avg current",
-                display_value(reading.value / seconds, "A"),
-            );
-        }
-        integral_label(ui, reading, "Charge", milli_hours(reading, clock, "mAh"));
-    }
-    if let Some(reading) = energy {
-        integral_label(ui, reading, "Energy", milli_hours(reading, clock, "mWh"));
-    }
-    match (charge, energy) {
-        (Some(charge), Some(energy)) if charge.time != energy.time => {
-            integral_time(ui, "Current interval", charge, clock);
-            integral_time(ui, "Power interval", energy, clock);
-        }
-        (Some(reading), _) | (_, Some(reading)) => {
-            integral_time(ui, "Integrated", reading, clock);
-        }
-        (None, None) => {
-            ui.weak("Charge and energy unavailable");
-        }
-    }
-}
-
-fn integral_label(ui: &mut Ui, reading: &Integral, label: &str, value: String) {
-    let quality = if reading.approximate { "≈ " } else { "" };
-    let partial = if reading.partial { " (partial)" } else { "" };
-    ui.label(format!("{label} {quality}{value}{partial}"));
-}
-
-fn milli_hours(reading: &Integral, clock: Clock, unit: &str) -> String {
-    let value = reading.value * clock.scale() / 3.6;
-    if value != 0.0 && value.abs() < 0.0001 {
-        format!("{value:.3e} {unit}")
-    } else {
-        let number = format!("{value:.6}");
-        format!(
-            "{} {unit}",
-            number.trim_end_matches('0').trim_end_matches('.')
-        )
-    }
-}
-
-fn integral_time(ui: &mut Ui, label: &str, reading: &Integral, clock: Clock) {
-    ui.weak(format!(
-        "{label} {}",
-        times(&clock.workspace_range(&reading.time))
-    ));
 }
 
 fn times(range: &Range<f64>) -> String {

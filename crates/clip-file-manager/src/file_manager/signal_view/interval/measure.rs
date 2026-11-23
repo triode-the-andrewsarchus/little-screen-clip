@@ -46,6 +46,11 @@ impl PartialEq for Input {
     }
 }
 
+pub(super) struct Measurement {
+    pub waveform: Option<Report>,
+    pub power: Option<PowerTotals>,
+}
+
 pub(super) struct Report {
     pub coverage: Range<f64>,
     pub examined: Range<f64>,
@@ -66,7 +71,6 @@ pub(super) struct SampleReport {
     pub valid: usize,
     pub extrema: Option<(Extreme, Extreme)>,
     pub rows: Range<u64>,
-    pub power: Option<PowerTotals>,
 }
 
 pub(super) struct Extreme {
@@ -82,21 +86,22 @@ pub(super) struct Duty {
 }
 
 impl Input {
-    pub fn read(
-        self,
-        requested: Range<f64>,
-        cancel: &AtomicBool,
-    ) -> Result<Option<Report>, String> {
+    pub fn read(self, requested: Range<f64>, cancel: &AtomicBool) -> Result<Measurement, String> {
         match self {
-            Self::Samples(recording, index) => {
-                recording.checked(cancel, |capture| samples(capture, index, requested, cancel))
-            }
+            Self::Samples(recording, index) => recording.checked(cancel, |capture| {
+                let power = capture.power_totals(requested.clone(), cancel)?;
+                let waveform = samples(capture, index, requested, cancel)?;
+                Ok(Measurement { waveform, power })
+            }),
             Self::Logic {
                 recording,
                 lane,
                 polarity,
             } => recording.checked(cancel, |capture| {
-                logic(capture, lane, polarity, requested, cancel)
+                Ok(Measurement {
+                    waveform: logic(capture, lane, polarity, requested, cancel)?,
+                    power: None,
+                })
             }),
         }
     }
@@ -135,7 +140,6 @@ fn samples(
         });
         (low, high)
     });
-    let power = capture.power_totals(requested, cancel)?;
     Ok(Some(Report {
         coverage,
         examined,
@@ -144,7 +148,6 @@ fn samples(
             valid: stats.valid,
             extrema,
             rows,
-            power,
         }),
     }))
 }
@@ -230,7 +233,12 @@ mod tests {
             lane: 0,
             polarity: Some(true),
         };
-        let report = input.clone().read(0.0005..0.008, &cancel).unwrap().unwrap();
+        let report = input
+            .clone()
+            .read(0.0005..0.008, &cancel)
+            .unwrap()
+            .waveform
+            .unwrap();
         assert_eq!(report.coverage.start, 0.0005);
         assert!(report.coverage.end < 0.008);
         let Figures::Pwm {
@@ -245,6 +253,6 @@ mod tests {
         assert!((high.percent - 75.0).abs() < 1e-10);
         assert!((low.cycle.start - 0.001).abs() < 1e-12);
         assert!((high.cycle.start - 0.002).abs() < 1e-12);
-        assert!(input.read(0.009..0.01, &cancel).unwrap().is_none());
+        assert!(input.read(0.009..0.01, &cancel).unwrap().waveform.is_none());
     }
 }

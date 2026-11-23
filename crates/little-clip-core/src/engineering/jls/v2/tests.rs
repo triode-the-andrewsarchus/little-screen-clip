@@ -177,6 +177,37 @@ fn v2_sparse_recording_reads_index_and_unindexed_short_tail() {
 }
 
 #[test]
+fn power_totals_weight_both_fringe_samples_and_reject_missing_cells() {
+    let mut fixture = Fixture::new();
+    let head = fixture.definitions(0x2004);
+    let samples = [2.0, 4.0, 8.0, f32::NAN, 16.0];
+    let first = fixture.table(FSR_DATA, 1, 0, 5, 32, &floats(&samples));
+    fixture.track_head(head, &[first]);
+    let capture =
+        crate::engineering::waveforms::Capture::Power(Capture::open(fixture.finish()).unwrap());
+    let time = |sample| capture.channels()[0].time_at(sample);
+    let cancel = AtomicBool::new(false);
+    let charge = |window| {
+        capture
+            .power_totals(window, &cancel)
+            .unwrap()
+            .unwrap()
+            .charge
+    };
+
+    let between = (time(0) + 0.0005)..(time(2) + 0.00025);
+    let reading = charge(between.clone()).unwrap();
+    assert_eq!(reading.time, between);
+    assert_eq!(reading.channel, 0);
+    assert!(!reading.partial && !reading.approximate);
+    assert!((reading.value - 0.007).abs() < 1e-12);
+
+    let inside = (time(1) + 0.00025)..(time(1) + 0.0005);
+    assert!((charge(inside).unwrap().value - 0.001).abs() < 1e-12);
+    assert!(charge((time(3) + 0.00075)..(time(4) + 0.00025)).is_none());
+}
+
+#[test]
 fn v2_packed_samples_and_omitted_constant_blocks_keep_values() {
     let mut fixture = Fixture::new();
     let head = fixture.definitions(0x0103);

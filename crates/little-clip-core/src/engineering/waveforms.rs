@@ -186,6 +186,43 @@ pub fn sample_span(channel: &Channel, time: Range<f64>) -> Range<u64> {
     index(time.start)..index(time.end)
 }
 
+fn integrate_sample_cells(
+    capture: &jls::Capture,
+    index: usize,
+    time: &Range<f64>,
+    cancel: &AtomicBool,
+) -> Result<Option<(f64, bool)>, String> {
+    let channel = &capture.channels()[index];
+    // Samples describe half-open cells, and either boundary can cut a cell.
+    let rows = sample_span(channel, time.clone());
+    let leading = (channel.time_at(rows.start) > time.start).then(|| rows.start.saturating_sub(1));
+    let trailing = (channel.time_at(rows.end) > time.end).then(|| rows.end.saturating_sub(1));
+    let interior = rows.start..trailing.unwrap_or(rows.end);
+
+    let mut fringe = 0.0;
+    for row in [leading, trailing.filter(|&row| Some(row) != leading)]
+        .into_iter()
+        .flatten()
+    {
+        let samples = capture.read_samples(index, row..row + 1, cancel)?;
+        let Some(value) = samples.first().filter(|value| value.is_finite()) else {
+            return Ok(None);
+        };
+        let start = time.start.max(channel.time_at(row));
+        let end = time.end.min(channel.time_at(row + 1));
+        fringe += f64::from(*value) * (end - start);
+    }
+    if interior.is_empty() {
+        return Ok(Some((fringe, false)));
+    }
+    if let Some(total) = capture.integral(index, interior.clone(), cancel)? {
+        return Ok(Some((total + fringe, false)));
+    }
+    Ok(capture
+        .summary_integral(index, interior, cancel)?
+        .map(|total| (total + fringe, true)))
+}
+
 /// Source adapter shared by scope and power recording views.
 pub enum Capture {
     Scope(scope::Capture),
@@ -200,6 +237,8 @@ pub struct PowerTotals {
 }
 
 pub struct Integral {
+    /// Recorded channel whose sample cells contributed.
+    pub channel: usize,
     pub value: f64,
     pub approximate: bool,
     pub partial: bool,
@@ -246,6 +285,9 @@ impl Capture {
             return Ok(None);
         };
         let mut totals = PowerTotals::default();
+        if span.is_empty() || !span.start.is_finite() || !span.end.is_finite() {
+            return Ok(Some(totals));
+        }
         for (unit, output) in [("A", &mut totals.charge), ("W", &mut totals.energy)] {
             let Some((index, channel)) = capture
                 .channels()
@@ -255,30 +297,20 @@ impl Capture {
             else {
                 continue;
             };
-            let overlap = span.start.max(channel.start_seconds)
+            let time = span.start.max(channel.start_seconds)
                 ..span.end.min(channel.time_at(channel.sample_count));
-            if overlap.is_empty() {
+            if time.is_empty() {
                 continue;
             }
-            let partial = overlap != span;
-            let range = sample_span(channel, overlap);
-            if range.is_empty() {
-                continue;
-            }
-            let time = channel.time_at(range.start)..channel.time_at(range.end);
-            let integration = if let Some(value) = capture.integral(index, range.clone(), cancel)? {
-                Some((value, false))
-            } else {
-                capture
-                    .summary_integral(index, range, cancel)?
-                    .map(|value| (value, true))
-            };
-            *output = integration.map(|(value, approximate)| Integral {
-                value,
-                approximate,
-                partial,
-                time,
-            });
+            *output = integrate_sample_cells(capture, index, &time, cancel)?.map(
+                |(value, approximate)| Integral {
+                    channel: index,
+                    value,
+                    approximate,
+                    partial: time != span,
+                    time,
+                },
+            );
         }
         Ok(Some(totals))
     }

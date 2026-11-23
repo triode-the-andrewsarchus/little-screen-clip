@@ -536,6 +536,10 @@ impl Default for Scroll {
 }
 
 impl Scroll {
+    pub(super) fn offset(&self) -> f32 {
+        self.offset
+    }
+
     pub(super) fn area(&mut self, ui: &Ui) -> egui::ScrollArea {
         let area = egui::ScrollArea::vertical()
             .id_salt(("linked-recordings", self.id))

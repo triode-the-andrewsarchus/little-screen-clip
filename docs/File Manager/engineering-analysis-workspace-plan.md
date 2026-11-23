@@ -184,6 +184,12 @@ Shift-drag either frequency plot or keep the visible range with Use visible matc
 
 The desktop walkthrough used two antenna sweeps with offset frequency grids and 50 Ω and 75 Ω references. B’s visible-band minimum was 436.775 MHz. Brushing about 429.907–434.962 MHz found 433.500 MHz for A and 434.925 MHz for B. Selecting B’s result showed the exact B measurement and the interpolated A value. Zooming past the band kept both match results visible. Clicking B again brought its frequency back into view. Brushing the impedance plot changed the search interval while the marker stayed at 434.925 MHz. Entering 420.000–420.010 MHz found A’s 420 MHz row and showed B outside coverage. At 800 × 620, the band, both results, and all three linked plots fit together.
 
+## 20. Inspect the signal behind a shared power reading
+
+The shared measurements name the contributing recording. Average current and charge open its Current waveform, and energy opens its Power waveform. The highlighted interval is the overlap between the pin and the recorded signal. The integrator weights the portions of sample cells at the boundaries using the held sample values. Estimates from stored means and coverage clipped by the end of a recording keep their respective labels. Back to shared readings restores the previous time view and scroll position. The pin and recipe edit state stay intact.
+
+The desktop check reopened a recipe with a 1 kHz standby capture and a 2 kHz load-step capture shifted forward by 62.5 ms. A’s 557.25 ms–2.51175 s interval produced 0.135729 mAh and 0.678646 mWh. B contributed through 2.0625 s and showed 0.278507 mAh and 0.835521 mWh with partial coverage. B’s energy opened the Power lane and marked its interval across the 1.5–2.25 W step. Back returned to both readings, and A’s charge opened its 250 mA Current lane. The 800 × 620 check also returned to Files without a discard prompt. Core tests cover a missing boundary sample and a range contained within one sample cell.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.
