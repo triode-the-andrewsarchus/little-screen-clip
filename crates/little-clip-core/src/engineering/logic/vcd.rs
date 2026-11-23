@@ -27,6 +27,10 @@ const FIRST_WINDOW: u64 = 64 * 1024;
 const TAIL_WINDOW: u64 = 256 * 1024;
 const MAX_CHECKPOINTS: u64 = 32_768;
 const MIN_CHECKPOINT_BYTES: u64 = 256 * 1024;
+const OVERVIEW_PREFIX: u64 = 256 * 1024;
+const OVERVIEW_PROBES: u64 = 24;
+const PROBE_BYTES: u64 = 8192;
+const PROBE_EVENTS: usize = 512;
 
 pub(super) struct Channel {
     capture: Arc<Capture>,
@@ -140,9 +144,13 @@ impl Channel {
             inspected_until: time.start,
         };
         let mut last = None;
-        let inspected = self.visit(&time, MAX_WINDOW_SAMPLES, cancel, |span, level| {
-            push_state(&mut trace, &mut last, max_edges, span.start, level)
-        })?;
+        let inspected = self.visit(
+            &time,
+            MAX_WINDOW_SAMPLES,
+            MAX_INFLATE_BYTES,
+            cancel,
+            |span, level| push_state(&mut trace, &mut last, max_edges, span.start, level),
+        )?;
         trace.inspected_until = inspected;
         Ok(trace)
     }
@@ -154,29 +162,100 @@ impl Channel {
         budget: u64,
         cancel: &AtomicBool,
     ) -> Result<Envelope, String> {
+        let coarse = self.capture.use_sparse_overview(&time, budget);
         let mut writer = EnvelopeWriter::new(time.clone(), columns);
+        let prepare_bytes = if coarse {
+            OVERVIEW_PREFIX
+        } else {
+            MAX_INFLATE_BYTES
+        };
         self.visit(
             &time,
             budget.clamp(1, MAX_WINDOW_SAMPLES),
+            prepare_bytes,
             cancel,
             |span, level| {
                 writer.observe(span, level);
                 true
             },
         )?;
-        Ok(writer.finish())
+        let mut envelope = writer.finish();
+        if coarse && envelope.sampled() {
+            self.sample_overview(&mut envelope, cancel)?;
+        }
+        Ok(envelope)
+    }
+
+    fn sample_overview(&self, envelope: &mut Envelope, cancel: &AtomicBool) -> Result<(), String> {
+        let first = self.capture.header.data_start;
+        let length = self.capture.length - first;
+        let mut previous = None;
+        for index in 0..OVERVIEW_PROBES {
+            check_cancel(cancel)?;
+            let offset = first + length / OVERVIEW_PROBES * index;
+            let end = (offset + PROBE_BYTES).min(self.capture.length);
+            let Some(anchor) = self.capture.probe_anchor(offset..end)? else {
+                continue;
+            };
+            let Ok(samples) = self.probe_states(anchor..end) else {
+                // Sparse samples have no preceding parser state. Any ambiguity
+                // in a local sample is resolved during exact indexing instead.
+                continue;
+            };
+            for (tick, level) in samples {
+                if previous.is_some_and(|previous| previous >= tick) {
+                    continue;
+                }
+                previous = Some(tick);
+                let time = self.capture.time_at(tick);
+                observe_approximate(envelope, time, level);
+            }
+        }
+        Ok(())
+    }
+
+    fn probe_states(&self, bytes: Range<u64>) -> Result<Vec<(u64, Level)>, String> {
+        let mut parser = Parser::open(Arc::clone(&self.capture.file), bytes);
+        let Some(Event::Time(mut tick)) = parser.next(&self.capture.header)? else {
+            return Ok(Vec::new());
+        };
+        let mut samples = Vec::new();
+        let mut state = None;
+        for _ in 0..PROBE_EVENTS {
+            match parser.next(&self.capture.header) {
+                // An incomplete final token beyond the sample boundary does
+                // not invalidate earlier, timestamped observations.
+                Ok(None) | Err(_) => break,
+                Ok(Some(Event::Time(next))) if next > tick => {
+                    if let Some(level) = state {
+                        samples.push((tick, level));
+                    }
+                    tick = next;
+                }
+                Ok(Some(Event::Time(next))) if next < tick => return Ok(Vec::new()),
+                Ok(Some(Event::Change(signal, values)))
+                    if (signal.start..signal.start + signal.width).contains(&self.bit) =>
+                {
+                    state = Some(values[self.bit - signal.start]);
+                }
+                Ok(Some(Event::Reset)) => state = Some(Level::Unknown),
+                _ => {}
+            }
+        }
+        Ok(samples)
     }
 
     fn visit(
         &self,
         time: &Range<f64>,
         sample_budget: u64,
+        prepare_bytes: u64,
         cancel: &AtomicBool,
         mut consume: impl FnMut(Range<f64>, Level) -> bool,
     ) -> Result<f64, String> {
         let end_tick = (time.end / self.capture.header.interval).ceil() as u64;
         let first_tick = (time.start / self.capture.header.interval).floor() as u64;
-        let mut budget = MAX_INFLATE_BYTES;
+        let mut budget = prepare_bytes;
         self.capture.prepare(end_tick, &mut budget, cancel)?;
         let (offset, tick, level) = self.capture.checkpoint(first_tick, self.bit)?;
         let available = self
@@ -196,7 +275,7 @@ impl Channel {
         for index in 0..MAX_WINDOW_SAMPLES {
             if index.is_multiple_of(4096) {
                 check_cancel(cancel)?;
-                if parser.offset - offset >= MAX_INFLATE_BYTES {
+                if parser.offset - offset >= prepare_bytes {
                     break;
                 }
             }
@@ -273,6 +352,40 @@ impl Visit {
 }
 
 impl Capture {
+    fn use_sparse_overview(&self, time: &Range<f64>, event_budget: u64) -> bool {
+        let extent = self.bounds();
+        self.length > MAX_INFLATE_BYTES
+            && !self.complete.load(Ordering::Acquire)
+            && time.end - time.start >= (extent.end - extent.start) * 0.25
+            && event_budget <= 32_768
+    }
+
+    fn probe_anchor(&self, bytes: Range<u64>) -> Result<Option<u64>, String> {
+        let mut block = [0; PROBE_BYTES as usize];
+        let block = &mut block[..(bytes.end - bytes.start) as usize];
+        self.file
+            .read_exact_at(block, bytes.start)
+            .map_err(io_error)?;
+        let mut offset = bytes.start;
+        for (index, line) in block.split_inclusive(|&byte| byte == b'\n').enumerate() {
+            let token = line
+                .trim_ascii_start()
+                .split(u8::is_ascii_whitespace)
+                .next()
+                .unwrap_or_default();
+            if index != 0
+                && line.last() == Some(&b'\n')
+                && let Some(time) = token.strip_prefix(b"#")
+                && !self.header.symbols.contains_key(token)
+                && parser::tick(time).is_ok()
+            {
+                return Ok(Some(offset));
+            }
+            offset += line.len() as u64;
+        }
+        Ok(None)
+    }
+
     fn bounds(&self) -> Range<f64> {
         let indexed = self.indexed_end.load(Ordering::Acquire);
         // The fully verified timestamp supersedes any tail preview.
@@ -357,6 +470,19 @@ impl Index {
             Event::Ignore => {}
         }
         Ok(())
+    }
+}
+
+fn observe_approximate(envelope: &mut Envelope, at: f64, level: Level) {
+    if !envelope.time.contains(&at) {
+        return;
+    }
+    let fraction = (at - envelope.time.start) / (envelope.time.end - envelope.time.start);
+    let index = (fraction * envelope.bins.len() as f64) as usize;
+    if let Some(bin) = envelope.bins.get_mut(index)
+        && !bin.exact
+    {
+        bin.observe(level);
     }
 }
 
