@@ -5,7 +5,7 @@ use egui::{
 };
 use little_clip_core::engineering::{
     touchstone::{Complex64, TracePoint, comparison::Sample},
-    waveforms::display_value,
+    waveforms::display_axis_value,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -29,7 +29,7 @@ impl Projection {
         }
     }
 
-    fn coordinate(self, value: Complex64) -> f64 {
+    pub(super) fn coordinate(self, value: Complex64) -> f64 {
         match self {
             Self::Decibels => decibels(value).max(-160.0),
             Self::Phase => value.arg().to_degrees(),
@@ -207,7 +207,11 @@ pub(super) fn axes(painter: &Painter, rect: Rect, band: Band, ink: Color32) {
         painter.text(
             pos2(x, rect.bottom() + 3.0),
             align,
-            display_value(hz_at(rect, band, x), "Hz"),
+            display_axis_value(
+                hz_at(rect, band, x),
+                (band[1] - band[0]) / count as f64,
+                "Hz",
+            ),
             FontId::monospace(10.0),
             ink,
         );
@@ -227,7 +231,7 @@ pub(super) fn trace(
     let values = projection.limit(visible(data, band, false));
     let inside = painter.with_clip_rect(rect);
     if labels {
-        scale(painter, rect, values, projection);
+        trace_scale(painter, rect, values, projection);
     }
     paint_trace(&inside, rect, band, data, values, projection, color);
     values
@@ -252,7 +256,7 @@ pub(super) fn compare_traces(
             [base[0].min(limits[0]), base[1].max(limits[1])]
         }
     };
-    scale(painter, rect, values, projection);
+    trace_scale(painter, rect, values, projection);
     let inside = painter.with_clip_rect(rect);
     for (data, color) in [(recorded, recorded_color), (gated, gated_color)] {
         paint_trace(
@@ -322,14 +326,24 @@ pub(super) fn paint_curve(
     draw_line(inside, segment, color);
 }
 
-fn scale(painter: &Painter, rect: Rect, values: Band, projection: Projection) {
-    let ctx = painter.ctx();
-    let ink = ctx.style_of(ctx.theme()).visuals.weak_text_color();
+fn trace_scale(painter: &Painter, rect: Rect, values: Band, projection: Projection) {
     let suffix = match projection {
         Projection::Decibels => " dB",
         Projection::Phase => "°",
         _ => "",
     };
+    scale(painter, rect, values, |value| {
+        if projection == Projection::Magnitude {
+            format!("{value:.3}")
+        } else {
+            format!("{value:.1}{suffix}")
+        }
+    });
+}
+
+pub(super) fn scale(painter: &Painter, rect: Rect, values: Band, label: impl Fn(f64) -> String) {
+    let ctx = painter.ctx();
+    let ink = ctx.style_of(ctx.theme()).visuals.weak_text_color();
     for step in 0..=4 {
         let ratio = step as f32 / 4.0;
         let y = rect.top() + rect.height() * ratio;
@@ -344,11 +358,7 @@ fn scale(painter: &Painter, rect: Rect, values: Band, projection: Projection) {
                 y.clamp(rect.top() + 5.0, rect.bottom() - 5.0),
             ),
             Align2::RIGHT_CENTER,
-            if projection == Projection::Magnitude {
-                format!("{value:.3}")
-            } else {
-                format!("{value:.1}{suffix}")
-            },
+            label(value),
             FontId::monospace(10.0),
             ink,
         );
@@ -451,15 +461,19 @@ impl Smith {
         self.center + vec2(coordinate(value.re), -coordinate(value.im)) * self.radius
     }
 
-    pub fn nearest(&self, pointer: Pos2, data: &[TracePoint]) -> Option<TracePoint> {
-        data.iter()
-            .map(|point| (self.screen(point.value).distance_sq(pointer), *point))
+    pub fn nearest(
+        &self,
+        pointer: Pos2,
+        points: impl Iterator<Item = TracePoint>,
+    ) -> Option<TracePoint> {
+        points
+            .map(|point| (self.screen(point.value).distance_sq(pointer), point))
             .filter(|(d, _)| *d < 18.0_f32.powi(2))
             .min_by(|(left, _), (right, _)| left.total_cmp(right))
             .map(|(_, point)| point)
     }
 
-    pub fn paint(&self, painter: &Painter, data: &[TracePoint], color: Color32, ink: Color32) {
+    pub fn grid(&self, painter: &Painter, ink: Color32) {
         let grid = Stroke::new(1.0, ink.gamma_multiply(0.36));
         painter.circle_stroke(self.center, self.radius, grid);
         painter.line_segment(
@@ -489,7 +503,6 @@ impl Smith {
             });
             painter.add(Shape::line(arc.collect(), grid));
         }
-        self.trace(painter, data, color);
     }
 
     pub fn trace(&self, painter: &Painter, data: &[TracePoint], color: Color32) {
@@ -498,8 +511,23 @@ impl Smith {
     }
 
     pub fn mark(&self, painter: &Painter, value: Complex64, label: &str, color: Color32) {
+        self.mark_sample(painter, value, label, color, true);
+    }
+
+    pub fn mark_sample(
+        &self,
+        painter: &Painter,
+        value: Complex64,
+        label: &str,
+        color: Color32,
+        exact: bool,
+    ) {
         let point = self.screen(value);
-        painter.circle_filled(point, 3.0, color);
+        if exact {
+            painter.circle_filled(point, 3.2, color);
+        } else {
+            painter.circle_stroke(point, 3.6, Stroke::new(1.4, color));
+        }
         painter.text(
             point + vec2(5.0, -2.0),
             Align2::LEFT_BOTTOM,

@@ -1,5 +1,7 @@
 use super::super::{
+    antenna,
     capture::{Band, Cutoff},
+    marker_value,
     plot::Projection,
 };
 use super::{
@@ -206,6 +208,7 @@ pub(super) fn marker(
     values: Outcome<'_, Option<Sample>>,
     compatible: bool,
     projection: Projection,
+    linked: bool,
 ) -> Option<f64> {
     let result = values.and_then(Result::ok);
     let selected = sweep_columns(ui, order, "marker", |ui, index| {
@@ -232,36 +235,28 @@ pub(super) fn marker(
                 return None;
             }
         };
-        ui.horizontal_wrapped(|ui| {
-            if sample.exact() {
-                ui.strong("Exact");
-            } else {
-                ui.strong("Interpolated").on_hover_text(
-                    "Interpolated between recorded rows in the displayed projection",
-                );
-            }
-            let value = projection.marker_value(*sample);
-            if value.is_finite() {
-                let units = unit(projection, sources[index].magnitude_unit(trace));
-                let digits = if projection == Projection::Decibels && value <= -160.0 {
-                    "≤ −160".to_owned()
-                } else {
-                    format!("{value:.3}")
-                };
-                ui.monospace(format!("{digits}{units}"));
-            } else {
-                ui.weak("Phase unavailable");
-            }
-            if sample.exact() {
-                ui.monospace(rectangular(sample.value));
-            }
-        });
+        let reference = linked
+            .then(|| marker_value(sources[index].metadata(), trace))
+            .flatten();
+        marker_readout(
+            ui,
+            *sample,
+            reference,
+            projection,
+            sources[index].magnitude_unit(trace),
+        );
         rows(ui, &sample.rows)
     });
     if compatible && let Some([a, b]) = ordered(result, order, |sample| *sample) {
         let source = &sources[order[0]];
         let magnitude_unit = traces[order[0]].map_or("", |trace| source.magnitude_unit(trace));
-        let [a, b] = [a, b].map(|sample| projection.marker_value(sample));
+        let [a, b] = [a, b].map(|sample| {
+            if linked {
+                projection.coordinate(sample.value)
+            } else {
+                projection.marker_value(sample)
+            }
+        });
         let clipped = projection == Projection::Decibels && a.min(b) <= -160.0;
         let difference = projection.difference(b, a);
         if difference.is_finite() && !clipped {
@@ -272,6 +267,83 @@ pub(super) fn marker(
         }
     }
     selected
+}
+
+fn marker_readout(
+    ui: &mut Ui,
+    sample: Sample,
+    reference: Option<f64>,
+    projection: Projection,
+    magnitude_unit: &str,
+) {
+    ui.horizontal_wrapped(|ui| {
+        if sample.exact() {
+            ui.strong("Exact");
+        } else {
+            ui.strong("Interpolated")
+                .on_hover_text(if reference.is_some() {
+                    "Complex reflection interpolated between the linked source rows"
+                } else {
+                    "Interpolated between recorded rows in the displayed projection"
+                });
+        }
+        if let Some(reference) = reference {
+            ui.monospace(antenna::readout(
+                sample.frequency_hz,
+                sample.value,
+                reference,
+            ))
+            .on_hover_text(format!("Reference impedance {reference} Ω"));
+            return;
+        }
+        let value = projection.marker_value(sample);
+        if value.is_finite() {
+            let units = unit(projection, magnitude_unit);
+            let digits = if projection == Projection::Decibels && value <= -160.0 {
+                "≤ −160".to_owned()
+            } else {
+                format!("{value:.3}")
+            };
+            ui.monospace(format!("{digits}{units}"));
+        } else {
+            ui.weak("Phase unavailable");
+        }
+        if sample.exact() {
+            ui.monospace(rectangular(sample.value));
+        }
+    });
+}
+
+pub(super) fn best_match(
+    ui: &mut Ui,
+    order: [usize; 2],
+    best: Outcome<'_, Option<TracePoint>>,
+) -> Option<f64> {
+    ui.horizontal_wrapped(|ui| {
+        ui.weak("Best observed · visible band");
+        let result = response(ui, best, "Finding minimum VSWR…")?;
+        let colors = sweep_colors(ui);
+        let mut jump = None;
+        for (slot, side) in order.into_iter().enumerate() {
+            let Some(candidate) = &result[side] else {
+                continue;
+            };
+            ui.colored_label(colors[slot], letter(slot));
+            match candidate {
+                Ok(Some(point)) => {
+                    if antenna::best_button(ui, *point).clicked() {
+                        jump = Some(point.frequency_hz);
+                    }
+                }
+                Ok(None) => {
+                    ui.weak("No finite VSWR");
+                }
+                Err(error) => read_error(ui, error),
+            }
+        }
+        jump
+    })
+    .inner
 }
 
 pub(super) fn selected_band(search: &BandSearch, marker: f64) -> Option<ThresholdBand> {
@@ -432,7 +504,7 @@ fn rows(ui: &mut Ui, points: &[TracePoint; 2]) -> Option<f64> {
                 .small_button(format!(
                     "Row {} · {}",
                     point.index + 1,
-                    display_value(point.frequency_hz, "Hz")
+                    antenna::frequency(point.frequency_hz)
                 ))
                 .on_hover_text(row_tip(point))
                 .clicked()

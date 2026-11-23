@@ -153,6 +153,48 @@ impl Capture {
         })
     }
 
+    pub fn best_match(
+        &self,
+        index: &Index,
+        band: Band,
+        trace: Trace,
+        cancel: &AtomicBool,
+    ) -> Result<Option<TracePoint>, String> {
+        let includes = |point: TracePoint| (band[0]..=band[1]).contains(&point.frequency_hz);
+        let mut best: Option<TracePoint> = None;
+        let mut consider = |point: TracePoint| {
+            let magnitude = point.value.norm();
+            if includes(point)
+                && magnitude < 1.0
+                && best.is_none_or(|old| magnitude < old.value.norm())
+            {
+                best = Some(point);
+            }
+        };
+        self.read(cancel, |reader| {
+            if index.trace() != trace {
+                let rows = rows_for_band(reader, index, Some(band), 0, cancel)?;
+                return trace_window(reader, index, rows, trace, cancel, &mut consider);
+            }
+            let buckets = index.overview();
+            let first = buckets.partition_point(|bucket| bucket.last.frequency_hz < band[0]);
+            let stop = buckets.partition_point(|bucket| bucket.first.frequency_hz <= band[1]);
+            for bucket in buckets.get(first..stop).unwrap_or_default() {
+                if includes(bucket.minimum) {
+                    consider(bucket.minimum);
+                } else {
+                    // Only a clipped edge bucket can have a minimum outside the band.
+                    let selected = rows_for_band(reader, index, Some(band), 0, cancel)?;
+                    let rows = selected.start.max(bucket.first.index)
+                        ..selected.end.min(bucket.last.index + 1);
+                    trace_window(reader, index, rows, trace, cancel, &mut consider)?;
+                }
+            }
+            Ok(())
+        })?;
+        Ok(best)
+    }
+
     pub fn search_bands(
         &self,
         index: &Index,
@@ -306,4 +348,41 @@ pub(super) fn envelope_points(index: &Index) -> Vec<TracePoint> {
 
 fn as_string(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn best_match_reads_the_clipped_bucket_and_returns_an_exact_record() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("antenna.s1p");
+        let mut sweep = String::from("# Hz S RI R 50\n");
+        for row in 0..1100 {
+            let gamma = match row {
+                100 => 0.03,
+                101 => 0.12,
+                _ => 0.48,
+            };
+            writeln!(sweep, "{} {gamma} 0", 430_000_000 + row * 1000).unwrap();
+        }
+        std::fs::write(&path, sweep).unwrap();
+        let cancel = AtomicBool::new(false);
+        let (capture, _) = Capture::open(&path, 3, &cancel).unwrap();
+        let trace = [0, 0];
+        let index = capture.index(trace, &cancel).unwrap();
+        let whole = capture
+            .best_match(&index, index.band_hz(), trace, &cancel)
+            .unwrap()
+            .unwrap();
+        assert_eq!(whole.index, 100);
+        let selected = capture
+            .best_match(&index, [430_100_500.0, 430_105_500.0], trace, &cancel)
+            .unwrap()
+            .unwrap();
+        assert_eq!(selected.index, 101);
+        assert_eq!(selected.frequency_hz, 430_101_000.0);
+        assert_eq!(selected.value.re, 0.12);
+    }
 }

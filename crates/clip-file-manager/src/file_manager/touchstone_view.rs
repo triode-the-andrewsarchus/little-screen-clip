@@ -1,11 +1,13 @@
 //! Plots and exact source inspection for offline Touchstone sweeps.
 
+mod antenna;
 mod bandwidth;
 mod capture;
 pub(super) mod compare;
 mod group_delay;
 mod markers;
 mod plot;
+mod read;
 pub(super) mod strip;
 mod time_domain;
 
@@ -49,6 +51,8 @@ pub(super) struct Viewer {
     prefix: Vec<TracePoint>,
     trace: Trace,
     projection: Projection,
+    antenna: bool,
+    best: read::Read<(Trace, Band), Result<Option<TracePoint>, String>>,
     full: Band,
     viewport: Band,
     handoff: Option<Band>,
@@ -79,12 +83,16 @@ impl Viewer {
         } else {
             Projection::Magnitude
         };
+        let antenna =
+            summary.metadata.ports == 1 && marker_value(&summary.metadata, trace).is_some();
         Ok(Self {
             capture: Arc::new(capture),
             summary,
             prefix,
             trace,
             projection,
+            antenna,
+            best: read::Read::default(),
             full,
             viewport: full,
             handoff: None,
@@ -138,13 +146,32 @@ impl Viewer {
         self.toolbar(ui);
         self.status(ui);
         self.draw_marker_tools(ui, copies, colors);
-        let height = match self.panel {
-            Panel::Impulse | Panel::Delay | Panel::Bands => ui.available_height() * 0.41,
-            Panel::Matrix => ui.available_height() - 284.0,
-            Panel::None => ui.available_height() - 52.0,
-        };
-        self.graph(ui, height.max(96.0), colors);
-        self.overview(ui, colors);
+        let reference = self.antenna_reference();
+        self.best_match(ui, reference.is_some());
+        if let Some(reference) = reference {
+            let height = ui.available_height();
+            egui::ScrollArea::vertical()
+                .id_salt("single-sweep antenna")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    self.graph(ui, (height * 0.46).clamp(136.0, 360.0), colors);
+                    self.antenna_companions(
+                        ui,
+                        (height * 0.39).clamp(150.0, 300.0),
+                        reference,
+                        colors,
+                    );
+                    self.overview(ui, colors);
+                });
+        } else {
+            let height = match self.panel {
+                Panel::Impulse | Panel::Delay | Panel::Bands => ui.available_height() * 0.41,
+                Panel::Matrix => ui.available_height() - 284.0,
+                Panel::None => ui.available_height() - 52.0,
+            };
+            self.graph(ui, height.max(96.0), colors);
+            self.overview(ui, colors);
+        }
         self.draw_panel(ui, copies, colors);
         self.request(ui.ctx(), ui.input(|input| input.time));
         if self.pending() {
@@ -190,7 +217,18 @@ impl Viewer {
             }
             if s_parameters && trace[0] == trace[1] {
                 ui.selectable_value(&mut self.projection, Projection::Smith, "Smith");
-                ui.selectable_value(&mut self.projection, Projection::Vswr, "VSWR");
+                if marker_value(meta, trace).is_some() {
+                    if antenna::controls(
+                        ui,
+                        &mut self.antenna,
+                        &mut self.projection,
+                        self.panel == Panel::None,
+                    ) {
+                        self.panel = Panel::None;
+                    }
+                } else {
+                    ui.selectable_value(&mut self.projection, Projection::Vswr, "VSWR");
+                }
             }
             fit = ui.button("Fit").clicked();
             choose_panel(ui, &mut self.panel, s_parameters);
@@ -424,9 +462,10 @@ impl Viewer {
         let picked = response
             .hover_pos()
             .filter(|pos| rect.contains(*pos))
-            .and_then(|pos| smith.nearest(pos, data));
+            .and_then(|pos| smith.nearest(pos, data.iter().copied()));
         let clipped = painter.with_clip_rect(rect);
-        smith.paint(&clipped, data, colors.accent, colors.text_muted);
+        smith.grid(&clipped, colors.text_muted);
+        smith.trace(&clipped, data, colors.accent);
         if let Some(gated) = self.gated_trace() {
             smith.trace(
                 &clipped,
@@ -455,8 +494,118 @@ impl Viewer {
         }
     }
 
+    fn antenna_reference(&self) -> Option<f64> {
+        if self.antenna && self.panel == Panel::None && antenna::primary(self.projection) {
+            marker_value(&self.summary.metadata, self.trace)
+        } else {
+            None
+        }
+    }
+
+    fn antenna_companions(
+        &mut self,
+        ui: &mut Ui,
+        height: f32,
+        reference: f64,
+        colors: WorkbenchColors,
+    ) {
+        let markers: Vec<_> = self
+            .markers
+            .exact_points()
+            .filter_map(|(index, point)| {
+                Some(antenna::Marker {
+                    hz: point.frequency_hz,
+                    value: point.value(self.trace[0], self.trace[1])?,
+                    reference,
+                    label: Markers::label(index),
+                    color: Markers::color(colors, index),
+                    exact: true,
+                })
+            })
+            .collect();
+        let guides: Vec<_> = self
+            .markers
+            .positions(self.draft)
+            .map(|(index, hz)| (hz, Markers::label(index), Markers::color(colors, index)))
+            .collect();
+        let interaction = antenna::companions(
+            ui,
+            self.viewport,
+            height,
+            &[antenna::Sweep {
+                points: self.current_trace(),
+                reference,
+                color: colors.accent,
+            }],
+            &markers,
+            &guides,
+            colors,
+        );
+        if let Some(picked) = interaction.smith_pick {
+            self.markers
+                .set(self.markers.active, Target::Row(picked.index));
+        }
+        self.navigate(ui, interaction.frequency, &interaction.frequency_hit);
+        self.place_markers(ui, interaction.frequency, &interaction.frequency_hit);
+    }
+
+    fn best_match(&mut self, ui: &mut Ui, active: bool) {
+        let index = self.matching_index().map(|indexed| indexed.index.clone());
+        let selection = self.markers.band(self.draft);
+        let band = selection.unwrap_or(self.viewport);
+        let capture = self.capture.clone();
+        let trace = self.trace;
+        let key = (trace, band);
+        self.best.update(
+            ui.ctx(),
+            (active && index.is_some()).then_some(key),
+            Duration::from_secs(45),
+            0.15,
+            move |cancel| capture.best_match(&index.expect("indexed sweep"), band, trace, cancel),
+        );
+        if !active {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(if selection.is_some() {
+                "Best observed · marker band"
+            } else {
+                "Best observed · visible band"
+            });
+            match self
+                .best
+                .result(&key)
+                .map(|result| result.and_then(|point| point.as_ref().map_err(String::as_str)))
+            {
+                Some(Ok(Some(point))) => {
+                    if antenna::best_button(ui, *point).clicked() {
+                        self.markers
+                            .set(self.markers.active, Target::Row(point.index));
+                        self.recenter(point.frequency_hz);
+                    }
+                }
+                Some(Ok(None)) => {
+                    ui.weak("No finite VSWR");
+                }
+                Some(Err(error)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                None => {
+                    ui.weak("Finding minimum VSWR…");
+                }
+            }
+        });
+    }
+
     fn navigate(&mut self, ui: &Ui, rect: Rect, response: &Response) {
-        let band = plot::navigate(ui, rect, response, self.viewport, self.full, false);
+        let band = plot::navigate(
+            ui,
+            rect,
+            response,
+            self.viewport,
+            self.full,
+            self.antenna_reference().is_some(),
+        );
         if band != self.viewport {
             self.set_viewport(band);
         }

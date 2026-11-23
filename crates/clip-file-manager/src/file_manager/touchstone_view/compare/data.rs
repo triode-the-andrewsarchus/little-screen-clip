@@ -1,9 +1,7 @@
 use super::super::{
-    Job,
     capture::{Band, Capture, Cutoff, Trace, envelope_points, trace_points},
-    read_job,
+    read::Read,
 };
-use crate::file_manager::signal_view::take_query_result;
 use egui::Context;
 use little_clip_core::engineering::touchstone::{
     BandSearch, Index, Metadata, Parameter, Summary, TracePoint,
@@ -117,6 +115,7 @@ pub(super) struct Reads {
     index: Read<TraceKeys, Pair<Indexed>>,
     detail: Read<RegionKey, Pair<Vec<TracePoint>>>,
     marker: Read<(TraceKeys, f64), Pair<Option<Sample>>>,
+    best: Read<RegionKey, Pair<Option<TracePoint>>>,
     thresholds: Read<ThresholdKey, Pair<BandSearch>>,
     delay: Read<RegionKey, Pair<Option<Delay>>>,
 }
@@ -125,6 +124,7 @@ pub(super) struct Request {
     pub traces: TraceKeys,
     pub viewport: Band,
     pub marker: f64,
+    pub antenna: bool,
     pub thresholds: Option<(Band, Cutoff)>,
     pub aperture: Option<Band>,
 }
@@ -187,6 +187,20 @@ impl Reads {
             move |cancel| {
                 run(markers, |side| {
                     side.capture.sample(&side.index, hz, side.trace, cancel)
+                })
+            },
+        );
+
+        let best = ready.clone();
+        self.best.update(
+            ctx,
+            (available && request.antenna).then_some((traces, viewport)),
+            Duration::from_secs(45),
+            0.15,
+            move |cancel| {
+                run(best, |side| {
+                    side.capture
+                        .best_match(&side.index, viewport, side.trace, cancel)
                 })
             },
         );
@@ -264,6 +278,10 @@ impl Reads {
         self.marker.result(&(traces, hz))
     }
 
+    pub(super) fn best(&self, traces: TraceKeys, band: Band) -> Outcome<'_, Option<TracePoint>> {
+        self.best.result(&(traces, band))
+    }
+
     pub(super) fn bands(
         &self,
         traces: TraceKeys,
@@ -280,67 +298,6 @@ impl Reads {
 
 fn run<T>(ready: [Option<Ready>; 2], read: impl Fn(Ready) -> Result<T, String>) -> Pair<T> {
     ready.map(|side| side.map(&read))
-}
-
-struct Read<K, T> {
-    current: Option<(K, Result<T, String>)>,
-    pending: Option<(K, Job<T>)>,
-    next: f64,
-}
-
-impl<K, T> Default for Read<K, T> {
-    fn default() -> Self {
-        Self {
-            current: None,
-            pending: None,
-            next: 0.0,
-        }
-    }
-}
-
-impl<K: Copy + PartialEq, T: Send + 'static> Read<K, T> {
-    fn value(&self, key: &K) -> Option<&T> {
-        self.result(key)?.ok()
-    }
-
-    fn result(&self, key: &K) -> Option<Result<&T, &str>> {
-        let (old, result) = self.current.as_ref()?;
-        (old == key).then(|| result.as_ref().map_err(String::as_str))
-    }
-
-    fn update(
-        &mut self,
-        ctx: &Context,
-        key: Option<K>,
-        timeout: Duration,
-        interval: f64,
-        work: impl FnOnce(&AtomicBool) -> T + Send + 'static,
-    ) {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|(old, _)| Some(*old) != key)
-        {
-            self.pending = None;
-        }
-        if let Some(result) = take_query_result(&mut self.pending) {
-            self.current = Some(result);
-        }
-        let Some(key) = key else { return };
-        if self.current.as_ref().is_some_and(|(old, _)| *old == key) {
-            return;
-        }
-        let now = ctx.input(|input| input.time);
-        if self.pending.is_none() && now >= self.next {
-            self.next = now + interval;
-            self.pending = Some((key, read_job(ctx, timeout, move |cancel| Ok(work(cancel)))));
-        }
-        if self.pending.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(24));
-        } else {
-            ctx.request_repaint_after(Duration::from_secs_f64((self.next - now).max(0.001)));
-        }
-    }
 }
 
 pub(super) fn prefix(sources: &[Source; 2], traces: TraceKeys) -> [Vec<TracePoint>; 2] {

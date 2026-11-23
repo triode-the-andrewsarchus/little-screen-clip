@@ -4,17 +4,16 @@ mod data;
 mod panels;
 
 use super::{
+    antenna,
     capture::{Band, Trace},
+    marker_value,
     plot::{self, Projection},
 };
 use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
 use data::{Element, Reads, Request, Source, TraceKeys};
 use egui::{Button, Color32, PointerButton, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::{
-    engineering::{
-        touchstone::{Parameter, TracePoint},
-        waveforms::display_value,
-    },
+    engineering::touchstone::{Parameter, TracePoint},
     palette::AppPalette,
 };
 use std::{
@@ -50,6 +49,7 @@ pub(in crate::file_manager) struct Viewer {
     viewport: Band,
     marker: f64,
     projection: Projection,
+    antenna: bool,
 }
 
 impl Viewer {
@@ -68,6 +68,10 @@ impl Viewer {
         let full = extent(bands);
         let marker = overlap(bands).map_or(full[0], |band| band[0]);
         let prefix = data::prefix(&sources, traces);
+        let antenna = sources.iter().all(|source| source.metadata().ports == 1)
+            && sources
+                .iter()
+                .any(|source| marker_value(source.metadata(), [0, 0]).is_some());
         Ok(Self {
             sources,
             order: [0, 1],
@@ -82,6 +86,7 @@ impl Viewer {
             viewport: full,
             marker,
             projection: preferred(selected.parameter),
+            antenna,
         })
     }
 
@@ -108,6 +113,14 @@ impl Viewer {
         )
         .with_session_title();
         shell.render_header(ui, |_| {});
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 24.0;
+            ui.spacing_mut().button_padding.y = 2.0;
+            self.workspace(ui, colors);
+        });
+    }
+
+    fn workspace(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         self.source_controls(ui);
         self.trace_controls(ui);
         let measured = self.indexed_bands();
@@ -122,17 +135,29 @@ impl Viewer {
             enough && self.selected.parameter == Parameter::S,
             enough,
         );
-        let (ratio, ceiling) = if self.tools.active() {
-            (0.42, 248.0)
-        } else {
-            (0.51, 330.0)
-        };
-        let height = (ui.available_height() * ratio).clamp(116.0, ceiling);
+        let available_height = ui.available_height();
         egui::ScrollArea::vertical()
             .id_salt("RF comparison")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                self.graphs(ui, height, common, compatible, colors);
+                if self.antenna_open() {
+                    let charts = (available_height - 154.0).max(265.0);
+                    self.graphs(ui, (charts * 0.52).min(360.0), common, compatible, colors);
+                    self.antenna_companions(ui, (charts * 0.46).min(290.0), colors);
+                } else {
+                    let (ratio, ceiling) = if self.tools.active() {
+                        (0.42, 248.0)
+                    } else {
+                        (0.51, 330.0)
+                    };
+                    self.graphs(
+                        ui,
+                        (available_height * ratio).clamp(116.0, ceiling),
+                        common,
+                        compatible,
+                        colors,
+                    );
+                }
                 self.details(ui, common, compatible);
             });
     }
@@ -154,6 +179,11 @@ impl Viewer {
     }
 
     fn trace_controls(&mut self, ui: &mut Ui) {
+        if self.sources.iter().all(|source| {
+            source.metadata().ports == 1 && Element::at(source, [0, 0]) == Some(self.selected)
+        }) {
+            return;
+        }
         let mut element = self.selected;
         if self
             .sources
@@ -244,6 +274,9 @@ impl Viewer {
             }
             self.selected = next;
             self.traces = self.sources.each_ref().map(|source| next.trace(source));
+            if self.projection == Projection::Vswr && !self.has_antenna() {
+                self.projection = preferred(next.parameter);
+            }
             self.prefix = data::prefix(&self.sources, self.traces);
         }
     }
@@ -284,22 +317,17 @@ impl Viewer {
     }
 
     fn frequency_controls(&mut self, ui: &mut Ui, common: Option<Band>, compatible: bool) {
+        let has_antenna = self.has_antenna();
+        let db_label = self.decibel_label(has_antenna);
         ui.horizontal_wrapped(|ui| {
-            for projection in [
-                Projection::Decibels,
-                Projection::Magnitude,
-                Projection::Phase,
-            ] {
-                if projection != Projection::Decibels || self.selected.parameter == Parameter::S {
-                    if ui
-                        .add(
-                            Button::new(projection.title()).selected(self.projection == projection),
-                        )
-                        .clicked()
-                    {
-                        self.projection = projection;
-                    }
-                }
+            if self.selected.parameter == Parameter::S {
+                ui.selectable_value(&mut self.projection, Projection::Decibels, db_label);
+            }
+            for projection in [Projection::Magnitude, Projection::Phase] {
+                ui.selectable_value(&mut self.projection, projection, projection.title());
+            }
+            if has_antenna {
+                antenna::controls(ui, &mut self.antenna, &mut self.projection, true);
             }
             if ui.button("Fit sweeps").clicked() {
                 self.viewport = self.full;
@@ -330,6 +358,21 @@ impl Viewer {
         self.coverage(ui, common, compatible);
     }
 
+    fn decibel_label(&self, has_antenna: bool) -> String {
+        if has_antenna {
+            for side in self.order {
+                if let Some([response, stimulus]) = self.traces[side]
+                    && let Some(parameter) = self.sources[side]
+                        .metadata()
+                        .parameter_label(response, stimulus)
+                {
+                    return format!("{parameter} dB");
+                }
+            }
+        }
+        Projection::Decibels.title().to_owned()
+    }
+
     fn coverage(&self, ui: &mut Ui, common: Option<Band>, compatible: bool) {
         ui.horizontal_wrapped(|ui| {
             for (slot, side) in self.order.into_iter().enumerate() {
@@ -341,10 +384,13 @@ impl Viewer {
                 match self.reads.indexed(self.traces, side) {
                     Some(Ok(indexed)) => {
                         let [lo, hi] = indexed.index.band_hz();
+                        let reference = self
+                            .reference(side)
+                            .map_or_else(String::new, |reference| format!(" · {reference} Ω ref"));
                         ui.weak(format!(
-                            "{letter}  {}–{}",
-                            display_value(lo, "Hz"),
-                            display_value(hi, "Hz")
+                            "{letter}  {}–{}{reference}",
+                            antenna::frequency(lo),
+                            antenna::frequency(hi)
                         ));
                     }
                     Some(Err(error)) => {
@@ -358,8 +404,8 @@ impl Viewer {
             if let Some([lo, hi]) = common {
                 ui.label(format!(
                     "Overlap  {}–{}",
-                    display_value(lo, "Hz"),
-                    display_value(hi, "Hz")
+                    antenna::frequency(lo),
+                    antenna::frequency(hi)
                 ));
             } else if self.indexed_bands().iter().all(Option::is_some) {
                 ui.weak("No shared frequency coverage");
@@ -372,6 +418,7 @@ impl Viewer {
 
     fn details(&mut self, ui: &mut Ui, common: Option<Band>, compatible: bool) {
         let matched = common.filter(|_| compatible);
+        let linked = self.antenna_open();
         let threshold = self.tools.threshold(
             matched.filter(|_| self.selected.parameter == Parameter::S),
             self.viewport,
@@ -385,6 +432,7 @@ impl Viewer {
                 traces: self.traces,
                 viewport: self.viewport,
                 marker: self.marker,
+                antenna: linked,
                 thresholds: threshold,
                 aperture,
             },
@@ -414,11 +462,76 @@ impl Viewer {
             samples,
             compatible,
             self.projection,
+            linked,
         );
-        if let Some(hz) = metric_jump.or(marker_jump) {
+        let best_jump = linked
+            .then(|| {
+                panels::best_match(ui, self.order, self.reads.best(self.traces, self.viewport))
+            })
+            .flatten();
+        if let Some(hz) = metric_jump.or(marker_jump).or(best_jump) {
             self.jump(hz);
             ui.ctx().request_repaint();
         }
+    }
+
+    fn reference(&self, side: usize) -> Option<f64> {
+        marker_value(self.sources[side].metadata(), self.traces[side]?)
+    }
+
+    fn has_antenna(&self) -> bool {
+        self.traces.iter().any(Option::is_some)
+            && (0..2).all(|side| self.traces[side].is_none() || self.reference(side).is_some())
+    }
+
+    fn antenna_open(&self) -> bool {
+        self.antenna && antenna::primary(self.projection) && self.has_antenna()
+    }
+
+    fn antenna_companions(&mut self, ui: &mut Ui, height: f32, colors: WorkbenchColors) {
+        let ink = sweep_colors(ui);
+        let sweeps: Vec<_> = self
+            .order
+            .into_iter()
+            .enumerate()
+            .filter_map(|(slot, side)| {
+                Some(antenna::Sweep {
+                    points: self.trace_data(side),
+                    reference: self.reference(side)?,
+                    color: ink[slot],
+                })
+            })
+            .collect();
+        let mut markers = Vec::with_capacity(2);
+        if let Some(Ok(samples)) = self.reads.marker(self.traces, self.marker) {
+            for (slot, side) in self.order.into_iter().enumerate() {
+                if let (Some(Ok(Some(sample))), Some(reference)) =
+                    (&samples[side], self.reference(side))
+                {
+                    markers.push(antenna::Marker {
+                        hz: sample.frequency_hz,
+                        value: sample.value,
+                        reference,
+                        label: panels::letter(slot),
+                        color: ink[slot],
+                        exact: sample.exact(),
+                    });
+                }
+            }
+        }
+        let interaction = antenna::companions(
+            ui,
+            self.viewport,
+            height,
+            &sweeps,
+            &markers,
+            &[(self.marker, "", colors.text_primary)],
+            colors,
+        );
+        if let Some(picked) = interaction.smith_pick {
+            self.jump(picked.frequency_hz);
+        }
+        self.navigate(ui, interaction.frequency, &interaction.frequency_hit);
     }
 
     fn trace_data(&self, source: usize) -> &[TracePoint] {
@@ -435,7 +548,7 @@ impl Viewer {
         compatible: bool,
         colors: WorkbenchColors,
     ) {
-        if self.traces.iter().all(Option::is_some) && !compatible {
+        if self.traces.iter().all(Option::is_some) && !compatible && !self.antenna_open() {
             for (slot, side) in self.order.into_iter().enumerate() {
                 ui.colored_label(sweep_colors(ui)[slot], self.axis_title(side, true));
                 self.graph(ui, (height * 0.56).max(112.0), common, colors, Some(slot));
@@ -579,7 +692,12 @@ impl Viewer {
             let Some(Ok(Some(sample))) = samples[side] else {
                 continue;
             };
-            let y = plot::fraction(values, self.projection.marker_value(sample));
+            let value = if self.antenna_open() {
+                self.projection.coordinate(sample.value)
+            } else {
+                self.projection.marker_value(sample)
+            };
+            let y = plot::fraction(values, value);
             if !(0.0..=1.0).contains(&y) || x < rect.left() || x > rect.right() {
                 continue;
             }

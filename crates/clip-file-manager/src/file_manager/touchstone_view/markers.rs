@@ -200,7 +200,11 @@ impl Markers {
                 }
                 match marker.exact.as_ref() {
                     Some(point) => {
-                        if ui.link(readout(point, trace, metadata)).clicked() {
+                        if ui
+                            .link(readout(point, trace, metadata))
+                            .on_hover_text(format!("Open measured row {}", point.index + 1))
+                            .clicked()
+                        {
                             self.active = index;
                             inspect = true;
                             center = Some(point.frequency_hz);
@@ -369,21 +373,16 @@ fn readout(point: &Point, trace: Trace, metadata: &Metadata) -> String {
     let Some(value) = point.value(trace[0], trace[1]) else {
         return hz;
     };
+    if let Some(reference) = marker_value(metadata, trace) {
+        return super::antenna::readout(point.frequency_hz, value, reference);
+    }
     let phase = value.arg().to_degrees();
     let amplitude = if metadata.parameter == Parameter::S {
         format!("{:.3} dB", plot::decibels(value))
     } else {
         format!("{:.6}", value.norm())
     };
-    let mut text = format!("{hz} · {amplitude} · {phase:.2}°");
-    if let Some(reference) = marker_value(metadata, trace) {
-        let denominator = 1.0 - value;
-        if denominator.norm() > 1e-12 {
-            let impedance = reference * (1.0 + value) / denominator;
-            text.push_str(&format!(" · {:.3} {:+.3}j Ω", impedance.re, impedance.im));
-        }
-    }
-    text
+    format!("{hz} · {amplitude} · {phase:.2}°")
 }
 
 #[cfg(test)]
