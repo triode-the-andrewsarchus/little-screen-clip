@@ -47,6 +47,7 @@ mod metadata;
 mod preview_copy;
 mod previews;
 mod scene_strip;
+mod scope_view;
 pub(crate) mod search;
 mod selection;
 mod shelf;
@@ -129,6 +130,10 @@ pub(super) enum DocumentPosition {
     ToolpathLine(usize),
     SampleRegion(usize, usize),
     SubtitleCue(usize),
+    ScopeSamples {
+        first: u64,
+        end: u64,
+    },
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]

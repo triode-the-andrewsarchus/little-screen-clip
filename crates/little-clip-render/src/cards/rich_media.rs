@@ -450,3 +450,90 @@ impl ScreenRenderer {
         }
     }
 }
+
+impl ScreenRenderer {
+    pub(super) fn draw_scope_card(
+        &self,
+        pixmap: &mut Pixmap,
+        scope: &little_clip_core::engineering::waveforms::Overview,
+        [x, y, width, height]: [f32; 4],
+    ) {
+        use little_clip_core::engineering::waveforms::display_value;
+
+        let title = format!(
+            "{} · {} ch · {}{}",
+            scope.model,
+            scope.channels.len(),
+            display_value(scope.duration_seconds(), "s"),
+            if scope.sampled() { " · sampled" } else { "" },
+        );
+        let left = x + 14.0;
+        let right = x + width - 14.0;
+        self.draw_text_clipped(
+            pixmap,
+            &title,
+            left,
+            y + 126.0,
+            15.0,
+            self.color_from_hex(&self.palette.colors.text_primary),
+            false,
+            right,
+        );
+        let top = y + 150.0;
+        let plot_height = (y + height - top - 21.0).max(32.0);
+        if self
+            .draw_card_viewport_frame(pixmap, left, top, right - left, plot_height)
+            .is_none()
+        {
+            return;
+        }
+        let colors = [
+            Color::from_rgba8(102, 207, 252, 255),
+            Color::from_rgba8(249, 201, 100, 255),
+            Color::from_rgba8(132, 227, 166, 255),
+            Color::from_rgba8(239, 154, 205, 255),
+        ];
+        let lane = plot_height / scope.envelopes.len().max(1) as f32;
+        for (index, envelope) in scope.envelopes.iter().enumerate() {
+            let bounds = envelope.extrema();
+            if !bounds.valid() {
+                continue;
+            }
+            let mut path = tiny_skia::PathBuilder::new();
+            let lane_top = top + index as f32 * lane + 4.0;
+            let y = |value: f32| {
+                let scale = (bounds.max - bounds.min).max(f32::EPSILON);
+                lane_top + (1.0 - (value - bounds.min) / scale) * (lane - 8.0).max(2.0)
+            };
+            let step = (right - left - 6.0) / envelope.peaks.len().max(1) as f32;
+            let mut previous = None;
+            for (column, peak) in envelope.peaks.iter().copied().enumerate() {
+                if peak.valid() {
+                    let x = left + 3.0 + (column as f32 + 0.5) * step;
+                    let (top, bottom) = (y(peak.max), y(peak.min));
+                    path.move_to(x, top);
+                    path.line_to(x, bottom.max(top + 0.5));
+                    if let Some((px, py)) = previous {
+                        path.move_to(px, py);
+                        path.line_to(x, (top + bottom) / 2.0);
+                    }
+                    previous = Some((x, (top + bottom) / 2.0));
+                }
+            }
+            if let Some(path) = path.finish() {
+                let mut paint = Paint::default();
+                paint.set_color(colors[index % colors.len()]);
+                pixmap.stroke_path(
+                    &path,
+                    &paint,
+                    &tiny_skia::Stroke {
+                        width: 1.4,
+                        ..Default::default()
+                    },
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
+    }
+}

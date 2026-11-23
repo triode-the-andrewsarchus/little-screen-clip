@@ -33,13 +33,14 @@ fn tree_id() -> Id {
     Id::unique("file_manager_tree_focus")
 }
 
-fn strip_focus_ids() -> [Id; 5] {
+fn strip_focus_ids() -> [Id; 6] {
     [
         music::waveform_id(),
         super::midi_strip::focus_id(),
         minimap_id(),
         timeline_id(),
         pdf_id(),
+        super::scope_view::strip::focus_id(),
     ]
 }
 
@@ -164,7 +165,13 @@ impl FileManager {
     }
 
     fn copy_strip_selection(&mut self, ctx: &egui::Context) {
-        if ctx.memory(|memory| memory.has_focus(super::midi_strip::focus_id())) {
+        if ctx.memory(|memory| memory.has_focus(super::scope_view::strip::focus_id())) {
+            if let Some(selection) = self.previews.scope_selection.clone() {
+                let context = self.search_preview_context();
+                self.preview_copies
+                    .start(ctx, move |cancel| selection.export(&context, cancel));
+            }
+        } else if ctx.memory(|memory| memory.has_focus(super::midi_strip::focus_id())) {
             self.midi.copy_selection(ctx.input(|input| input.time));
         } else if ctx.memory(|memory| memory.has_focus(minimap_id())) {
             self.copy_text_range(ctx);
@@ -556,14 +563,53 @@ impl FileManager {
 
     fn toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
         ui.horizontal(|ui| {
-            if nav_button(ui, Icon::ArrowLeft, "Back [Alt+Left]", self.index.is_some_and(|i| i > 0), palette) { self.history_step(false); }
-            if nav_button(ui, Icon::ArrowRight, "Forward [Alt+Right]", self.index.is_some_and(|i| i + 1 < self.history.len()), palette) { self.history_step(true); }
-            if nav_button(ui, Icon::ArrowUp, "Parent folder [Alt+Up]", self.path().parent().is_some(), palette) { self.parent(); }
+            if nav_button(
+                ui,
+                Icon::ArrowLeft,
+                "Back [Alt+Left]",
+                self.index.is_some_and(|i| i > 0),
+                palette,
+            ) {
+                self.history_step(false);
+            }
+            if nav_button(
+                ui,
+                Icon::ArrowRight,
+                "Forward [Alt+Right]",
+                self.index.is_some_and(|i| i + 1 < self.history.len()),
+                palette,
+            ) {
+                self.history_step(true);
+            }
+            if nav_button(
+                ui,
+                Icon::ArrowUp,
+                "Parent folder [Alt+Up]",
+                self.path().parent().is_some(),
+                palette,
+            ) {
+                self.parent();
+            }
             let address_width = (ui.available_width() - 235.0).max(80.0);
             self.address_ui(ui, address_width);
             self.index_ui(ui);
-            if nav_button(ui, Icon::Repeat, "Refresh [F5]", true, palette) { self.refresh(); }
-            if ui.add(clip_ui::buttons::ButtonRole::Secondary.button(if self.show_hidden { "Hidden: on" } else { "Hidden: off" }, palette)).on_hover_text("Show hidden files [Ctrl+H]").clicked() { self.toggle_hidden(); }
+            if nav_button(ui, Icon::Repeat, "Refresh [F5]", true, palette) {
+                self.refresh();
+            }
+            if ui
+                .add(clip_ui::buttons::ButtonRole::Secondary.button(
+                    if self.show_hidden {
+                        "Hidden: on"
+                    } else {
+                        "Hidden: off"
+                    },
+                    palette,
+                ))
+                .on_hover_text("Show hidden files [Ctrl+H]")
+                .clicked()
+            {
+                self.toggle_hidden();
+            }
         });
     }
 

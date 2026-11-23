@@ -21,6 +21,7 @@ pub enum Format {
     Subtitle,
     Spreadsheet,
     VcvPatch,
+    Oscilloscope,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -42,6 +43,7 @@ impl Format {
             "sqlite" | "sqlite3" | "db" | "db3" => Some(Self::Database),
             "gpx" | "geojson" | "rctrk" => Some(Self::Geography),
             "gcode" => Some(Self::Toolpath),
+            "wfm" => Some(Self::Oscilloscope),
             ext if crate::embroidery::supports_extension(ext) => Some(Self::Embroidery),
             "sfz" | "sf2" | "nki" | "dspreset" | "dslibrary" | "multisample" | "xrni" => {
                 Some(Self::Multisample)

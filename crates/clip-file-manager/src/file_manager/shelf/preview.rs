@@ -62,6 +62,7 @@ pub(in crate::file_manager) enum Source {
     Geography(PathBuf),
     Minecraft(PathBuf, u64),
     Toolpath(PathBuf),
+    Oscilloscope(PathBuf),
     Embroidery(PathBuf),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
@@ -135,6 +136,7 @@ impl Source {
                 Source::Spreadsheet(path, revision)
             }
             super::super::document_format::Format::Geography => Source::Geography(path),
+            super::super::document_format::Format::Oscilloscope => Source::Oscilloscope(path),
             super::super::document_format::Format::Toolpath => Source::Toolpath(path),
             super::super::document_format::Format::Embroidery => Source::Embroidery(path),
             super::super::document_format::Format::VcvPatch => Source::VcvPatch(path),
@@ -173,6 +175,7 @@ impl Source {
             | Self::Database(_)
             | Self::Geography(_)
             | Self::Toolpath(_)
+            | Self::Oscilloscope(_)
             | Self::Embroidery(_)
             | Self::Multisample(_)
             | Self::Mail(_)
@@ -292,6 +295,7 @@ impl Source {
                 data
             }
             Source::System(path) => super::super::system::load(&path, token),
+            Source::Oscilloscope(path) => super::super::scope_view::strip::load(&path, token),
             Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),
             Source::Multisample(path) => super::super::multisample::load(&path, token),

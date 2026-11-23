@@ -502,6 +502,10 @@ impl ScreenRenderer {
                 self.draw_spreadsheet_card(pixmap, title, sheet, rx, ry, rw, rh, is_hero);
                 true
             }
+            Some(Preview::Scope(scope)) => {
+                self.draw_scope_card(pixmap, scope, [rx, ry, rw, rh]);
+                true
+            }
             Some(Preview::Midi(score)) => {
                 self.draw_midi_card(pixmap, score, rx, ry, rw, rh, is_hero);
                 true

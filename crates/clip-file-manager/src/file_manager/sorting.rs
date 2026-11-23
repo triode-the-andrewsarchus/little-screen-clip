@@ -81,6 +81,7 @@ pub(super) enum Category {
     VcvRack,
     Image,
     Brushes,
+    Oscilloscope,
     Video,
     Scene,
     Font,
@@ -131,6 +132,9 @@ fn format_family(entry: &Entry) -> Category {
 }
 
 fn extension_category(entry: &Entry) -> Category {
+    if entry.document_format() == Some(super::document_format::Format::Oscilloscope) {
+        return Category::Oscilloscope;
+    }
     if entry.is_geography() {
         return Category::Geography;
     }
@@ -170,6 +174,7 @@ impl Category {
             Self::VcvRack => "VCV Rack",
             Self::Image => "Images",
             Self::Brushes => "Brushes",
+            Self::Oscilloscope => "Oscilloscope captures",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",

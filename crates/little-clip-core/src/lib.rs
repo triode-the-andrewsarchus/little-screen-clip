@@ -15,6 +15,7 @@ pub mod document;
 pub mod ebook;
 pub mod email;
 pub mod embroidery;
+pub mod engineering;
 pub mod file_format;
 pub mod file_inventory;
 pub mod file_source;

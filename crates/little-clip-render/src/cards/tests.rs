@@ -532,6 +532,44 @@ fn dadaspec_display_choice_renders_prepared_stereo_without_source_io() {
 }
 
 #[test]
+fn scope_file_preview_renders_calibrated_analog_channels() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("scope.wfm");
+    let mut capture = vec![0; 280];
+    capture[..8].copy_from_slice(&[1, 0xff, 0xff, 0xff, 0xa6, 0xa5, 0x38, 0]);
+    capture[8..15].copy_from_slice(b"DS1054Z");
+    capture[48] = 1;
+    capture[84] = 0xd8;
+    capture[88] = 1;
+    capture[92..96].copy_from_slice(&280_u32.to_le_bytes());
+    capture[116..120].copy_from_slice(&2048_u32.to_le_bytes());
+    capture[120..124].copy_from_slice(&0.25_f32.to_le_bytes());
+    capture[124] = 1;
+    capture[132..136].copy_from_slice(&1.0_f32.to_le_bytes());
+    capture[141] = 2;
+    capture[260..264].copy_from_slice(&280_u32.to_le_bytes());
+    capture.extend((0..2048).map(|i| 55 + (i % 140) as u8));
+    std::fs::write(&path, capture).unwrap();
+
+    let mut item = ClipItem::from_text("placeholder");
+    item.payload = ClipPayload::Text(path.to_string_lossy().into_owned());
+    item.title = "scope.wfm".into();
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    let preview = renderer.file_preview(&item).expect("prepared scope card");
+    assert!(matches!(
+        preview.as_ref(),
+        crate::file_preview::Preview::Scope(scope)
+            if scope.model == "DS1054Z" && scope.channels[0].unit == "V"
+    ));
+    let mut slots = SlotManager::default();
+    slots.push_left(item);
+    let (pixmap, _) = renderer.render_pixmap_with_previews(&slots).unwrap();
+    assert!(pixmap.pixels().iter().any(|pixel| {
+        pixel.alpha() == 255 && pixel.red() == 102 && pixel.green() == 207 && pixel.blue() == 252
+    }));
+}
+
+#[test]
 fn brush_file_preview_prepares_and_renders_cohesive_card() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("charcoal_soft.vbr");

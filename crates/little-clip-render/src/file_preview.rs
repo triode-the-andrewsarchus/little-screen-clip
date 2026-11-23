@@ -33,6 +33,7 @@ pub(crate) enum Preview {
         sheet: SpreadsheetSheet,
     },
     Midi(MidiData),
+    Scope(little_clip_core::engineering::waveforms::Overview),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -47,6 +48,7 @@ enum Kind {
     Office,
     Spreadsheet,
     Midi,
+    Scope,
     Brush,
     Embroidery,
     Geography,
@@ -278,6 +280,8 @@ impl crate::ScreenRenderer {
 fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Kind> {
     let kind = if Format::for_path(path) == Some(Format::Geography) {
         Kind::Geography
+    } else if Format::for_path(path) == Some(Format::Oscilloscope) {
+        Kind::Scope
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
@@ -305,6 +309,16 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
 fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
     match kind {
         Kind::Geography | Kind::Trajectory => None,
+        Kind::Scope => {
+            let cancel = AtomicBool::new(false);
+            let recording = little_clip_core::engineering::waveforms::Recording::open(
+                path,
+                Default::default(),
+                &cancel,
+            )
+            .ok()?;
+            recording.overview(&cancel).ok().map(Preview::Scope)
+        }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);
             let design = little_clip_core::embroidery::Design::read(path, &cancelled).ok()?;

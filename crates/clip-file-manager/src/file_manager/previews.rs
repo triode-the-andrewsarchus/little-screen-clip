@@ -48,6 +48,7 @@ pub(super) struct EntryPreviews {
     pub(super) pdf_pages: super::pdf_strip::Pages,
     pub(super) geography: super::geography::Strips,
     system_refresh: BTreeMap<uuid::Uuid, (u64, std::time::Instant, u32)>,
+    pub(super) scope_selection: Option<super::scope_view::strip::Selection>,
     pub(super) text_selection: super::text_strip::selection::Selection,
     text_status: BTreeMap<std::path::PathBuf, (u64, bool)>,
 }
@@ -56,6 +57,7 @@ impl EntryPreviews {
         if self.context.replace(context) {
             self.retire();
             self.text_status.clear();
+            self.scope_selection = None;
             self.text_selection = Default::default();
             self.multisample.context = context.clone();
             self.pdf_pages.context = context.clone();
@@ -247,6 +249,13 @@ impl EntryPreviews {
         }
     }
     pub fn retain(&mut self, visible: &BTreeSet<std::path::PathBuf>) {
+        if self
+            .scope_selection
+            .as_ref()
+            .is_some_and(|selection| !visible.contains(&selection.path))
+        {
+            self.scope_selection = None;
+        }
         if visible.is_empty() {
             self.text_status.clear();
             self.geography.suspend();
@@ -411,7 +420,22 @@ impl EntryPreviews {
         palette: &little_clip_core::palette::AppPalette,
         response: &mut egui::Response,
     ) -> (Option<super::DocumentPosition>, bool) {
-        let position = if entry.is_spreadsheet() {
+        let position = if entry.document_format()
+            == Some(super::document_format::Format::Oscilloscope)
+        {
+            let id = self.identity(entry);
+            self.listing(entry);
+            return super::scope_view::strip::show(
+                ui,
+                row,
+                entry,
+                columns,
+                colors,
+                self.cache.get(id),
+                &mut self.scope_selection,
+                response,
+            );
+        } else if entry.is_spreadsheet() {
             let ready = self.listing(entry);
             if let Some(trajectory) = ready.filter(|ready| ready.data.solar_trajectory) {
                 show_trajectory_strip(ui, row, entry, Some(columns), colors, trajectory);
@@ -468,21 +492,8 @@ impl EntryPreviews {
                 colors,
             )
             .map(super::DocumentPosition::GeographicFeature)
-        } else if entry.is_database() {
-            super::database::show_list(ui, row, entry, columns, self.listing(entry), colors)
-                .map(super::DocumentPosition::DatabaseTable)
-        } else if entry.is_calendar() {
-            super::calendar::show_list(ui, row, entry, columns, self.listing(entry), colors)
-                .map(super::DocumentPosition::CalendarEvent)
-        } else if entry.is_mail() {
-            super::mail::show_list(ui, row, entry, columns, self.listing(entry), colors)
-                .map(super::DocumentPosition::MailAttachment)
-        } else if entry.is_book() {
-            super::ebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
-                .map(super::DocumentPosition::BookChapter)
-        } else if entry.is_notebook() {
-            super::notebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
-                .map(super::DocumentPosition::NotebookCell)
+        } else if let Some(position) = self.show_record_document(ui, row, entry, columns, colors) {
+            position
         } else if entry.is_paged_document()
             || self
                 .listing(entry)
@@ -500,6 +511,43 @@ impl EntryPreviews {
         };
         (position, false)
     }
+    // These data-only documents expose a row or record which can be opened
+    // directly from the strip. The outer Option means this strip handled it.
+    fn show_record_document(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: egui::Rect,
+        entry: &Entry,
+        columns: super::ui::ListColumns,
+        colors: crate::ui_appearance::WorkbenchColors,
+    ) -> Option<Option<super::DocumentPosition>> {
+        use super::{DocumentPosition, document_format::Format};
+        let position = match entry.document_format()? {
+            Format::Database => {
+                super::database::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                    .map(DocumentPosition::DatabaseTable)
+            }
+            Format::Calendar => {
+                super::calendar::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                    .map(DocumentPosition::CalendarEvent)
+            }
+            Format::Mail => {
+                super::mail::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                    .map(DocumentPosition::MailAttachment)
+            }
+            Format::Book => {
+                super::ebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                    .map(DocumentPosition::BookChapter)
+            }
+            Format::Notebook => {
+                super::notebook::show_list(ui, row, entry, columns, self.listing(entry), colors)
+                    .map(DocumentPosition::NotebookCell)
+            }
+            _ => return None,
+        };
+        Some(position)
+    }
+
     pub fn show_visual(
         &mut self,
         ui: &mut egui::Ui,
