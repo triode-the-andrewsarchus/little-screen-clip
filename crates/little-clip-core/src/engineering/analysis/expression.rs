@@ -236,6 +236,7 @@ enum Binary {
     AtLeast,
     And,
     Or,
+    Xor,
 }
 
 impl Binary {
@@ -244,27 +245,43 @@ impl Binary {
     fn precedence(self) -> u8 {
         match self {
             Self::Or => 1,
-            Self::And => 2,
+            Self::Xor => 2,
+            Self::And => 3,
             Self::Equal
             | Self::NotEqual
             | Self::Less
             | Self::AtMost
             | Self::Greater
-            | Self::AtLeast => 3,
-            Self::Add | Self::Subtract => 4,
-            Self::Multiply | Self::Divide => 5,
+            | Self::AtLeast => 4,
+            Self::Add | Self::Subtract => 5,
+            Self::Multiply | Self::Divide => 6,
         }
+    }
+
+    fn comparison(self) -> bool {
+        matches!(
+            self,
+            Self::Equal
+                | Self::NotEqual
+                | Self::Less
+                | Self::AtMost
+                | Self::Greater
+                | Self::AtLeast
+        )
     }
 
     fn kind(self, left: Kind, right: Kind) -> Option<Kind> {
         let (Kind::Numeric(a), Kind::Numeric(b)) = (left, right) else {
-            return (matches!(self, Self::And | Self::Or) && left == right)
+            return (matches!(
+                self,
+                Self::And | Self::Or | Self::Xor | Self::Equal | Self::NotEqual
+            ) && left == right)
                 .then_some(Kind::Predicate);
         };
         match self {
             Self::Add | Self::Subtract => a.common(b).map(Kind::Numeric),
             Self::Multiply | Self::Divide => a.combine(b, self == Self::Divide).map(Kind::Numeric),
-            Self::And | Self::Or => None,
+            Self::And | Self::Or | Self::Xor => None,
             _ => a.common(b).map(|_| Kind::Predicate),
         }
     }
@@ -281,24 +298,40 @@ impl Binary {
         })
     }
 
-    fn evaluate(self, left: Value, right: impl FnOnce() -> Option<Value>) -> Option<Value> {
-        match left {
-            Value::Predicate(left) => match self {
-                Self::And if !left => Some(Value::Predicate(false)),
-                Self::Or if left => Some(Value::Predicate(true)),
-                Self::And | Self::Or => Some(Value::Predicate(right()?.predicate()?)),
-                _ => None,
-            },
-            Value::Numeric(left) => {
-                let right = right()?.numeric()?;
-                match self {
-                    Self::Add => numeric(left + right),
-                    Self::Subtract => numeric(left - right),
-                    Self::Multiply => numeric(left * right),
-                    Self::Divide => numeric(left / right),
-                    _ => self.compare(left, right).map(Value::Predicate),
+    fn evaluate(self, left: Option<Value>, right: impl FnOnce() -> Option<Value>) -> Option<Value> {
+        match self {
+            Self::And | Self::Or => {
+                let decisive = self == Self::Or;
+                let left = left.and_then(Value::predicate);
+                if left == Some(decisive) {
+                    return Some(Value::Predicate(decisive));
                 }
+                let right = right().and_then(Value::predicate);
+                if right == Some(decisive) {
+                    return Some(Value::Predicate(decisive));
+                }
+                left.zip(right).map(|_| Value::Predicate(!decisive))
             }
+            _ => match left? {
+                Value::Predicate(left) => {
+                    let right = right()?.predicate()?;
+                    match self {
+                        Self::Equal => Some(Value::Predicate(left == right)),
+                        Self::NotEqual | Self::Xor => Some(Value::Predicate(left != right)),
+                        _ => None,
+                    }
+                }
+                Value::Numeric(left) => {
+                    let right = right()?.numeric()?;
+                    match self {
+                        Self::Add => numeric(left + right),
+                        Self::Subtract => numeric(left - right),
+                        Self::Multiply => numeric(left * right),
+                        Self::Divide => numeric(left / right),
+                        _ => self.compare(left, right).map(Value::Predicate),
+                    }
+                }
+            },
         }
     }
 }
@@ -383,7 +416,7 @@ impl Node {
             Self::Negate(node) => numeric(-node.evaluate(sample)?.numeric()?),
             Self::Not(node) => Some(Value::Predicate(!node.evaluate(sample)?.predicate()?)),
             Self::Binary(operator, left, right) => {
-                operator.evaluate(left.evaluate(sample)?, || right.evaluate(sample))
+                operator.evaluate(left.evaluate(sample), || right.evaluate(sample))
             }
             Self::Function(function, left, right) => function
                 .evaluate(left.evaluate(sample)?.numeric()?, || {
@@ -421,6 +454,36 @@ mod tests {
         Expression::parse(input, &["CH1", "CH2"], active)
             .unwrap()
             .evaluate(|index| samples.get(index).copied())
+    }
+
+    #[test]
+    fn binary_channel_math_distinguishes_unknown_from_a_decisive_input() {
+        let bindings = ["A", "B"].map(|name| Binding {
+            name,
+            signal_type: SignalType::Digital,
+        });
+        let evaluate = |text, samples: [Option<bool>; 2]| {
+            Expression::parse_history(text, &bindings, 0)
+                .unwrap()
+                .evaluate_bound(|index| samples[index].map(Value::Predicate))
+        };
+        assert_eq!(
+            evaluate("A ^ ~B", [Some(true), Some(false)]),
+            Some(Value::Predicate(false))
+        );
+        assert_eq!(
+            evaluate("A | B & A", [Some(true), Some(false)]),
+            Some(Value::Predicate(true))
+        );
+        assert_eq!(
+            evaluate("A & B", [None, Some(false)]),
+            Some(Value::Predicate(false))
+        );
+        assert_eq!(
+            evaluate("A | B", [None, Some(true)]),
+            Some(Value::Predicate(true))
+        );
+        assert_eq!(evaluate("A xor B", [None, Some(true)]), None);
     }
 
     #[test]

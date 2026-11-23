@@ -323,7 +323,7 @@ fn valid_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
         && chars.all(|c| c.is_alphanumeric() || c == '_')
-        && !["x", "and", "or", "not"]
+        && !["x", "and", "or", "xor", "not"]
             .iter()
             .any(|reserved| reserved.eq_ignore_ascii_case(name))
 }

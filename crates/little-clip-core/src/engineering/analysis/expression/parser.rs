@@ -206,6 +206,7 @@ impl<'a> Lexer<'a> {
         match name {
             "and" | "AND" => Token::Operator(Binary::And),
             "or" | "OR" => Token::Operator(Binary::Or),
+            "xor" | "XOR" => Token::Operator(Binary::Xor),
             "not" | "NOT" => Token::Not,
             _ => Token::Name(name),
         }
@@ -217,6 +218,10 @@ impl<'a> Lexer<'a> {
         for (text, token) in [
             ("&&", Operator(And)),
             ("||", Operator(Or)),
+            ("&", Operator(And)),
+            ("|", Operator(Or)),
+            ("^", Operator(Xor)),
+            ("~", Not),
             ("==", Operator(Equal)),
             ("!=", Operator(NotEqual)),
             ("<=", Operator(AtMost)),
@@ -318,7 +323,7 @@ impl<'input> Parser<'_, 'input> {
             }
             Token::Not => self.unary(true, at, depth),
             Token::Operator(Binary::Subtract) => self.unary(false, at, depth),
-            Token::Operator(operator) if operator.precedence() == 3 => {
+            Token::Operator(operator) if operator.comparison() => {
                 let Mode::Signal { active, .. } = self.mode else {
                     return Err(error(at, "Scalar expressions use numeric arithmetic"));
                 };
@@ -397,7 +402,7 @@ impl<'input> Parser<'_, 'input> {
     }
 
     fn unary(&mut self, predicate: bool, at: usize, depth: usize) -> Result<Expression> {
-        let operand = self.expression(6, depth + 1)?;
+        let operand = self.expression(7, depth + 1)?;
         match (predicate, operand.kind) {
             (true, Kind::Predicate) => Ok(Expression {
                 root: Node::Not(Box::new(operand.root)),
