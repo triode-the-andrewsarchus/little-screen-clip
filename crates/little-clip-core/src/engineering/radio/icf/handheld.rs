@@ -225,14 +225,14 @@ fn read_bank(layout: &Layout, image: &[u8], channel: usize, fields: &mut Vec<(St
 fn read_tone_settings(record: &[u8], tones: u16, fields: &mut Vec<(String, String)>) {
     let configuration = usize::from(record[10] >> 4);
     let Some(tone_mode) = [
-        "", "Tone", "TSQL", "TSQL", "DTCS", "DTCS", "TSQL-R", "DTCS-R",
+        "Carrier", "Tone", "TSQL", "TSQL", "DTCS", "DTCS", "TSQL-R", "DTCS-R",
     ]
-    .get(configuration)
-    .filter(|mode| !mode.is_empty()) else {
+    .get(configuration) else {
         return;
     };
     fields.push(("Tone mode".into(), (*tone_mode).into()));
     match configuration {
+        0 => {}
         1 => push_tone(fields, "Transmit tone", usize::from(tones >> 10)),
         2 | 3 | 6 => {
             push_tone(fields, "Transmit tone", usize::from(tones >> 10));

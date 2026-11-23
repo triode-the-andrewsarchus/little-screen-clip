@@ -1,6 +1,7 @@
 //! Channel lists and addressed clone records saved by CHIRP and Icom tools.
 
 mod icf;
+mod tones;
 
 use crate::file_source::ReadCheck;
 use std::{
@@ -13,6 +14,7 @@ const MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_CHANNELS: usize = 32_768;
 
 pub use icf::{Record, recognizes as is_icf};
+pub use tones::{Tone, ToneMode, ToneValue, Tones};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -138,6 +140,13 @@ pub struct Channel {
 }
 
 impl Channel {
+    pub fn field(&self, name: &str) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|(field, _)| field == name)
+            .map(|(_, value)| value.as_str())
+    }
+
     pub fn transmit_hz(&self) -> Option<u64> {
         match self.duplex.as_str() {
             "" | "none" => Some(self.receive_hz),
@@ -226,7 +235,7 @@ fn chirp_csv(bytes: &[u8], cancel: &AtomicBool) -> Result<Plan, String> {
             let fields = columns
                 .iter()
                 .zip(record.iter())
-                .filter(|(_, value)| !value.is_empty())
+                .filter(|(field, value)| !value.is_empty() || *field == "Tone")
                 .map(|(field, value)| (field.to_owned(), value.to_owned()))
                 .collect();
             channels.push(Channel {

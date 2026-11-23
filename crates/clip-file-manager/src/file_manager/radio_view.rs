@@ -7,7 +7,7 @@ use crate::ui_appearance::WorkbenchColors;
 use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 use little_clip_core::{
-    engineering::radio::{self, BANDS, Channel, Plan},
+    engineering::radio::{self, BANDS, Channel, Plan, Tone, Tones},
     palette::AppPalette,
 };
 use std::{path::Path, sync::atomic::AtomicBool};
@@ -22,6 +22,7 @@ pub(super) struct Viewer {
     shown: Vec<usize>,
     frequency: frequency::View,
     scroll_to: Option<usize>,
+    show_fields: bool,
     memory: bool,
     record: usize,
 }
@@ -45,6 +46,7 @@ impl Viewer {
             shown,
             frequency,
             scroll_to: None,
+            show_fields: false,
             record: 0,
         })
     }
@@ -115,9 +117,9 @@ impl Viewer {
             }
             None => {}
         }
-        let footer = 183.0;
+        let footer = if self.show_fields { 224.0 } else { 125.0 };
         let body_height = (ui.available_height() - footer).max(84.0);
-        self.channel_table(ui, body_height);
+        ui.scope(|ui| self.channel_table(ui, body_height));
         self.channel_info(ui);
     }
 
@@ -234,18 +236,21 @@ impl Viewer {
 
     fn channel_table(&mut self, ui: &mut Ui, height: f32) {
         ui.spacing_mut().item_spacing.y = 1.0;
+        ui.style_mut().interaction.selectable_labels = false;
         let row_height = ui.text_style_height(&egui::TextStyle::Body) + 3.0;
         let name_width = (ui.available_width() * 0.28).clamp(72.0, 250.0);
         let mut table = TableBuilder::new(ui)
             .id_salt("radio_channel_list")
             .striped(true)
             .sense(Sense::click())
-            .auto_shrink([false, false])
+            .auto_shrink([false, true])
             .max_scroll_height(height)
             .column(Column::exact(48.0).clip(true))
             .column(Column::exact(name_width).clip(true))
             .column(Column::exact(125.0).clip(true))
+            .column(Column::exact(125.0).clip(true))
             .column(Column::exact(64.0).clip(true))
+            .column(Column::exact(81.0).clip(true))
             .column(Column::remainder().clip(true));
         if let Some(row) = self
             .scroll_to
@@ -256,7 +261,15 @@ impl Viewer {
         }
         table
             .header(row_height, |mut row| {
-                for title in ["#", "Channel", "Receive", "Mode", "Band"] {
+                for title in [
+                    "#",
+                    "Channel",
+                    "Receive",
+                    "Transmit",
+                    "Mode",
+                    "Tone mode",
+                    "Band",
+                ] {
                     row.col(|ui| {
                         ui.strong(title);
                     });
@@ -277,7 +290,13 @@ impl Viewer {
                         ui.monospace(radio::frequency_label(channel.receive_hz));
                     });
                     row.col(|ui| {
+                        ui.monospace(transmit_label(channel));
+                    });
+                    row.col(|ui| {
                         ui.label(&channel.mode);
+                    });
+                    row.col(|ui| {
+                        ui.label(Tones::for_channel(channel, self.plan.format).mode.label());
                     });
                     row.col(|ui| {
                         ui.label(BANDS[radio::band(channel.receive_hz)]);
@@ -290,41 +309,56 @@ impl Viewer {
             });
     }
 
-    fn channel_info(&self, ui: &mut Ui) {
+    fn channel_info(&mut self, ui: &mut Ui) {
         let Some(channel) = self.selected.map(|index| &self.plan.channels[index]) else {
             return;
         };
         ui.separator();
+        let tones = Tones::for_channel(channel, self.plan.format);
+        let has_extra = channel
+            .fields
+            .iter()
+            .any(|(name, value)| !value.is_empty() && extra_field(name));
         ui.horizontal_wrapped(|ui| {
             ui.strong(format!("{}  {}", channel.number, channel.name));
-            ui.label(format!("RX {}", radio::frequency_label(channel.receive_hz)));
-            let tx = channel
-                .transmit_hz()
-                .map(|hz| radio::frequency_label(hz))
-                .unwrap_or_else(|| {
-                    if channel.duplex == "off" {
-                        "disabled".into()
-                    } else {
-                        "—".into()
-                    }
-                });
-            ui.label(format!("TX {tx}"));
+            ui.weak(&channel.mode);
+            if let Some(group) = channel.field("Group") {
+                ui.weak(format!("Group {group}"));
+            } else if let Some(bank) = channel.field("Bank") {
+                ui.weak(format!("Bank {bank}"));
+            }
+            if let Some(scan) = scan_label(channel) {
+                ui.weak(scan);
+            }
             if ui.button("Copy channel").clicked() {
                 let mut report = format!(
                     "Location\t{}\nName\t{}\nRX (Hz)\t{}\n",
                     channel.number, channel.name, channel.receive_hz
                 );
                 for (field, value) in &channel.fields {
-                    if !matches!(
-                        field.as_str(),
-                        "Location" | "Name" | "Frequency" | "shortName"
-                    ) {
+                    if extra_field(field) {
                         report.push_str(&format!("{field}\t{value}\n"));
                     }
                 }
                 ui.ctx().copy_text(report);
             }
+            if has_extra {
+                ui.toggle_value(&mut self.show_fields, "Stored fields");
+            }
         });
+        ui.horizontal_wrapped(|ui| {
+            direction(
+                ui,
+                "RX",
+                radio::frequency_label(channel.receive_hz),
+                tones.receive,
+            );
+            ui.separator();
+            direction(ui, "TX", transmit_label(channel), tones.transmit);
+        });
+        if !has_extra || !self.show_fields {
+            return;
+        }
         egui::ScrollArea::vertical()
             .id_salt("radio_channel_info")
             .max_height(ui.available_height().min(141.0))
@@ -333,10 +367,7 @@ impl Viewer {
                     .striped(true)
                     .show(ui, |ui| {
                         for (name, value) in &channel.fields {
-                            if !matches!(
-                                name.as_str(),
-                                "Location" | "Name" | "Frequency" | "shortName"
-                            ) {
+                            if !value.is_empty() && extra_field(name) {
                                 ui.weak(name);
                                 ui.label(value);
                                 ui.end_row();
@@ -395,6 +426,44 @@ impl Viewer {
             .join(" ");
         ui.monospace(hex);
     }
+}
+
+fn direction(ui: &mut Ui, title: &str, frequency: String, tone: Tone) {
+    ui.monospace(format!("{title} {frequency}"));
+    if tone == Tone::Disabled {
+        return;
+    }
+    let label = ui.weak(tone.label(title == "RX"));
+    if tone.device_specific() {
+        label.on_hover_text(
+            "Both values are stored. The target radio model determines which field is used.",
+        );
+    }
+}
+
+fn transmit_label(channel: &Channel) -> String {
+    match channel.transmit_hz() {
+        Some(hz) => radio::frequency_label(hz),
+        None if channel.duplex == "off" => "disabled".into(),
+        None => "—".into(),
+    }
+}
+
+fn scan_label(channel: &Channel) -> Option<&str> {
+    channel.field("Scan").or_else(|| {
+        match channel.field("Skip").or_else(|| channel.field("skip")) {
+            Some("S") => Some("Scan skipped"),
+            Some("P") => Some("Scan priority"),
+            _ => None,
+        }
+    })
+}
+
+fn extra_field(name: &str) -> bool {
+    !matches!(
+        name,
+        "Location" | "Name" | "Frequency" | "shortName" | "frequency"
+    )
 }
 
 fn matches_query(channel: &Channel, query: &str) -> bool {
