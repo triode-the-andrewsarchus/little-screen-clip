@@ -94,6 +94,7 @@ impl Viewer {
 
     fn channel_filters(&mut self, ui: &mut Ui) {
         let mut changed = false;
+        let mut copy = false;
         ui.horizontal_wrapped(|ui| {
             changed |= ui
                 .add(egui::TextEdit::singleline(&mut self.search).hint_text("Find channels"))
@@ -114,6 +115,10 @@ impl Viewer {
                     .selectable_value(&mut self.band, Some(index), format!("{name}  {count}"))
                     .changed();
             }
+            copy = ui
+                .add_enabled(!self.shown.is_empty(), egui::Button::new("Copy channels"))
+                .on_hover_text("Copy the filtered channels as tab-separated text")
+                .clicked();
         });
         if changed {
             let query = self.search.trim().to_lowercase();
@@ -133,6 +138,25 @@ impl Viewer {
                 .selected
                 .filter(|index| self.shown.binary_search(index).is_ok())
                 .or_else(|| self.shown.first().copied());
+        }
+        if copy {
+            use std::fmt::Write;
+            let mut table =
+                String::from("Channel\tName\tReceive (Hz)\tTransmit (Hz)\tMode\tBand\n");
+            for &index in &self.shown {
+                let channel = &self.plan.channels[index];
+                let name = channel.name.replace(['\t', '\r', '\n'], " ");
+                let tx = channel
+                    .transmit_hz()
+                    .map_or_else(String::new, |hz| hz.to_string());
+                let band = BANDS[radio::band(channel.receive_hz)];
+                let _ = writeln!(
+                    table,
+                    "{}\t{name}\t{}\t{tx}\t{}\t{band}",
+                    channel.number, channel.receive_hz, channel.mode
+                );
+            }
+            ui.ctx().copy_text(table);
         }
     }
 

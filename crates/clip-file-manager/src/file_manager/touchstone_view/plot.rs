@@ -12,6 +12,7 @@ pub(super) enum Projection {
     Magnitude,
     Phase,
     Smith,
+    Vswr,
 }
 
 impl Projection {
@@ -21,6 +22,7 @@ impl Projection {
             Self::Magnitude => "Magnitude",
             Self::Phase => "Phase (°)",
             Self::Smith => "Smith",
+            Self::Vswr => "VSWR",
         }
     }
 
@@ -29,6 +31,14 @@ impl Projection {
             Self::Decibels => decibels(value).max(-160.0),
             Self::Phase => value.arg().to_degrees(),
             Self::Magnitude | Self::Smith => value.norm(),
+            Self::Vswr => {
+                let reflected = value.norm();
+                if reflected < 1.0 {
+                    (1.0 + reflected) / (1.0 - reflected)
+                } else {
+                    f64::NAN
+                }
+            }
         }
     }
 

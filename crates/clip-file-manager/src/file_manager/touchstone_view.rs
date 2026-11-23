@@ -174,6 +174,7 @@ impl Viewer {
             }
             if s_parameters && trace[0] == trace[1] {
                 ui.selectable_value(&mut self.projection, Projection::Smith, "Smith");
+                ui.selectable_value(&mut self.projection, Projection::Vswr, "VSWR");
             }
             fit = ui.button("Fit").clicked();
             ui.toggle_value(&mut self.inspect, "Matrix");
@@ -190,7 +191,7 @@ impl Viewer {
         }
         self.trace = trace;
         self.prefix = capture::trace_points(&self.summary.points, trace);
-        if self.projection == Projection::Smith && trace[0] != trace[1] {
+        if matches!(self.projection, Projection::Smith | Projection::Vswr) && trace[0] != trace[1] {
             self.projection = Projection::Decibels;
         }
         self.index_job = None;
