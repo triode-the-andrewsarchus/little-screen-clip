@@ -29,6 +29,12 @@ pub(in crate::file_manager) struct Preview {
     complete: bool,
 }
 
+impl Preview {
+    pub(in crate::file_manager) fn measurement(&self) -> (&Metadata, Band, bool) {
+        (&self.metadata, self.band, self.complete)
+    }
+}
+
 pub(in crate::file_manager) fn load(path: &Path, cancel: &AtomicBool) -> Data {
     let mut data = Data::new(
         display_path(path),

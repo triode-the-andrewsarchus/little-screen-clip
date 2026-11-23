@@ -465,6 +465,13 @@ impl FileManagerApp {
                                     ui.close();
                                 }
                             } else if title == "File" {
+                                if !self.viewers.active()
+                                    && self.browser.can_compare_selection()
+                                    && ui.button("Compare selected files").clicked()
+                                {
+                                    self.browser.compare_selection = true;
+                                    ui.close();
+                                }
                                 self.constellation_index_menu(ui);
                             } else {
                                 ui.add_enabled(false, egui::Label::new("No actions yet"));
@@ -500,6 +507,17 @@ impl FileManagerApp {
                 }
             } else {
                 self.browser.ui(ui, &self.palette);
+                if std::mem::take(&mut self.browser.compare_selection) {
+                    match self.browser.comparison_paths() {
+                        Ok(paths) => {
+                            self.browser.stop_previews();
+                            self.viewers.open_comparison(paths);
+                            ui.ctx().request_repaint();
+                            return;
+                        }
+                        Err(error) => self.browser.error = Some(error),
+                    }
+                }
                 if let Some(request) = self.browser.constellation.studio_request.take() {
                     self.browser.stop_previews();
                     self.viewers

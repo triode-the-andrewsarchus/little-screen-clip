@@ -82,6 +82,29 @@ impl FileManager {
         self.reveal_selection = true;
     }
 
+    pub(super) fn can_compare_selection(&self) -> bool {
+        self.archive_context().is_none()
+            && !self.search.has_result_sources()
+            && self.location().is_some_and(|location| {
+                (2..=super::engineering_compare::MAX_SOURCES).contains(&location.selection.len())
+            })
+    }
+
+    pub(super) fn comparison_paths(&self) -> Result<Vec<PathBuf>, String> {
+        let paths = self.selected_paths();
+        let entries = self.displayed_entries();
+        if !self.can_compare_selection()
+            || !paths.iter().all(|path| {
+                entries.iter().any(|entry| {
+                    entry.path == *path && entry.regular_file && entry.system.is_none()
+                })
+            })
+        {
+            return Err("Select ordinary files in this folder to compare.".into());
+        }
+        Ok(paths)
+    }
+
     /// Entries owned by the active view; recursive Photos is independent of root rows.
     pub(super) fn displayed_entries(&self) -> Vec<&super::filesystem::Entry> {
         if self.view == super::BrowserView::Photos

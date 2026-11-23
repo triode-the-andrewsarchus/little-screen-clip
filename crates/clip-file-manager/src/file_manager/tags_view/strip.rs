@@ -20,6 +20,12 @@ pub(in crate::file_manager) struct Preview {
     chart: Chart,
 }
 
+impl Preview {
+    pub(in crate::file_manager) fn document(&self) -> &Document {
+        &self.document
+    }
+}
+
 enum Chart {
     Memory(Vec<(f32, RowRole)>),
     Trace(Vec<TraceBin>),

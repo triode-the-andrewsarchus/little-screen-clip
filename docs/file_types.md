@@ -705,15 +705,15 @@
     - [x] `.rm`, `.rmdoc`, `.rmn` — Read-only reMarkable pages and ZIP/plain-TAR notebooks: native v5/v6 ink, authored page order, embedded SVG/PNG paper and redirected PDF backgrounds; list strips, little-screen artwork and a paged viewer. Missing factory paper is disclosed. v3/v4 layouts have synthetic coverage only; unsupported scene operations report compatibility errors, and tablet text/pen rendering is approximate.
     - [ ] `.lines`
   - [ ] RF network measurements
-    - [x] `.s1p`, `.s2p`, `.sNp`, identified `.ts` — Touchstone v1/v2 S-parameters, including NanoVNA exports. Magnitude, phase and Smith views, linked markers, and CSV band copy.
+    - [x] `.s1p`, `.s2p`, `.sNp`, identified `.ts` — Touchstone v1/v2 S-parameters, including NanoVNA exports. Magnitude, phase, Smith and reflection VSWR views, linked markers, and CSV band copy.
   - [ ] Oscilloscopes and power recordings
-    - [x] `.wfm` — Rigol DS1000Z and scalar Tektronix v1–3 waveforms. Scope cursors, spectrum, fundamental estimates, voltage expressions and CSV range copy.
+    - [x] `.wfm` — Rigol DS1000Z and scalar Tektronix v1–3 waveforms. Stack or overlay compatible channels, read all visible traces with a hover cursor, measure several ranges, and inspect spectrum on a labeled frequency and amplitude grid. Arithmetic has its own trace. Threshold expressions can open in the logic viewer or copy as VCD.
     - [x] `.bin`, `.csv` — identified Siglent SDS1000X-E V1 waveform files and Rigol scope exports.
     - [x] `.jls` — Joulescope v1/v2 sample and summary tracks, with charge and energy over the selected interval where available.
   - [ ] Logic analyzers
     - [x] `.sr`, identified `.dsl` — digital Sigrok and DSView sessions.
     - [x] `.sal`, identified `.bin` — Saleae digital captures and digital channel exports.
-    - [x] `.vcd` — digital Value Change Dumps. Logic viewers link waveforms and transitions with I²C and UART decoding and CSV range copy.
+    - [x] `.vcd` — digital Value Change Dumps. Logic viewers link waveforms and transitions with configurable I²C, SPI and UART decoders and CSV range copy.
   - [ ] Signal analysis
     - [ ] `.vcfd` — VCF dump
     - [x] `.sigmf-meta`, `.sigmf-data` — paired SigMF recordings. Time activity, annotations, waterfall, spectrum and I/Q range copy.
@@ -721,7 +721,7 @@
     - [x] `.grc` — GNU Radio Companion XML and YAML flowgraphs. Linked blocks, ports, connections and authored settings in a read-only viewer.
     - [ ] `.urh` — Universal Radio Hacker project (signal capture configurations, demodulation parameters, message protocol decodings, and participant tables)
   - [ ] Radio programming
-    - [x] `.chirp`, identified `.csv` — CHIRP channels, frequency bands, tuning and tone settings.
+    - [x] `.chirp`, identified `.csv` — CHIRP channels, frequency bands, tuning and tone settings. Copy filtered channels as tab-separated text.
     - [x] `.icf` — Icom configuration records. Channel decoding for IC-R8600, ID-31 and supported ID-51 MapRev1 models. Other identified models expose addressed records.
   - [ ] Sub-GHz, NFC, infrared, and access tokens
     - [x] Identified `.sub` — Flipper Zero Sub-GHz frequency, preset, raw pulse timing and decoded record inspection.
@@ -753,7 +753,8 @@
     - [ ] `openocd.cfg` — OpenOCD JTAG / SWD target configuration (interface drivers, transport protocols [swd/jtag], target architecture, Flash memory banks, and GDB server ports)
     - [ ] `keymap.json`, `vial.json`, `.vil` — QMK / VIA / Vial keyboard layout definitions (switch matrix row/col wiring, layer definitions, keycode bindings, rotary encoder mappings, tap-dance macros, and binary/JSON backup state)
 - [ ] Networking and messages
-  - [x] `.pcap`, `.pcapng`, identified `.cap` and `.ntar` — packet timing, endpoints, protocol summaries, and packet bytes, with packet range copy. Supports gzip, Zstandard and LZ4 wrappers.
+  - [x] `.pcap`, `.pcapng`, identified `.cap` and `.ntar` — protocol-colored packet list, linked packet diagram, hierarchical field breakdown and byte highlights. Supports packet range copy and gzip, Zstandard and LZ4 wrappers.
+    - [x] Display filters support common protocol names, IP addresses and networks, ports, TCP flags, frame lengths and boolean expressions. Optional local TShark evaluates other Wireshark display filter expressions.
   - [x] `.eml` — saved MIME email; decoded address/date/subject headers, inert reflowed HTML or plain-text alternatives, attachment metadata/chips, original-source preview and guarded container rename
     - [x] 16 MiB input, 32 MIME nesting levels, 1,024 parts and two encoded-message nesting levels; actual truncation/decoding/structure failures are disclosed
     - [ ] Full HTML/CSS layout, remote/inline image rendering, attachment extraction/editing, sending, and encrypted-message decryption/signature verification

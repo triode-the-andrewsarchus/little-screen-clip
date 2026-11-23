@@ -22,6 +22,12 @@ pub(in crate::file_manager) struct Preview {
     overview: Overview,
 }
 
+impl Preview {
+    pub(in crate::file_manager) fn overview(&self) -> &Overview {
+        &self.overview
+    }
+}
+
 #[derive(Clone)]
 pub(in crate::file_manager) struct Selection {
     pub path: std::path::PathBuf,

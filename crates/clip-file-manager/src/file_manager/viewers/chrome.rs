@@ -145,7 +145,8 @@ impl Viewers {
         let can_rename = !matches!(
             self.session,
             Some(
-                ViewerSession::Waveform(_)
+                ViewerSession::Comparison(_)
+                    | ViewerSession::Waveform(_)
                     | ViewerSession::Touchstone(_)
                     | ViewerSession::LogicCapture(_)
                     | ViewerSession::PacketCapture(_)
@@ -254,6 +255,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::Geography(_)
         | ViewerSession::Minecraft(_)
         | ViewerSession::Toolpath(_)
+        | ViewerSession::Comparison(_)
         | ViewerSession::Waveform(_)
         | ViewerSession::Touchstone(_)
         | ViewerSession::LogicCapture(_)

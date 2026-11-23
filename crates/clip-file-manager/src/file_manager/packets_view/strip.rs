@@ -24,6 +24,12 @@ pub(in crate::file_manager) struct Preview {
     activity: Vec<ActivityBin>,
 }
 
+impl Preview {
+    pub(in crate::file_manager) fn summary(&self) -> &Summary {
+        &self.summary
+    }
+}
+
 pub(in crate::file_manager) fn load(path: &Path, cancel: &AtomicBool) -> Data {
     let mut data = Data::new(
         display_path(path),

@@ -27,6 +27,7 @@ mod video;
 pub(super) mod video_audio;
 
 enum Loaded {
+    Comparison(Box<super::engineering_compare::Viewer>),
     Archive(super::container_preview::archive::Viewer),
     System(Box<super::system::Document>),
     Font(super::font_strip::viewer::Viewer),
@@ -68,6 +69,7 @@ enum Loaded {
     External,
 }
 enum ViewerSession {
+    Comparison(Box<super::engineering_compare::Viewer>),
     Archive(super::container_preview::archive::Viewer),
     System(super::system::Inspector),
     Font(super::font_strip::viewer::Viewer),
@@ -240,13 +242,51 @@ impl Viewers {
         system: bool,
         position: Option<super::DocumentPosition>,
     ) {
+        let config = self.config.clone();
+        let guard = self.source_guard.clone();
+        self.open_job(path, system, move |source, cancel| {
+            super::search::SourceGuard::read_checked(guard.as_ref(), cancel, || {
+                if system {
+                    super::system::collect(source, cancel)
+                        .map(|document| (Loaded::System(Box::new(document)), None))
+                } else {
+                    load_file_session(source, &config, position, cancel)
+                }
+            })
+        });
+    }
+
+    pub fn open_comparison(&mut self, paths: Vec<PathBuf>) {
+        if self.active() {
+            return;
+        }
+        let Some(path) = paths.first().cloned() else {
+            return;
+        };
+        self.source_guard = None;
+        self.open_job(path, false, move |_, cancel| {
+            super::engineering_compare::Viewer::load(paths, cancel)
+                .map(|view| (Loaded::Comparison(Box::new(view)), None))
+        });
+    }
+
+    fn open_job(
+        &mut self,
+        path: PathBuf,
+        system: bool,
+        load: impl FnOnce(
+            &Path,
+            &std::sync::atomic::AtomicBool,
+        ) -> Result<(Loaded, Option<FileSource>), String>
+        + Send
+        + 'static,
+    ) {
         if self.active() {
             return;
         }
         self.video_start_seconds = 0.0;
         self.document_start = None;
         let source = path.clone();
-        let config = self.config.clone();
         let executor = if system {
             super::system::jobs()
         } else {
@@ -254,17 +294,8 @@ impl Viewers {
         };
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker = cancelled.clone();
-        let guard = self.source_guard.clone();
-        let (ticket, receiver) = executor.submit(Duration::from_secs(120), move || {
-            super::search::SourceGuard::read_checked(guard.as_ref(), &worker, || {
-                if system {
-                    super::system::collect(&source, &worker)
-                        .map(|document| (Loaded::System(Box::new(document)), None))
-                } else {
-                    load_file_session(&source, &config, position, &worker)
-                }
-            })
-        });
+        let (ticket, receiver) =
+            executor.submit(Duration::from_secs(120), move || load(&source, &worker));
         self.loading = Some(Loading {
             response_deadline: system
                 .then(|| std::time::Instant::now() + super::system::RESPONSE_DEADLINE),
@@ -493,7 +524,8 @@ impl Viewers {
             Some(ViewerSession::Scene(state)) => state.tick(ctx),
             Some(ViewerSession::Video(state)) => state.tick(ctx),
             Some(
-                ViewerSession::Mail(_)
+                ViewerSession::Comparison(_)
+                | ViewerSession::Mail(_)
                 | ViewerSession::Calendar(_)
                 | ViewerSession::Minecraft(_)
                 | ViewerSession::Toolpath(_)
@@ -1058,6 +1090,7 @@ fn session(
     check: crate::file_source::ReadCheck,
 ) -> ViewerSession {
     match loaded {
+        Loaded::Comparison(view) => ViewerSession::Comparison(view),
         Loaded::Archive(mut state) => {
             state.set_check(check);
             ViewerSession::Archive(state)
@@ -1200,6 +1233,7 @@ fn render(
         ViewerSession::Midi(state) => state.render_ui(ui, palette, close),
         ViewerSession::Model(state) => state.render_ui(ui, palette, close),
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
+        ViewerSession::Comparison(state) => state.ui(ui, close, palette),
         ViewerSession::Waveform(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Touchstone(state) => state.ui(ui, close, palette, copies),
         ViewerSession::LogicCapture(state) => state.ui(ui, close, palette, copies),

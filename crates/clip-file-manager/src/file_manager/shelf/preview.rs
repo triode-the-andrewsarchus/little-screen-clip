@@ -108,7 +108,7 @@ pub(in crate::file_manager) enum Source {
     },
 }
 
-fn load_engineering(
+pub(in crate::file_manager) fn load_engineering(
     format: super::super::document_format::Format,
     path: &Path,
     cancel: &AtomicBool,

@@ -45,6 +45,7 @@ mod photo_ratings;
 use little_clip_core::jobs::task as preview_job;
 mod can_view;
 mod capture_browse;
+mod engineering_compare;
 mod flowgraph_view;
 mod iq_view;
 mod logic_view;
@@ -351,6 +352,7 @@ pub(crate) struct FileManager {
     was_modal: bool,
     shelf: shelf::Shelf,
     open_file: Option<PathBuf>,
+    compare_selection: bool,
     external_file: Option<PathBuf>,
     inspect_file: Option<PathBuf>,
     document_start: Option<(PathBuf, DocumentPosition)>,
@@ -441,6 +443,7 @@ impl FileManager {
             was_modal: false,
             shelf: shelf::Shelf::default(),
             open_file: None,
+            compare_selection: false,
             external_file: None,
             inspect_file: None,
             document_start: None,

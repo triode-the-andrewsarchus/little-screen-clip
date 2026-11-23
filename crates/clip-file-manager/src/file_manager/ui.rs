@@ -817,6 +817,7 @@ impl FileManager {
     }
 
     fn apply_list_actions(&mut self, actions: ListActions) {
+        self.compare_selection |= actions.compare_selection;
         if actions.selection.is_some() || actions.clear {
             self.type_navigation.clear();
         }
@@ -1702,6 +1703,7 @@ struct ListActions {
     mount_binary: Option<(PathBuf, bool)>,
     unmount_binary: Option<PathBuf>,
     search_similar: Option<PathBuf>,
+    compare_selection: bool,
 }
 
 impl ListActions {
@@ -1888,6 +1890,17 @@ impl ListActions {
 
             self.video_audio_menu(ui, entry);
             self.raw_iq_menu(ui, entry);
+
+            if marked
+                && entry.regular_file
+                && !self.search_results
+                && !self.copy_only
+                && (2..=super::engineering_compare::MAX_SOURCES).contains(&selection_count)
+                && ui.button("Compare selected files").clicked()
+            {
+                self.compare_selection = true;
+                ui.close();
+            }
 
             if entry.is_photo() && ui.button("Find similar photos in canvas").clicked() {
                 self.search_similar = Some(entry.path.clone());
