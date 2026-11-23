@@ -10,6 +10,7 @@ pub(super) use filters::{FilterSamples, FilteredChannel};
 mod frame_benchmark;
 mod hover;
 mod lanes;
+pub(super) use lanes::COLLAPSED_HEIGHT;
 mod logic_export;
 mod math;
 pub(super) mod plot;
@@ -378,7 +379,7 @@ impl Viewer {
                 self.stacked = !self.stacked;
             }
             self.copy_selection(ui, copies);
-            self.digital.tools(ui, &self.recording);
+            self.digital.tools(ui);
         });
         self.channel_controls(ui);
         if self.filters.any() {

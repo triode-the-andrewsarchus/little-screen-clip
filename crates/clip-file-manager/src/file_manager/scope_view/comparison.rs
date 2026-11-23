@@ -13,7 +13,7 @@ impl Viewer {
         self.visible[index]
     }
 
-    pub(in crate::file_manager) fn comparison_set_visible(&mut self, index: usize, visible: bool) {
+    fn comparison_set_visible(&mut self, index: usize, visible: bool) {
         self.visible[index] = visible;
         if !visible && let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index)) {
             spectrum.suspend();
@@ -51,11 +51,16 @@ impl Viewer {
         link: &Link,
         key: T,
     ) -> TraceInteraction {
-        let lane = Lane::new(
-            Rect::from_min_max(area.min + vec2(78.0, 0.0), area.max),
-            0,
-            1,
-        );
+        let visible = self.comparison_visible(index);
+        let lane = if visible {
+            Lane::new(
+                Rect::from_min_max(area.min + vec2(78.0, 0.0), area.max),
+                0,
+                1,
+            )
+        } else {
+            Lane::collapsed(area)
+        };
         if !ui.is_rect_visible(lane.frame) {
             if let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index)) {
                 spectrum.suspend();
@@ -69,6 +74,25 @@ impl Viewer {
         let handle = heading.add(egui::Label::new("↕").sense(Sense::drag()));
         handle.dnd_set_drag_payload(key);
         handle.on_hover_text("Drag to reorder traces");
+        let action = if visible { "Hide" } else { "Show" };
+        if heading
+            .small_button(action)
+            .on_hover_text(format!(
+                "{action} {} · {source}",
+                self.overview.channels[index].name,
+            ))
+            .clicked()
+        {
+            self.comparison_set_visible(index, !visible);
+            ui.ctx().request_repaint();
+        }
+        if !visible {
+            heading.colored_label(color, &self.overview.channels[index].name);
+            heading
+                .add(egui::Label::new(egui::RichText::new(source).weak()).truncate())
+                .on_hover_text(source);
+            return TraceInteraction::default();
+        }
         let label = egui::RichText::new(self.channel_label(index));
         let label = if active { label } else { label.color(color) };
         let selected = heading

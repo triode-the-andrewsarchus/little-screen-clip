@@ -12,6 +12,7 @@ use crate::file_manager::{
     },
     signal_view::take_query_result,
 };
+use controls::ThresholdDraft;
 use egui::{Align2, Color32, FontId, Rect, Sense, Ui, vec2};
 use input::Configuration;
 use little_clip_core::engineering::{
@@ -36,6 +37,7 @@ pub(super) struct Digital {
     config: Arc<Configuration>,
     shown: Vec<bool>,
     open: bool,
+    threshold_draft: Option<ThresholdDraft>,
     panel: Panel,
     pending: Option<(Window, Task<Result<Rows, String>>)>,
     ready: Option<(Window, Result<Rows, String>)>,
@@ -51,6 +53,7 @@ impl Digital {
             config,
             shown,
             open: false,
+            threshold_draft: None,
             panel: Panel::default(),
             pending: None,
             ready: None,
@@ -90,7 +93,7 @@ impl Digital {
         self.panel
             .update_all_materialized(ui.ctx(), span, input.revision(), input.clone());
         self.update_preview(ui, span, input);
-        self.lanes(ui, span, domain, clock);
+        self.lanes(ui, recording, span, domain, clock);
         if let Some((index, action)) = self.annotations(ui, span) {
             self.panel.select_decoder(Some(index));
             self.cursor = Some(self.panel.follow_event(action, span, domain, 0.0));
@@ -164,71 +167,98 @@ impl Digital {
         self.pending = Some((key, task));
     }
 
-    fn lanes(&mut self, ui: &mut Ui, span: &mut Range<f64>, domain: &Range<f64>, clock: Clock) {
-        let window = self
-            .ready
-            .as_ref()
-            .filter(|(key, _)| key.revision == self.config.revision);
+    fn lanes(
+        &mut self,
+        ui: &mut Ui,
+        recording: &Recording,
+        span: &mut Range<f64>,
+        domain: &Range<f64>,
+        clock: Clock,
+    ) {
         let mut next_span = None;
         let mut wired = None;
-        let picking = self.panel.wiring_active();
-        for (index, lane) in self
-            .config
-            .lanes
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| self.shown[*index])
-        {
-            let (area, rect, response) = row(ui, ("threshold", index));
-            if !ui.is_rect_visible(area) {
-                continue;
-            }
-            let ink = plot::color(index);
-            let painter = ui.painter_at(area);
-            if picking {
-                if logic_plot::wire_label(ui, &painter, rect, &lane.name, index) {
+        for index in 0..self.config.lanes.len() {
+            let result = ui
+                .push_id(("scope-digital", index), |ui| {
+                    self.lane_tools(ui, recording, index);
+                    self.shown[index].then(|| self.lane_plot(ui, index, span, clock))
+                })
+                .inner;
+            if let Some((next, pick)) = result {
+                next_span = next.or(next_span);
+                if pick {
                     wired = Some(index);
                 }
-            } else {
-                label(&painter, area, &lane.name, ink);
-            }
-            if let Some(next) = timeline::navigate(ui.ctx(), rect, &response, span, true) {
-                next_span = Some(timeline::fit(domain, next, 0.0));
-            }
-            let trace = window.and_then(|(key, output)| {
-                let trace = output
-                    .as_ref()
-                    .ok()?
-                    .iter()
-                    .find(|(channel, _)| *channel == index)?;
-                let from = key.span.start.max(lane.start_seconds);
-                Some((from..trace.1.inspected_until, &trace.1))
-            });
-            if let Some((time, trace)) = trace.filter(|(time, _)| !time.is_empty()) {
-                paint_threshold_trace(
-                    &painter,
-                    &response,
-                    span,
-                    (&time, trace),
-                    &lane.name,
-                    clock,
-                    ink,
-                );
             }
         }
-        if let Some((_, Err(error))) = window {
-            ui.weak(error);
-        } else if window.is_none() && self.pending.is_some() {
-            ui.weak("Reading digital transitions…");
+        match self.visible_window() {
+            Some((_, Err(error))) => {
+                ui.weak(error);
+            }
+            None if self.pending.is_some() => {
+                ui.weak("Reading digital transitions…");
+            }
+            _ => {}
         }
         if let Some(index) = wired {
             self.panel.wire_lane(index);
             ui.ctx().request_repaint();
         }
         if let Some(next) = next_span {
-            *span = next;
+            *span = timeline::fit(domain, next, 0.0);
             ui.ctx().request_repaint();
         }
+    }
+
+    fn visible_window(&self) -> Option<&(Window, Result<Rows, String>)> {
+        self.ready
+            .as_ref()
+            .filter(|(key, _)| key.revision == self.config.revision)
+    }
+
+    fn lane_plot(
+        &self,
+        ui: &mut Ui,
+        index: usize,
+        span: &Range<f64>,
+        clock: Clock,
+    ) -> (Option<Range<f64>>, bool) {
+        let (area, rect, response) = row(ui, ("threshold", index));
+        if !ui.is_rect_visible(area) {
+            return (None, false);
+        }
+        let lane = &self.config.lanes[index];
+        let ink = plot::color(index);
+        let painter = ui.painter_at(area);
+        let pick = if self.panel.wiring_active() {
+            logic_plot::wire_label(ui, &painter, rect, &lane.name, index)
+        } else {
+            false
+        };
+        let trace = self.visible_window().and_then(|(key, output)| {
+            let (_, trace) = output
+                .as_ref()
+                .ok()?
+                .iter()
+                .find(|(channel, _)| *channel == index)?;
+            let from = key.span.start.max(lane.start_seconds);
+            Some((from..trace.inspected_until, trace))
+        });
+        if let Some((time, trace)) = trace.filter(|(time, _)| !time.is_empty()) {
+            paint_threshold_trace(
+                &painter,
+                &response,
+                span,
+                (&time, trace),
+                &lane.name,
+                clock,
+                ink,
+            );
+        }
+        (
+            timeline::navigate(ui.ctx(), rect, &response, span, true),
+            pick,
+        )
     }
 
     fn annotations(&self, ui: &mut Ui, span: &Range<f64>) -> Option<(usize, EventAction)> {

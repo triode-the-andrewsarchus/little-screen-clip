@@ -1,5 +1,8 @@
 use super::{Capture, Link, LinkedTimeline, Source, SourceAction, Viewer, alignment};
-use crate::file_manager::{preview_copy::Copies, scope_view::plot};
+use crate::file_manager::{
+    preview_copy::Copies,
+    scope_view::{COLLAPSED_HEIGHT, plot},
+};
 use egui::{Align, Button, Rect, Response, Sense, Ui, pos2, vec2};
 use std::collections::{HashMap, HashSet};
 
@@ -7,6 +10,12 @@ use std::collections::{HashMap, HashSet};
 pub(super) struct Trace {
     source: u64,
     channel: usize,
+}
+
+struct TraceRow {
+    source_index: usize,
+    trace: Trace,
+    visible: bool,
 }
 
 #[derive(Default)]
@@ -33,6 +42,18 @@ impl Comparison {
         if self.active.is_none_or(|key| !self.order.contains(&key)) {
             self.active = self.order.first().copied();
         }
+    }
+
+    fn focus_visible(&mut self, rows: &[TraceRow]) {
+        let start = self
+            .active
+            .and_then(|active| rows.iter().position(|row| row.trace == active))
+            .unwrap_or(0);
+        self.active = rows[start..]
+            .iter()
+            .chain(&rows[..start])
+            .find(|row| row.visible)
+            .map(|row| row.trace);
     }
 
     fn place(&mut self, from: Trace, to: Trace, after: bool) {
@@ -173,42 +194,37 @@ impl Viewer {
 
     pub(super) fn comparison_toolbar(&mut self, ui: &mut Ui) {
         if ui
-            .add(Button::selectable(self.comparison.spectrum, "Spectrum"))
+            .add_enabled(
+                self.comparison.active.is_some(),
+                Button::new("Spectrum").selected(self.comparison.spectrum),
+            )
+            .on_disabled_hover_text("Show a trace to inspect its spectrum")
             .clicked()
         {
             self.comparison.spectrum = !self.comparison.spectrum;
         }
-        ui.menu_button("Traces", |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    for &trace in &self.comparison.order {
-                        let Some(source) = self
-                            .sources
-                            .iter_mut()
-                            .find(|source| source.id == trace.source)
-                        else {
-                            continue;
-                        };
-                        let name = source
-                            .path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy();
-                        let Capture::Analog(view) = &mut source.capture else {
-                            continue;
-                        };
-                        let channel = &view.recording().channels()[trace.channel].name;
-                        let mut visible = view.comparison_visible(trace.channel);
-                        if ui
-                            .checkbox(&mut visible, format!("{channel} · {name}"))
-                            .changed()
-                        {
-                            view.comparison_set_visible(trace.channel, visible);
-                        }
-                    }
-                });
-        });
+    }
+
+    fn comparison_rows(&self) -> Vec<TraceRow> {
+        self.comparison
+            .order
+            .iter()
+            .copied()
+            .filter_map(|trace| {
+                let source_index = self
+                    .sources
+                    .iter()
+                    .position(|source| source.id == trace.source)?;
+                let Capture::Analog(view) = &self.sources[source_index].capture else {
+                    return None;
+                };
+                Some(TraceRow {
+                    source_index,
+                    trace,
+                    visible: view.comparison_visible(trace.channel),
+                })
+            })
+            .collect()
     }
 
     fn comparison_lanes(
@@ -224,46 +240,33 @@ impl Viewer {
                 view.prepare_comparison(ui, link.clock.native_range(&self.span), link);
             }
         }
-        let rows = self
-            .comparison
-            .order
-            .iter()
-            .copied()
-            .filter_map(|key| {
-                let index = self
-                    .sources
-                    .iter()
-                    .position(|source| source.id == key.source)?;
-                match &self.sources[index].capture {
-                    Capture::Analog(view) if view.comparison_visible(key.channel) => {
-                        Some((index, key))
-                    }
-                    _ => None,
-                }
-            })
-            .collect::<Vec<_>>();
-        let height = (chart_height / rows.len().max(1) as f32).max(88.0);
-        let (axis, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
-        let axis = Rect::from_min_max(axis.min + vec2(78.0, 0.0), pos2(axis.right(), axis.top()));
-        plot::x_axis_with_grid(
-            ui.painter(),
-            axis,
-            &self.span,
-            "s",
-            ui.visuals().weak_text_color(),
-            std::iter::empty(),
-        );
+        let mut rows = self.comparison_rows();
+        self.comparison.focus_visible(&rows);
+        let visible = rows.iter().filter(|row| row.visible).count();
+        let desired = chart_height
+            - (rows.len() - visible) as f32 * COLLAPSED_HEIGHT
+            - rows.len().saturating_sub(1) as f32 * ui.spacing().item_spacing.y;
+        let height = (desired / visible.max(1) as f32).max(88.0);
+        if visible > 0 {
+            comparison_time_axis(ui, &self.span);
+        }
         let mut probe = None;
         let mut reorder = None;
-        for (index, key) in rows {
+        for row in &mut rows {
+            let height = if row.visible {
+                height
+            } else {
+                COLLAPSED_HEIGHT
+            };
             let (rect, target) =
                 ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-            let Some(link) = links.get(&key.source) else {
+            let Some(link) = links.get(&row.trace.source) else {
                 continue;
             };
-            probe = self.comparison_row(ui, rect, index, key, link).or(probe);
-            reorder = trace_drop(ui, &target, key).or(reorder);
+            probe = self.comparison_row(ui, rect, row, link).or(probe);
+            reorder = trace_drop(ui, &target, row.trace).or(reorder);
         }
+        self.comparison.focus_visible(&rows);
         if let Some((from, to, after)) = reorder {
             self.comparison.place(from, to, after);
             ui.ctx().request_repaint();
@@ -274,11 +277,11 @@ impl Viewer {
         &mut self,
         ui: &mut Ui,
         rect: Rect,
-        index: usize,
-        key: Trace,
+        row: &mut TraceRow,
         link: &Link,
     ) -> Option<f64> {
-        let source = &mut self.sources[index];
+        let key = row.trace;
+        let source = &mut self.sources[row.source_index];
         let name = source
             .path
             .file_name()
@@ -288,20 +291,20 @@ impl Viewer {
             return None;
         };
         *view.span() = link.clock.native_range(&self.span);
-        let interaction = ui
-            .push_id(key, |ui| {
-                view.comparison_trace(
-                    ui,
-                    rect,
-                    key.channel,
-                    &name,
-                    self.comparison.active == Some(key),
-                    link,
-                    key,
-                )
-            })
-            .inner;
-        if interaction.selected {
+        // The parent already reserved the row. Its child owns the widget IDs
+        // without claiming a second vertical slot.
+        let mut trace_ui = ui.new_child(egui::UiBuilder::new().id_salt(key).max_rect(rect));
+        let interaction = view.comparison_trace(
+            &mut trace_ui,
+            rect,
+            key.channel,
+            &name,
+            self.comparison.active == Some(key),
+            link,
+            key,
+        );
+        row.visible = view.comparison_visible(key.channel);
+        if interaction.selected && row.visible {
             self.comparison.active = Some(key);
         }
         if interaction.span_changed {
@@ -313,6 +316,19 @@ impl Viewer {
         }
         interaction.probe.map(|time| link.clock.to_workspace(time))
     }
+}
+
+fn comparison_time_axis(ui: &mut Ui, span: &std::ops::Range<f64>) {
+    let (axis, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
+    let axis = Rect::from_min_max(axis.min + vec2(78.0, 0.0), pos2(axis.right(), axis.top()));
+    plot::x_axis_with_grid(
+        ui.painter(),
+        axis,
+        span,
+        "s",
+        ui.visuals().weak_text_color(),
+        std::iter::empty(),
+    );
 }
 
 fn trace_drop(ui: &Ui, target: &Response, key: Trace) -> Option<(Trace, Trace, bool)> {
@@ -356,6 +372,36 @@ mod tests {
     use super::*;
     use crate::file_manager::document_format::Format;
     use std::{fs, sync::atomic::AtomicBool};
+
+    #[test]
+    fn hiding_an_active_trace_advances_to_the_next_visible_row() {
+        let traces = [1, 2, 3].map(|source| Trace { source, channel: 0 });
+        let mut rows = traces
+            .into_iter()
+            .enumerate()
+            .map(|(source_index, trace)| TraceRow {
+                source_index,
+                trace,
+                visible: true,
+            })
+            .collect::<Vec<_>>();
+        let mut comparison = Comparison {
+            active: Some(traces[1]),
+            ..Default::default()
+        };
+        rows[1].visible = false;
+        comparison.focus_visible(&rows);
+        assert_eq!(comparison.active, Some(traces[2]));
+        rows[2].visible = false;
+        comparison.focus_visible(&rows);
+        assert_eq!(comparison.active, Some(traces[0]));
+        rows[0].visible = false;
+        comparison.focus_visible(&rows);
+        assert_eq!(comparison.active, None);
+        rows[1].visible = true;
+        comparison.focus_visible(&rows);
+        assert_eq!(comparison.active, Some(traces[1]));
+    }
 
     #[test]
     fn groups_channels_across_files_and_retains_the_dragged_order() {

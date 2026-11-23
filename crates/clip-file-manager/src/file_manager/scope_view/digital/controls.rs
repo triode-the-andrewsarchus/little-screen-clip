@@ -1,59 +1,103 @@
 use super::{Arc, Digital, Recording, Ui};
 use little_clip_core::engineering::analysis::{Cutoffs, MiddleBand, Threshold};
 
+#[derive(Clone, Copy)]
+pub(super) struct ThresholdDraft {
+    channel: usize,
+    rule: Threshold,
+}
+
 impl Digital {
-    pub(in crate::file_manager) fn tools(&mut self, ui: &mut Ui, recording: &Recording) {
-        if ui.selectable_label(self.open, "Digital lanes").clicked() {
+    pub(in crate::file_manager) fn tools(&mut self, ui: &mut Ui) {
+        if ui
+            .add(egui::Button::new("Digital lanes").selected(self.open))
+            .clicked()
+        {
             self.open = !self.open;
         }
-        ui.menu_button("Add decoder", |ui| {
-            if self.panel.decoder_buttons(ui, &self.config.lanes) {
-                self.open = true;
-                for index in self.panel.channels().into_iter().flatten() {
-                    if let Some(shown) = self.shown.get_mut(index) {
-                        *shown = true;
-                    }
+        if self.panel.decoder_buttons(ui, &self.config.lanes) {
+            self.open = true;
+            for index in self.panel.channels().into_iter().flatten() {
+                if let Some(shown) = self.shown.get_mut(index) {
+                    *shown = true;
                 }
-                ui.close();
             }
-        });
-        if self.open {
-            ui.menu_button("Thresholds", |ui| self.thresholds(ui, recording));
         }
     }
 
-    fn thresholds(&mut self, ui: &mut Ui, recording: &Recording) {
-        let mut changed = false;
-        egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-            for index in 0..self.shown.len() {
-                ui.push_id(index, |ui| {
-                    ui.checkbox(&mut self.shown[index], &self.config.lanes[index].name)
-                        .on_hover_text(format!("Use {}_D in a single-recording equation", recording.channels()[index].name));
-                    let mut rule = self.config.rules[index];
-                    edit_cutoffs(ui, &mut rule.cutoffs, &recording.channels()[index].unit);
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("middle")
-                            .selected_text(middle_name(rule.middle))
-                            .show_ui(ui, |ui| {
-                                for mode in [MiddleBand::Unknown, MiddleBand::Hold, MiddleBand::Floating] {
-                                    ui.selectable_value(&mut rule.middle, mode, middle_name(mode));
-                                }
-                            })
-                            .response
-                            .on_hover_text("Interpret voltages between the cutoffs. Floating marks the configured voltage band.");
-                        ui.checkbox(&mut rule.invert, "Invert");
-                    });
-                    if rule.valid() && rule != self.config.rules[index] {
-                        Arc::make_mut(&mut self.config).rules[index] = rule;
-                        changed = true;
-                    }
-                    ui.separator();
+    pub(super) fn lane_tools(&mut self, ui: &mut Ui, recording: &Recording, index: usize) {
+        let channel = &recording.channels()[index];
+        let editing = self
+            .threshold_draft
+            .is_some_and(|draft| draft.channel == index);
+        let color = super::plot::color(index);
+        ui.horizontal(|ui| {
+            if ui
+                .small_button(if self.shown[index] { "Hide" } else { "Show" })
+                .clicked()
+            {
+                self.shown[index] = !self.shown[index];
+                ui.ctx().request_repaint();
+            }
+            ui.colored_label(color, &self.config.lanes[index].name)
+                .on_hover_text(format!(
+                    "Use {}_D in a single-recording equation",
+                    channel.name
+                ));
+            if ui
+                .add(egui::Button::new("Thresholds").selected(editing).small())
+                .clicked()
+            {
+                self.threshold_draft = (!editing).then_some(ThresholdDraft {
+                    channel: index,
+                    rule: self.config.rules[index],
                 });
             }
         });
-        if changed {
-            let input = Arc::make_mut(&mut self.config);
-            input.revision = input.revision.wrapping_add(1);
+        if let Some(draft) = self.threshold_draft.filter(|draft| draft.channel == index) {
+            self.thresholds(ui, draft, &channel.unit);
+        }
+    }
+
+    fn thresholds(&mut self, ui: &mut Ui, mut draft: ThresholdDraft, unit: &str) {
+        ui.group(|ui| {
+            edit_cutoffs(ui, &mut draft.rule.cutoffs, unit);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Between cutoffs");
+                for (band, label, help) in [
+                    (
+                        MiddleBand::Unknown,
+                        "Unknown",
+                        "Report an uncertain logic level",
+                    ),
+                    (
+                        MiddleBand::Hold,
+                        "Hold",
+                        "Hold the previous state until the opposite cutoff is crossed",
+                    ),
+                    (
+                        MiddleBand::Floating,
+                        "Floating",
+                        "Mark samples in this voltage band as floating",
+                    ),
+                ] {
+                    ui.selectable_value(&mut draft.rule.middle, band, label)
+                        .on_hover_text(help);
+                }
+                ui.checkbox(&mut draft.rule.invert, "Invert");
+            });
+            if !draft.rule.valid() {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    "Low must be at or below High. Decoding uses the last valid cutoffs.",
+                );
+            }
+        });
+        self.threshold_draft = Some(draft);
+        if draft.rule.valid() && draft.rule != self.config.rules[draft.channel] {
+            let config = Arc::make_mut(&mut self.config);
+            config.rules[draft.channel] = draft.rule;
+            config.revision = config.revision.wrapping_add(1);
             self.pending = None;
             self.ready = None;
             self.cursor = None;
@@ -64,12 +108,13 @@ impl Digital {
 
 fn edit_cutoffs(ui: &mut Ui, cutoffs: &mut Cutoffs, unit: &str) {
     let mut adaptive = matches!(*cutoffs, Cutoffs::Adaptive { .. });
-    ui.horizontal(|ui| {
-        if ui
-            .checkbox(&mut adaptive, "Auto")
-            .on_hover_text("Adapt the cutoffs to the observed range of the analyzed window")
-            .changed()
-        {
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(&mut adaptive, true, "Adaptive")
+            .on_hover_text(
+                "Set cutoffs as percentages of the observed range in the analyzed window",
+            );
+        ui.selectable_value(&mut adaptive, false, "Fixed");
+        if adaptive != matches!(*cutoffs, Cutoffs::Adaptive { .. }) {
             *cutoffs = if adaptive {
                 Cutoffs::default()
             } else {
@@ -125,14 +170,6 @@ fn cutoffs_row(
     changed
 }
 
-fn middle_name(mode: MiddleBand) -> &'static str {
-    match mode {
-        MiddleBand::Unknown => "Unknown between",
-        MiddleBand::Hold => "Hold between",
-        MiddleBand::Floating => "Floating between",
-    }
-}
-
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(in crate::file_manager) struct Settings {
     rules: Vec<Threshold>,
@@ -169,6 +206,7 @@ impl Digital {
         input.revision = input.revision.wrapping_add(1);
         self.shown = state.shown;
         self.open = state.open;
+        self.threshold_draft = None;
         Ok(())
     }
 }

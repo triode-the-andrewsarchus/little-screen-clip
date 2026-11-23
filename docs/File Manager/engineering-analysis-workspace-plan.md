@@ -120,6 +120,18 @@ In the two-transfer fixture, assigning SDA to the clock triggered the duplicate-
 
 The packet viewer already links its diagram, field tree, and bytes. Use those links as entry points to the query, and put the applied protocol and time restrictions next to the count they affect.
 
+Start with a capture that contains DNS and several TCP conversations. Choose a protocol using a visible button and see its matching rows and count. Type a further expression and keep the result's applied criteria visible until the new query succeeds. Select a field in the inspector to see its bytes. Add that field to the query from the same place. A selected packet retains its source identity even when a new filter excludes it, so the inspector can explain the restriction and let the user return to the result list. Keep the source brush for inspection and export. Use a separate time restriction when explicitly filtering to that interval, and let the user remove it without changing the expression or conversation.
+
+The match set owns the exact query that produced it. A pending or failed query leaves the previous match set and its labels intact. A protocol click uses the currently requested or applied expression and endpoint, leaving unsubmitted text in the editor. The first acceptance pass should cover a draft that differs from the visible table, a successful protocol update, and recovery from a failed expression. Follow with the field and time round trips, including a source packet outside the match set and a capture large enough to hit the bounded scan.
+
+## 13. Keep visibility and decoder setup beside their traces
+
+Astra reviewed the paired Rigol comparison and a thresholded I²C scope capture on commit `577a037c`. The comparison exposes reordering and domain changes on each trace, but finding the same channel again in the Traces menu is required for visibility. Hiding the active trace also leaves the shared inspection tools pointing at it. The scope's threshold popup covers the two digitized lanes and part of the decoded acknowledgement.
+
+- [ ] Give every comparison trace a Show or Hide button in its own header. A hidden plot leaves its source, channel and position visible. Reordering and domain changes use distinct controls. The active inspection target moves to the next visible trace when hidden, and the shared tools are unavailable when all traces are hidden.
+- [ ] Use the shared inline protocol buttons on the scope. Place threshold editing by the corresponding digital lane. Show the fixed or adaptive cutoffs, middle-band interpretation and inversion while the user can see the decoded results. Retain the applied rule when a draft has crossed cutoffs and explain the error next to the fields.
+- [ ] Walk a two-recording comparison from drag and FFT through Hide, Show, save and reopen. Test hiding and restoring the whole stack. In a scope capture, add I²C, adjust and repair a threshold while watching the annotations, and follow a decoded event back to the analog data. Check both workflows at standard and narrow widths.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.

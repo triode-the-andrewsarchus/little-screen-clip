@@ -3,6 +3,7 @@ use egui::{Align, Align2, Color32, FontId, Layout, Painter, Rect, Ui, UiBuilder,
 use little_clip_core::engineering::waveforms::Peak;
 
 const HEADER_HEIGHT: f32 = 24.0;
+pub(in crate::file_manager) const COLLAPSED_HEIGHT: f32 = HEADER_HEIGHT + 6.0;
 pub(super) const MIN_HEIGHT: f32 = 68.0;
 
 #[derive(Clone, Copy)]
@@ -31,9 +32,20 @@ impl Lane {
         }
     }
 
+    pub fn collapsed(area: Rect) -> Self {
+        let frame = area.shrink2(vec2(0.0, 3.0));
+        Self {
+            plot: Rect::NOTHING,
+            header: frame,
+            frame,
+        }
+    }
+
     pub fn background(self, ui: &Ui, painter: &Painter) {
         painter.rect_filled(self.frame, 3.0, ui.visuals().faint_bg_color);
-        painter.rect_filled(self.plot, 0.0, ui.visuals().extreme_bg_color);
+        if self.plot.is_positive() {
+            painter.rect_filled(self.plot, 0.0, ui.visuals().extreme_bg_color);
+        }
     }
 
     pub fn label(self, painter: &Painter, name: &str, color: Color32) {
