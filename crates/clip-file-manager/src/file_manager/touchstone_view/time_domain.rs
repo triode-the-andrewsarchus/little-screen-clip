@@ -19,6 +19,7 @@ use little_clip_core::engineering::{
 use std::{ops::Range, sync::Arc, time::Duration};
 
 pub(super) const GATE_COLOR: Color32 = Color32::from_rgb(231, 168, 88);
+const LIGHT_SPEED_METERS_PER_SECOND: f64 = 299_792_458.0;
 
 pub(super) struct TimeDomain {
     band: Option<Band>,
@@ -28,6 +29,9 @@ pub(super) struct TimeDomain {
     view: Option<Range<f64>>,
     anchor: Option<f64>,
     draft: Option<Range<f64>>,
+    show_distance: bool,
+    velocity_factor: f64,
+    echo: Option<usize>,
     gate: Option<Range<f64>>,
     gate_mode: GateMode,
     gate_read: Option<(Gate, Job<Arc<Vec<TracePoint>>>)>,
@@ -63,6 +67,9 @@ impl Default for TimeDomain {
             view: None,
             anchor: None,
             draft: None,
+            show_distance: false,
+            velocity_factor: 1.0,
+            echo: None,
             gate: None,
             gate_mode: GateMode::Keep,
             gate_read: None,
@@ -87,6 +94,7 @@ impl TimeDomain {
         self.suspend();
         self.result = None;
         self.view = None;
+        self.echo = None;
         self.gate = None;
         self.gated = None;
     }
@@ -113,7 +121,8 @@ impl TimeDomain {
         colors: WorkbenchColors,
         copies: &mut Copies,
     ) {
-        self.controls(ui, viewport, copies);
+        let reflection = trace[0] == trace[1];
+        self.controls(ui, viewport, copies, reflection);
         let Some(index) = index else {
             ui.weak("Indexing the measurement sweep…");
             return;
@@ -135,11 +144,11 @@ impl TimeDomain {
                 return;
             }
         };
-        self.plot(ui, &response, colors);
+        self.plot(ui, &response, colors, reflection && self.show_distance);
         self.update_gate(ui.ctx(), &response);
     }
 
-    fn controls(&mut self, ui: &mut Ui, viewport: Band, copies: &mut Copies) {
+    fn controls(&mut self, ui: &mut Ui, viewport: Band, copies: &mut Copies, reflection: bool) {
         ui.separator();
         ui.scope(|ui| {
             let spacing = ui.spacing_mut();
@@ -188,8 +197,35 @@ impl TimeDomain {
                     let points = points.clone();
                     copies.start(ui.ctx(), move |_| copy_trace(&points));
                 }
+                if reflection {
+                    self.distance_controls(ui);
+                }
             });
         });
+    }
+
+    fn distance_controls(&mut self, ui: &mut Ui) {
+        if ui
+            .add(
+                egui::Button::new("Reflection distance")
+                    .small()
+                    .selected(self.show_distance),
+            )
+            .on_hover_text("Show the one-way distance from the calibration plane")
+            .clicked()
+        {
+            self.show_distance = !self.show_distance;
+        }
+        if self.show_distance {
+            ui.weak("Cable velocity factor");
+            ui.add(
+                egui::DragValue::new(&mut self.velocity_factor)
+                    .range(0.001..=1.0)
+                    .speed(0.001)
+                    .fixed_decimals(3),
+            )
+            .on_hover_text("Propagation speed divided by the speed of light");
+        }
     }
 
     fn update(&mut self, ctx: &Context, key: &Sweep, capture: &Arc<Capture>, index: &Arc<Index>) {
@@ -208,6 +244,7 @@ impl TimeDomain {
         self.gated = None;
         self.gate_read = None;
         self.view = None;
+        self.echo = None;
         let requested = key.clone();
         let capture = capture.clone();
         let index = index.clone();
@@ -259,8 +296,9 @@ impl TimeDomain {
         ));
     }
 
-    fn plot(&mut self, ui: &mut Ui, response: &Response, colors: WorkbenchColors) {
-        let height = (ui.available_height() - 38.0).max(88.0);
+    fn plot(&mut self, ui: &mut Ui, response: &Response, colors: WorkbenchColors, distance: bool) {
+        let min_height = if distance { 76.0 } else { 88.0 };
+        let height = (ui.available_height() - 38.0).max(min_height);
         let (area, hit) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
         let rect = Rect::from_min_max(area.min + vec2(64.0, 2.0), area.max - vec2(9.0, 19.0));
@@ -302,18 +340,57 @@ impl TimeDomain {
             .filter(|pointer| rect.contains(*pointer))
             .map(|pointer| {
                 let time = plot::at(rect, &span, pointer.x);
-                let row = ((time - start) / step)
+                ((time - start) / step)
                     .round()
                     .clamp(0.0, response.magnitudes.len().saturating_sub(1) as f64)
-                    as usize;
-                let x = plot::x_at(rect, &span, (row as f64).mul_add(step, start));
-                clipped.vline(x, rect.y_range(), Stroke::new(1.1, colors.text_primary));
-                row
+                    as usize
             });
-        self.readout(ui, response, hovered);
+        let marker = |row, color, width| {
+            let x = plot::x_at(rect, &span, response.delay(row));
+            clipped.vline(x, rect.y_range(), Stroke::new(width, color));
+        };
+        if let Some(row) = hovered {
+            marker(row, colors.text_primary, 1.1);
+        }
+        if distance {
+            if hit.clicked()
+                && let Some(row) = hovered.filter(|&row| response.delay(row) >= 0.0)
+            {
+                self.echo = (self.echo != Some(row)).then_some(row);
+            }
+            if let Some(row) = self.echo {
+                marker(row, colors.success, 1.8);
+            }
+        }
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 20.0;
+            self.readout(ui, response, hovered, distance.then_some(colors.success));
+        });
         hit.on_hover_text(
             "Drag to select a delay interval · Right-click to clear · Scroll to zoom",
         );
+    }
+
+    fn echo_readout(&self, ui: &mut Ui, response: &Response, color: Color32) {
+        if let Some(text) = self.echo_text(response) {
+            ui.colored_label(color, text).on_hover_text(
+                "Distance from the calibration plane. Click the marked sample to clear it.",
+            );
+        } else {
+            ui.weak("Click a nonnegative delay to mark a reflection");
+        }
+    }
+
+    fn echo_text(&self, response: &Response) -> Option<String> {
+        let row = self.echo?;
+        let delay = response.delay(row);
+        let distance = delay * self.velocity_factor * LIGHT_SPEED_METERS_PER_SECOND / 2.0;
+        Some(format!(
+            "Echo {} · |h| {:.5} · One-way distance {}",
+            display_value(delay, "s"),
+            response.magnitudes[row],
+            display_value(distance, "m")
+        ))
     }
 
     fn brush(&mut self, ui: &Ui, rect: Rect, hit: &egui::Response, span: &Range<f64>) {
@@ -342,14 +419,19 @@ impl TimeDomain {
         }
     }
 
-    fn readout(&self, ui: &mut Ui, response: &Response, hovered: Option<usize>) {
+    fn readout(
+        &self,
+        ui: &mut Ui,
+        response: &Response,
+        hovered: Option<usize>,
+        echo_ink: Option<Color32>,
+    ) {
         ui.horizontal_wrapped(|ui| {
             let dt = response.impulse.step_seconds();
-            let start = response.impulse.start_seconds();
             if let Some(row) = hovered {
                 ui.monospace(format!(
                     "{} · |h| {:.5}",
-                    display_value((row as f64).mul_add(dt, start), "s"),
+                    display_value(response.delay(row), "s"),
                     response.magnitudes[row]
                 ));
             } else if let Some(gate) = &self.gate {
@@ -377,6 +459,9 @@ impl TimeDomain {
             if self.gated().is_some() {
                 ui.colored_label(GATE_COLOR, "Gated frequency trace");
             }
+            if let Some(color) = echo_ink {
+                self.echo_readout(ui, response, color);
+            }
             if let Some((gate, Err(error))) = &self.gated
                 && self.gate.as_ref() == Some(&gate.range)
                 && self.gate_mode == gate.mode
@@ -402,6 +487,10 @@ impl Response {
             bounds,
         }
     }
+
+    fn delay(&self, row: usize) -> f64 {
+        (row as f64 - (self.magnitudes.len() / 2) as f64) * self.impulse.step_seconds()
+    }
 }
 
 fn copy_trace(points: &[TracePoint]) -> Result<String, String> {
@@ -416,4 +505,43 @@ fn copy_trace(points: &[TracePoint]) -> Result<String, String> {
     }
     little_clip_core::copy_text_to_system_clipboard(&csv).map_err(|err| err.to_string())?;
     Ok(format!("Copied {} gated frequency points", points.len()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::engineering::touchstone::Complex64;
+    use std::f64::consts::TAU;
+
+    #[test]
+    fn selected_round_trip_echo_uses_the_entered_velocity_factor() {
+        let count = 128;
+        let spacing = 2.0e6;
+        let delay = 5.0 / (count as f64 * spacing);
+        let points: Vec<_> = (0..count)
+            .map(|index| {
+                let frequency_hz = 100.0e6 + index as f64 * spacing;
+                TracePoint {
+                    index,
+                    frequency_hz,
+                    value: Complex64::new(0.65, 0.0)
+                        + Complex64::from_polar(0.23, -TAU * frequency_hz * delay),
+                }
+            })
+            .collect();
+        let impulse = ImpulseResponse::from_trace(&points, SpectrumWindow::Rectangular).unwrap();
+        let response = Response::new(impulse);
+        let mut state = TimeDomain {
+            velocity_factor: 0.66,
+            echo: Some(count as usize / 2 + 5),
+            ..TimeDomain::default()
+        };
+        let readout = state.echo_text(&response).unwrap();
+        assert_eq!(
+            readout,
+            "Echo 19.531 ns · |h| 0.23000 · One-way distance 1.932 m"
+        );
+        state.velocity_factor = 0.80;
+        assert!(state.echo_text(&response).unwrap().ends_with("2.342 m"));
+    }
 }
