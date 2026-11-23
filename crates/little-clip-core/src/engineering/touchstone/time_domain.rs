@@ -5,6 +5,16 @@ use std::ops::Range;
 
 const MAX_POINTS: usize = 16_384;
 
+/// Selects which delay samples contribute to a reconstructed trace.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GateMode {
+    /// Retains the selected delay interval.
+    #[default]
+    Keep,
+    /// Removes the selected delay interval.
+    Reject,
+}
+
 /// Band-limited complex impulse response of a selected network trace.
 ///
 /// Samples are arranged in signed delay order. Frequencies are treated as a
@@ -118,6 +128,14 @@ impl ImpulseResponse {
     /// # Errors
     /// Rejects a gate that contains no delay samples.
     pub fn gate(&self, time: Range<f64>) -> Result<Vec<TracePoint>, Error> {
+        self.apply_gate(time, GateMode::Keep)
+    }
+
+    /// Reconstructs the contribution inside or outside a delay interval.
+    ///
+    /// # Errors
+    /// Rejects a gate that contains no delay samples.
+    pub fn apply_gate(&self, time: Range<f64>, mode: GateMode) -> Result<Vec<TracePoint>, Error> {
         let dt = self.step_seconds();
         let start = self.start_seconds();
         let selected = |index| time.contains(&(index as f64).mul_add(dt, start));
@@ -129,7 +147,7 @@ impl ImpulseResponse {
             .iter()
             .enumerate()
             .map(|(index, &value)| {
-                if selected(index) {
+                if selected(index) == (mode == GateMode::Keep) {
                     value
                 } else {
                     Complex64::ZERO
@@ -201,6 +219,12 @@ mod tests {
         let gated = response.gate(4.0 * dt..6.0 * dt).unwrap();
         for point in gated {
             assert!((point.value - expected(point.frequency_hz)).norm() < 1e-10);
+        }
+        let rejected = response
+            .apply_gate(4.0 * dt..6.0 * dt, GateMode::Reject)
+            .unwrap();
+        for (point, measured) in rejected.iter().zip(&points) {
+            assert!((point.value - (measured.value - expected(point.frequency_hz))).norm() < 1e-10);
         }
     }
 

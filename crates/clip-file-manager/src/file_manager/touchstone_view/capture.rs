@@ -98,17 +98,24 @@ impl Capture {
         })
     }
 
-    pub fn impulse_input(
+    pub fn exact_band(
         &self,
         index: &Index,
         band: Band,
         trace: Trace,
+        neighbors: usize,
         cancel: &AtomicBool,
     ) -> Result<Vec<TracePoint>, String> {
         self.read(cancel, |reader| {
             let first = reader.nearest(index, band[0], cancel)?.index;
             let last = reader.nearest(index, band[1], cancel)?.index;
-            let range = first.min(last)..first.max(last).saturating_add(1);
+            let padding = neighbors as u64;
+            let start = first.min(last).saturating_sub(padding);
+            let end = first
+                .max(last)
+                .saturating_add(padding + 1)
+                .min(index.points());
+            let range = start..end;
             if range.end - range.start > MAX_COPY {
                 return Err(touchstone::Error::Limit(
                     "zoom to a band with at most 16,384 points",

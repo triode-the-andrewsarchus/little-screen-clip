@@ -13,7 +13,7 @@ use crate::{
 use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, vec2};
 use little_clip_core::engineering::{
     analysis::SpectrumWindow,
-    touchstone::{ImpulseResponse, Index, TracePoint},
+    touchstone::{GateMode, ImpulseResponse, Index, TracePoint},
     waveforms::{Peak, display_value},
 };
 use std::{ops::Range, sync::Arc, time::Duration};
@@ -29,8 +29,15 @@ pub(super) struct TimeDomain {
     anchor: Option<f64>,
     draft: Option<Range<f64>>,
     gate: Option<Range<f64>>,
-    gate_read: Option<(Range<f64>, Job<Arc<Vec<TracePoint>>>)>,
-    gated: Option<(Range<f64>, Result<Arc<Vec<TracePoint>>, String>)>,
+    gate_mode: GateMode,
+    gate_read: Option<(Gate, Job<Arc<Vec<TracePoint>>>)>,
+    gated: Option<(Gate, Result<Arc<Vec<TracePoint>>, String>)>,
+}
+
+#[derive(Clone, PartialEq)]
+struct Gate {
+    range: Range<f64>,
+    mode: GateMode,
 }
 
 #[derive(Clone, PartialEq)]
@@ -57,6 +64,7 @@ impl Default for TimeDomain {
             anchor: None,
             draft: None,
             gate: None,
+            gate_mode: GateMode::Keep,
             gate_read: None,
             gated: None,
         }
@@ -65,9 +73,13 @@ impl Default for TimeDomain {
 
 impl TimeDomain {
     pub(super) fn gated(&self) -> Option<&[TracePoint]> {
-        let (range, result) = self.gated.as_ref()?;
-        (self.gate.as_ref() == Some(range))
-            .then(|| result.as_ref().ok().map(|points| points.as_slice()))
+        self.gated_points().map(|points| points.as_slice())
+    }
+
+    pub(super) fn gated_points(&self) -> Option<&Arc<Vec<TracePoint>>> {
+        let (gate, result) = self.gated.as_ref()?;
+        (self.gate.as_ref() == Some(&gate.range) && self.gate_mode == gate.mode)
+            .then(|| result.as_ref().ok())
             .flatten()
     }
 
@@ -141,6 +153,21 @@ impl TimeDomain {
             if ui.button("Fit delay").clicked() {
                 self.view = None;
             }
+            ui.add_enabled_ui(self.gate.is_some(), |ui| {
+                egui::ComboBox::from_id_salt("delay gate mode")
+                    .selected_text(match self.gate_mode {
+                        GateMode::Keep => "Keep interval",
+                        GateMode::Reject => "Reject interval",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.gate_mode, GateMode::Keep, "Keep interval");
+                        ui.selectable_value(
+                            &mut self.gate_mode,
+                            GateMode::Reject,
+                            "Reject interval",
+                        );
+                    });
+            });
             if ui
                 .add_enabled(self.gate.is_some(), egui::Button::new("Clear gate"))
                 .clicked()
@@ -185,7 +212,7 @@ impl TimeDomain {
             key.clone(),
             read_job(ctx, Duration::from_secs(20), move |cancel| {
                 let input =
-                    capture.impulse_input(&index, requested.band, requested.trace, cancel)?;
+                    capture.exact_band(&index, requested.band, requested.trace, 0, cancel)?;
                 let impulse = ImpulseResponse::from_trace(&input, requested.window)
                     .map_err(|err| err.to_string())?;
                 Ok(Arc::new(Response::new(impulse)))
@@ -203,25 +230,26 @@ impl TimeDomain {
             self.gated = None;
             return;
         };
-        if self
-            .gated
-            .as_ref()
-            .is_some_and(|(ready, _)| ready == &range)
+        let key = Gate {
+            range,
+            mode: self.gate_mode,
+        };
+        if self.gated.as_ref().is_some_and(|(ready, _)| ready == &key)
             || self
                 .gate_read
                 .as_ref()
-                .is_some_and(|(loading, _)| loading == &range)
+                .is_some_and(|(loading, _)| loading == &key)
         {
             return;
         }
         let response = response.clone();
-        let requested = range.clone();
+        let requested = key.clone();
         self.gate_read = Some((
-            range,
+            key,
             read_job(ctx, Duration::from_secs(10), move |_| {
                 response
                     .impulse
-                    .gate(requested)
+                    .apply_gate(requested.range, requested.mode)
                     .map(Arc::new)
                     .map_err(|err| err.to_string())
             }),
@@ -280,7 +308,9 @@ impl TimeDomain {
                 row
             });
         self.readout(ui, response, hovered);
-        hit.on_hover_text("Drag to keep a delay interval · Right-click to clear · Scroll to zoom");
+        hit.on_hover_text(
+            "Drag to select a delay interval · Right-click to clear · Scroll to zoom",
+        );
     }
 
     fn brush(&mut self, ui: &Ui, rect: Rect, hit: &egui::Response, span: &Range<f64>) {
@@ -321,7 +351,11 @@ impl TimeDomain {
                 ));
             } else if let Some(gate) = &self.gate {
                 ui.monospace(format!(
-                    "Gate {} to {}",
+                    "{} {} to {}",
+                    match self.gate_mode {
+                        GateMode::Keep => "Keep",
+                        GateMode::Reject => "Reject",
+                    },
                     display_value(gate.start, "s"),
                     display_value(gate.end, "s")
                 ));
@@ -340,8 +374,9 @@ impl TimeDomain {
             if self.gated().is_some() {
                 ui.colored_label(GATE_COLOR, "Gated frequency trace");
             }
-            if let Some((range, Err(error))) = &self.gated
-                && self.gate.as_ref() == Some(range)
+            if let Some((gate, Err(error))) = &self.gated
+                && self.gate.as_ref() == Some(&gate.range)
+                && self.gate_mode == gate.mode
             {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }

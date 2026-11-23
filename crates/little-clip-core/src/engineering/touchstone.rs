@@ -1,14 +1,16 @@
 //! Incremental Touchstone network-parameter decoding for guarded capture previews.
 
+mod group_delay;
 mod header;
 mod index;
 mod stream;
 mod time_domain;
 
+pub use group_delay::{GroupDelayPoint, group_delay};
 pub use index::{Envelope, Index, Summary, TracePoint, summary};
 pub use realfft::num_complex::Complex64;
 pub use stream::Reader;
-pub use time_domain::ImpulseResponse;
+pub use time_domain::{GateMode, ImpulseResponse};
 
 use std::{io, path::Path};
 use thiserror::Error;
