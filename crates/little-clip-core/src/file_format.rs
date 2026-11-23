@@ -141,6 +141,7 @@ enum EngineeringProbe {
     Icom,
     NetworkCapture,
     Can,
+    Trc,
     Trace,
     Tag(Format),
 }
@@ -157,7 +158,8 @@ impl EngineeringProbe {
             "sub" => Self::FlipperRadio,
             "icf" => Self::Icom,
             "pcap" | "pcapng" => return None,
-            "asc" | "blf" | "trc" | "log" | "candump" => Self::Can,
+            "asc" | "blf" | "log" | "candump" => Self::Can,
+            "trc" => Self::Trc,
             "trace" => Self::Trace,
             "ibtn" => Self::Tag(Format::OneWire),
             _ if tags::is_candidate_path(path) => Self::Tag(Format::TagCapture),
@@ -175,6 +177,7 @@ impl EngineeringProbe {
             Self::DsView => 4,
             Self::FlipperRadio => pulses::HEADER_BYTES,
             Self::Icom | Self::Can => can::HEADER_BYTES,
+            Self::Trc => can::HEADER_BYTES.max(scope::HEADER_BYTES),
             Self::Trace | Self::Tag(_) => 32 * 1024,
         }
     }
@@ -207,6 +210,7 @@ impl EngineeringProbe {
                 packets::recognizes(bytes, path).then_some(Format::PacketCapture)
             }
             Self::Can => can_format(),
+            Self::Trc => scope_format().or_else(can_format),
             Self::Trace => can_format().or_else(|| tag_format(Format::TagCapture)),
             Self::Tag(format) => tag_format(*format),
         }

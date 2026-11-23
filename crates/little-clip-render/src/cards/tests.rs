@@ -668,6 +668,7 @@ fn engineering_fixture_cards() {
             "Oscilloscope captures/Siglent SDS1000X-E V1 sample.bin",
             "waveform",
         ),
+        ("Oscilloscope captures/LeCroy WavePro 254HD.trc", "waveform"),
         ("Power recordings/Auto_Sample.jls", "waveform"),
         ("Power recordings/Standby and load pulses.jls", "waveform"),
         ("Logic captures/Sigrok Amulet LCD boot UART.sr", "logic"),
