@@ -35,6 +35,12 @@ const FIELDS: Columns<4> = Columns {
     hover_fill: 0.21,
 };
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct FieldSelection {
+    generation: u64,
+    selected: Option<(Identifier, usize)>,
+}
+
 #[derive(Default)]
 pub(super) struct Panel {
     editing: bool,
@@ -48,6 +54,7 @@ pub(super) struct Panel {
     nearby: Option<PathBuf>,
     error: Option<String>,
     selected: Option<(Identifier, usize)>,
+    reveal_field: Option<(Identifier, usize)>,
     generation: u64,
     plot: signal_plot::Plot,
 }
@@ -126,6 +133,7 @@ impl Panel {
                 self.picker = None;
                 self.error = None;
                 self.selected = None;
+                self.reveal_field = None;
                 self.generation += 1;
             }
         }
@@ -206,10 +214,30 @@ impl Panel {
                     self.database = Some((path, Arc::new(database)));
                     self.plot = signal_plot::Plot::default();
                     self.selected = None;
+                    self.reveal_field = None;
                     self.generation += 1;
                 }
                 Err(error) => self.error = Some(error),
             }
+        }
+    }
+
+    pub(super) fn field_selection(&self) -> FieldSelection {
+        FieldSelection {
+            generation: self.generation,
+            selected: self.selected,
+        }
+    }
+
+    pub(super) fn reveal_plot_field(&mut self, signal: &signal_plot::Signal) {
+        self.selected = Some((signal.id, signal.field));
+        self.reveal_field = self.selected;
+    }
+
+    pub(super) fn restore_field_selection(&mut self, selection: FieldSelection) {
+        if self.generation == selection.generation {
+            self.selected = selection.selected;
+            self.reveal_field = self.selected;
         }
     }
 
@@ -221,7 +249,7 @@ impl Panel {
         viewport: signal_plot::Viewport<'_>,
         colors: WorkbenchColors,
         copies: &mut Copies,
-    ) -> Option<u64> {
+    ) -> Option<signal_plot::Hit> {
         let (_, database) = self.database.as_ref()?;
         self.plot
             .show(ui, capture, database, index, viewport, colors, copies)
@@ -267,7 +295,9 @@ impl Panel {
 
     fn field(&self, frame: &Frame) -> Option<&Field> {
         let (id, field) = self.selected.filter(|(id, _)| Some(*id) == frame.id)?;
-        self.database.as_ref()?.1.message(id)?.signals.get(field)
+        let message = self.database.as_ref()?.1.message(id)?;
+        message.decode(field, frame)?;
+        message.signals.get(field)
     }
 
     fn fields(
@@ -306,7 +336,10 @@ impl Panel {
             offset: 0,
             selected,
             selection: None,
-            scroll_to: None,
+            scroll_to: self
+                .reveal_field
+                .take_if(|(message, _)| *message == id)
+                .map(|(_, field)| field),
             generation: self.generation,
             height,
         };

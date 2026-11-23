@@ -21,6 +21,17 @@ pub(super) struct Signal {
     pub field: usize,
 }
 
+pub(super) struct Hit {
+    pub signal: Signal,
+    pub point: Point,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct FrameCursor {
+    pub row: u64,
+    pub time_ns: i128,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct Query {
     signal: Signal,
@@ -43,7 +54,7 @@ struct Lane {
 pub(super) struct Viewport<'a> {
     pub span: &'a activity::Domain,
     pub selection: Option<activity::Domain>,
-    pub selected_time: Option<i128>,
+    pub cursor: Option<FrameCursor>,
     pub origin: i128,
 }
 
@@ -52,7 +63,7 @@ struct Chart<'a> {
     database: &'a Arc<Database>,
     index: Option<&'a Arc<Index>>,
     span: &'a activity::Domain,
-    selected_time: Option<i128>,
+    cursor: Option<FrameCursor>,
     origin: i128,
     colors: WorkbenchColors,
     paired: bool,
@@ -112,7 +123,7 @@ impl Plot {
         viewport: Viewport<'_>,
         colors: WorkbenchColors,
         copies: &mut Copies,
-    ) -> Option<u64> {
+    ) -> Option<Hit> {
         if !self.active() {
             return None;
         }
@@ -125,7 +136,7 @@ impl Plot {
             database,
             index,
             span: self.interval.as_ref().unwrap_or(viewport.span),
-            selected_time: viewport.selected_time,
+            cursor: viewport.cursor,
             origin: viewport.origin,
             colors,
             paired: self.comparison.is_some(),
@@ -184,7 +195,7 @@ impl Lane {
         }
     }
 
-    fn show(&mut self, ui: &mut Ui, chart: &Chart<'_>, copies: &mut Copies) -> Option<u64> {
+    fn show(&mut self, ui: &mut Ui, chart: &Chart<'_>, copies: &mut Copies) -> Option<Hit> {
         let field = chart
             .database
             .message(self.signal.id)?
@@ -243,7 +254,7 @@ impl Lane {
         let Some(Ok(series)) = result else {
             return None;
         };
-        paint_series(
+        let scale = paint_series(
             &painter,
             rect,
             chart.span,
@@ -251,24 +262,35 @@ impl Lane {
             &field.unit,
             chart.colors,
         );
-        if let Some(time) = chart.selected_time {
-            activity::marker(&painter, rect, chart.span, time, chart.colors);
+        if let Some(cursor) = chart.cursor {
+            paint_selected(&painter, rect, chart, &series.points, cursor, scale);
         }
-        let hover = response.hover_pos().filter(|pos| rect.contains(*pos));
-        let click = response
-            .interact_pointer_pos()
-            .filter(|pos| rect.contains(*pos));
-        let point_at =
-            |pos: egui::Pos2| nearest_point(&series.points, activity::at(rect, chart.span, pos.x));
+        let point_at = |pos: egui::Pos2| {
+            if !rect.contains(pos) {
+                return None;
+            }
+            nearest_point(
+                &series.points,
+                activity::at(rect, chart.span, pos.x),
+                |point| {
+                    scale
+                        .and_then(|scale| point.decoded.map(|value| scale.y(rect, value.value)))
+                        .map_or(f32::INFINITY, |y| (pos.y - y).abs())
+                },
+            )
+        };
         let clicked = response
             .clicked()
-            .then(|| click.and_then(point_at))
+            .then(|| response.interact_pointer_pos().and_then(point_at))
             .flatten();
-        if let Some(point) = hover.and_then(point_at) {
+        if let Some(point) = response.hover_pos().and_then(point_at) {
             activity::marker(&painter, rect, chart.span, point.time_ns, chart.colors);
             response.on_hover_text(tooltip(point, &field.unit, chart.origin));
         }
-        clicked.map(|point| point.row)
+        clicked.map(|point| Hit {
+            signal: self.signal.clone(),
+            point,
+        })
     }
 
     fn request(
@@ -336,15 +358,53 @@ fn paint_time_axis(
     }
 }
 
-fn nearest_point(points: &[Point], time: i128) -> Option<Point> {
+fn points_at(points: &[Point], time: i128) -> &[Point] {
+    let first = points.partition_point(|point| point.time_ns < time);
+    let end = points[first..].partition_point(|point| point.time_ns == time) + first;
+    &points[first..end]
+}
+
+fn nearest_point(
+    points: &[Point],
+    time: i128,
+    vertical_distance: impl Fn(&Point) -> f32,
+) -> Option<Point> {
     let next = points.partition_point(|point| point.time_ns < time);
     let before = next.checked_sub(1).and_then(|index| points.get(index));
-    match (before, points.get(next)) {
-        (Some(before), Some(after)) if time - before.time_ns < after.time_ns - time => {
-            Some(*before)
-        }
-        (_, Some(after)) => Some(*after),
-        (before, None) => before.copied(),
+    let near = match (before, points.get(next)) {
+        (Some(before), Some(after)) if time - before.time_ns < after.time_ns - time => before,
+        (_, Some(after)) => after,
+        (before, None) => before?,
+    };
+    points_at(points, near.time_ns)
+        .iter()
+        .min_by(|a, b| vertical_distance(a).total_cmp(&vertical_distance(b)))
+        .copied()
+}
+
+fn paint_selected(
+    painter: &Painter,
+    rect: Rect,
+    chart: &Chart<'_>,
+    points: &[Point],
+    cursor: FrameCursor,
+    scale: Option<ValueScale>,
+) {
+    activity::marker(painter, rect, chart.span, cursor.time_ns, chart.colors);
+    if let Some(scale) = scale
+        && let Some(value) = points_at(points, cursor.time_ns)
+            .iter()
+            .find(|point| point.row == cursor.row)
+            .and_then(|point| point.decoded)
+    {
+        painter.with_clip_rect(rect).circle_stroke(
+            pos2(
+                activity::x(rect, chart.span, cursor.time_ns),
+                scale.y(rect, value.value),
+            ),
+            4.0,
+            Stroke::new(1.3, chart.colors.focus),
+        );
     }
 }
 
@@ -360,6 +420,39 @@ fn tooltip(point: Point, unit: &str, origin: i128) -> String {
     )
 }
 
+#[derive(Clone, Copy)]
+struct ValueScale {
+    gain: f64,
+    floor: f64,
+    width: f64,
+}
+
+impl ValueScale {
+    fn from_points(points: &[Point]) -> Option<Self> {
+        let (low, high) = points
+            .iter()
+            .filter_map(|point| point.decoded.map(|reading| (reading.value, reading.value)))
+            .reduce(|(low, high), (min, max)| (low.min(min), high.max(max)))?;
+        let gain = low.abs().max(high.abs()).max(f64::MIN_POSITIVE);
+        let floor = low / gain;
+        Some(Self {
+            gain,
+            floor,
+            width: high / gain - floor,
+        })
+    }
+
+    fn y(self, rect: Rect, value: f64) -> f32 {
+        let fraction = if self.width == 0.0 {
+            0.5
+        } else {
+            (value / self.gain - self.floor) / self.width
+        };
+        let rect = rect.shrink2(vec2(0.0, 3.0));
+        rect.bottom() - rect.height() * fraction as f32
+    }
+}
+
 fn paint_series(
     painter: &Painter,
     rect: Rect,
@@ -367,22 +460,10 @@ fn paint_series(
     series: &Series,
     unit: &str,
     colors: WorkbenchColors,
-) {
-    let values = series
-        .points
-        .iter()
-        .filter_map(|point| point.decoded.map(|reading| reading.value));
-    let Some((low, high)) = values
-        .map(|value| (value, value))
-        .reduce(|(low, high), (min, max)| (low.min(min), high.max(max)))
-    else {
-        return;
-    };
-    let scale = low.abs().max(high.abs()).max(f64::MIN_POSITIVE);
-    let floor = low / scale;
-    let range = high / scale - floor;
+) -> Option<ValueScale> {
+    let scale = ValueScale::from_points(&series.points)?;
     let font = FontId::monospace(10.0);
-    let ticks: &[f64] = if high == low {
+    let ticks: &[f64] = if scale.width == 0.0 {
         &[0.5]
     } else {
         &[0.0, 0.5, 1.0]
@@ -397,23 +478,17 @@ fn paint_series(
         painter.text(
             pos2(rect.left() - 4.0, y),
             Align2::RIGHT_CENTER,
-            database::physical(range.mul_add(tick, floor) * scale, unit),
+            database::physical(scale.width.mul_add(tick, scale.floor) * scale.gain, unit),
             font.clone(),
             colors.text_muted,
         );
     }
-    let data_rect = rect.shrink2(vec2(0.0, 3.0));
     let plot = painter.with_clip_rect(rect);
     let mut points: Vec<egui::Pos2> = Vec::new();
     let mut dots = egui::Mesh::default();
     for point in &series.points {
         if let Some(value) = point.decoded {
-            let fraction = if high == low {
-                0.5
-            } else {
-                (value.value / scale - floor) / range
-            };
-            let y = data_rect.bottom() - data_rect.height() * fraction as f32;
+            let y = scale.y(rect, value.value);
             let x = activity::x(rect, span, point.time_ns);
             points.push(pos2(x, y));
         } else {
@@ -424,6 +499,7 @@ fn paint_series(
     if !dots.is_empty() {
         plot.add(dots);
     }
+    Some(scale)
 }
 
 fn paint_points(
@@ -489,4 +565,42 @@ fn copy_values(series: &Series, unit: &str) -> Result<String, String> {
     }
     little_clip_core::copy_text_to_system_clipboard(&csv).map_err(|error| error.to_string())?;
     Ok(format!("Copied {} decoded values", series.observations))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::engineering::can::dbc::{DecodedValue, RawValue};
+
+    #[test]
+    fn coincident_points_select_the_value_closest_to_the_pointer() {
+        let point = |row, time_ns, decoded| Point {
+            row,
+            time_ns,
+            decoded,
+        };
+        let value = |value| {
+            Some(DecodedValue {
+                value,
+                raw: RawValue::Float(value),
+            })
+        };
+        let points = [
+            point(1, 10, value(1.0)),
+            point(2, 20, value(3.0)),
+            point(3, 20, None),
+            point(4, 20, value(9.0)),
+            point(5, 30, value(2.0)),
+        ];
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 46.0));
+        let scale = ValueScale::from_points(&points).unwrap();
+        for (expected, height) in [(2, scale.y(rect, 3.0)), (4, scale.y(rect, 9.0))] {
+            let pick = nearest_point(&points, 21, |point| {
+                point.decoded.map_or(f32::INFINITY, |value| {
+                    (scale.y(rect, value.value) - height).abs()
+                })
+            });
+            assert_eq!(pick.map(|point| point.row), Some(expected));
+        }
+    }
 }

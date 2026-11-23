@@ -172,6 +172,12 @@ The FFT sizes are direct controls beside the spectrum. A compressed plot column 
 
 At 1280 × 800 and 800 × 620, the desktop walkthrough followed a +4.096 kHz burst to samples 512–1023 and a −8.192 kHz burst to samples 3072–3583. The second bin read −12.0 dBFS. Back restored the wider waterfall with the second window marked and all 4096 brushed samples still in the peak hold. In the narrow check, a retune immediately after the selection left the wide waterfall on a relative axis and the measured spectrum on the original 915 MHz tuning. Unit tests also cover a retune missed by sampled windows, invalid FFT bins, and tied levels.
 
+## 18. Inspect a CAN signal’s source frame and return to the matches
+
+Clicking a plotted value opens its exact recorded frame, selects the matching DBC field and highlights its payload bits. At a shared timestamp, the nearer plotted value determines which frame opens. A frame outside the matches opens temporarily above the inspector with Back to matches. Frames beyond a bounded filter scan say so. The frame table, time brush and plots keep their current settings. In a short window the inspector scrolls into view when its frame is ready, and Back brings the matches into view.
+
+The two-signal walkthrough filtered to the two 0x123 command frames and brushed 0–580 ms. Two 0x124 response frames shared 580 ms. Clicking the upper point selected Frame 5 at 12 A and highlighted the second byte in `CD 30`. Back restored Frame 1, its selected voltage field and the two matches with the brush intact. Clicking 24 V on the command plot selected Frame 3 and highlighted the first byte in `30 53`. At 800 × 620, clicking the command plot brought Frame 3 and its decoded fields into view.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.

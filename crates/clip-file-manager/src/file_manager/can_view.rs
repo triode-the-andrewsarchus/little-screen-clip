@@ -36,6 +36,11 @@ use std::{
 };
 
 static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(3, 5));
+struct PlotSelection {
+    point: little_clip_core::engineering::can::series::Point,
+    return_field: Option<database::FieldSelection>,
+}
+
 pub(super) struct Viewer {
     capture: Arc<Capture>,
     prefix: Summary,
@@ -47,6 +52,8 @@ pub(super) struct Viewer {
     detail_job: Option<(u64, Job<Vec<Frame>>)>,
     detail_failed: Option<u64>,
     selected: Option<u64>,
+    plot_selection: Option<PlotSelection>,
+    reveal_detail: bool,
     page: u64,
     jump_to: u64,
     scroll_to: Option<usize>,
@@ -77,6 +84,8 @@ impl Viewer {
             capture: Arc::new(capture),
             prefix,
             selected,
+            plot_selection: None,
+            reveal_detail: false,
             index: None,
             index_job: None,
             index_failed: false,
@@ -141,11 +150,14 @@ impl Viewer {
                     .inspect(ui, frame, origin, ui.available_height(), colors, false);
             }
         } else {
-            ui.scope(|ui| {
-                ui.spacing_mut().interact_size.y = 24.0;
-                ui.spacing_mut().button_padding.y = 2.0;
-                self.frame_workspace(ui, colors, copies);
-            });
+            egui::ScrollArea::vertical()
+                .id_salt("can-frame-workspace")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().interact_size.y = 24.0;
+                    ui.spacing_mut().button_padding.y = 2.0;
+                    self.frame_workspace(ui, colors, copies);
+                });
         }
         self.request_index(ui.ctx());
         if self.index_job.is_some()
@@ -218,7 +230,7 @@ impl Viewer {
     ) -> Option<little_clip_core::engineering::can::intervals::Stream> {
         use little_clip_core::engineering::can::intervals::Stream;
         let stream = self
-            .selected
+            .inspected_row()
             .and_then(|row| self.source_frame(row))
             .and_then(Stream::of)?;
         ui.add_enabled(
@@ -234,10 +246,10 @@ impl Viewer {
     }
 
     fn copy_action(&self, ui: &mut Ui, copies: &mut Copies) {
-        let selection = self
-            .selection
-            .clone()
-            .or_else(|| self.selected.map(|row| Selection::Rows(row..row + 1)));
+        let selection = self.selection.clone().or_else(|| {
+            self.inspected_row()
+                .map(|row| Selection::Rows(row..row + 1))
+        });
         let label = if self.selection.is_some() {
             "Copy source range as CSV"
         } else {
@@ -347,6 +359,7 @@ impl Viewer {
                 let anchor = activity::at(rect, &visible, pointer.x);
                 visible = activity::zoom(&full, &visible, anchor, delta);
                 self.viewport = Some(visible.clone());
+                ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
             }
         }
 
@@ -356,8 +369,8 @@ impl Viewer {
         if let Some(span) = self.selected_span() {
             activity::highlight(&painter, rect, &visible, &span, colors);
         }
-        if let Some(frame) = self.selected.and_then(|row| self.source_frame(row)) {
-            activity::marker(&painter, rect, &visible, frame.timestamp_ns, colors);
+        if let Some(cursor) = self.frame_cursor() {
+            activity::marker(&painter, rect, &visible, cursor.time_ns, colors);
         }
         response.on_hover_ui(|ui| {
             if let Some(time) = time
@@ -449,13 +462,10 @@ impl Viewer {
         let viewport = signal_plot::Viewport {
             span: self.viewport.as_ref().unwrap_or(&full),
             selection: self.selected_span(),
-            selected_time: self
-                .selected
-                .and_then(|row| self.source_frame(row))
-                .map(|frame| frame.timestamp_ns),
+            cursor: self.frame_cursor(),
             origin: full.start,
         };
-        if let Some(row) = self.database.plot(
+        if let Some(hit) = self.database.plot(
             ui,
             &self.capture,
             self.index.as_ref(),
@@ -463,16 +473,100 @@ impl Viewer {
             colors,
             copies,
         ) {
-            if self.filtered.as_ref().is_some_and(|filtered| {
-                filtered
-                    .frames
-                    .binary_search_by_key(&row, |frame| frame.row)
-                    .is_err()
-            }) {
-                self.clear_filter();
-            }
-            self.focus_frame(row);
+            self.follow_signal_hit(hit);
+            self.reveal_detail = true;
+            ui.ctx().request_repaint();
         }
+    }
+
+    fn follow_signal_hit(&mut self, hit: signal_plot::Hit) {
+        let row = hit.point.row;
+        let outside = self.filtered.is_some() && self.filtered_position(row).is_none();
+        let return_field = if outside {
+            self.retire_detail_if_moving(row);
+            let field = self
+                .plot_selection
+                .take()
+                .and_then(|previous| previous.return_field)
+                .unwrap_or_else(|| self.database.field_selection());
+            Some(field)
+        } else {
+            self.clear_plot_selection();
+            self.set_selected(row);
+            if self.selection.is_none() {
+                self.row_anchor = Some((row, Some(hit.point.time_ns)));
+            }
+            self.reveal(row);
+            None
+        };
+        self.database.reveal_plot_field(&hit.signal);
+        self.plot_selection = Some(PlotSelection {
+            point: hit.point,
+            return_field,
+        });
+    }
+
+    fn inspected_row(&self) -> Option<u64> {
+        self.plot_selection
+            .as_ref()
+            .map(|selection| selection.point.row)
+            .or(self.selected)
+    }
+
+    fn frame_cursor(&self) -> Option<signal_plot::FrameCursor> {
+        if let Some(selection) = &self.plot_selection {
+            return Some(signal_plot::FrameCursor {
+                row: selection.point.row,
+                time_ns: selection.point.time_ns,
+            });
+        }
+        let frame = self.source_frame(self.selected?)?;
+        Some(signal_plot::FrameCursor {
+            row: frame.row,
+            time_ns: frame.timestamp_ns,
+        })
+    }
+
+    fn clear_plot_selection(&mut self) {
+        self.reveal_detail = false;
+        if let Some(selection) = self.plot_selection.take()
+            && let Some(saved) = selection.return_field
+        {
+            self.detail_job = None;
+            self.detail_failed = None;
+            self.database.restore_field_selection(saved);
+        }
+    }
+
+    fn plot_visit_controls(&mut self, ui: &mut Ui) -> bool {
+        let Some(selection) = self
+            .plot_selection
+            .as_ref()
+            .filter(|selection| selection.return_field.is_some())
+        else {
+            return false;
+        };
+        let row = selection.point.row;
+        let status = if self
+            .filtered
+            .as_ref()
+            .is_some_and(|filter| !filter.complete && row >= filter.scanned)
+        {
+            "Beyond scanned filter coverage"
+        } else {
+            "Outside filter matches"
+        };
+        let back = ui
+            .horizontal_wrapped(|ui| {
+                ui.weak(status);
+                ui.small_button("Back to matches").clicked()
+            })
+            .inner;
+        if back {
+            self.clear_plot_selection();
+            ui.ctx().request_repaint();
+        }
+        back
     }
 
     fn navigation(&mut self, ui: &mut Ui) {
@@ -531,7 +625,7 @@ impl Viewer {
         let count = table_count.saturating_sub(self.page).min(PAGE_ROWS) as usize;
         let origin = activity::domain(self.summary()).start;
         let height = ui.available_height();
-        let details = if self.selected.is_none() {
+        let details = if self.inspected_row().is_none() {
             0.0
         } else if self.database.attached() {
             (height * 0.56)
@@ -540,6 +634,7 @@ impl Viewer {
         } else {
             (height * 0.34).clamp(70.0, 152.0)
         };
+        let table_top = ui.next_widget_position();
         let table = table::show(
             ui,
             Page {
@@ -560,16 +655,47 @@ impl Viewer {
         );
         if let Some((row, shift)) = table.clicked {
             self.select(row, shift);
+            self.reveal_detail = true;
         }
         self.request_rows(ui.ctx(), table.visible);
-        if let Some(row) = self.selected {
-            ui.separator();
-            if let Some(frame) = self.source_frame(row).cloned() {
-                self.database
-                    .inspect(ui, &frame, origin, details, colors, true);
-            } else {
-                ui.weak(format!("Reading frame {}…", row + 1));
+        if self.inspected_row().is_none() {
+            return;
+        }
+        ui.separator();
+        let source = ui.scope(|ui| {
+            let returned = self.plot_visit_controls(ui);
+            if let Some(row) = self.inspected_row() {
+                self.frame_inspector(ui, row, origin, details.min(ui.available_height()), colors);
             }
+            returned
+        });
+        if source.inner {
+            ui.scroll_to_rect(egui::Rect::from_min_size(table_top, vec2(1.0, 55.0)), None);
+        } else if self.reveal_detail
+            && self.inspected_row().is_some_and(|row| {
+                self.source_frame(row).is_some() || self.detail_failed == Some(row)
+            })
+        {
+            self.reveal_detail = false;
+            source.response.scroll_to_me(None);
+        }
+    }
+
+    fn frame_inspector(
+        &mut self,
+        ui: &mut Ui,
+        row: u64,
+        origin: i128,
+        height: f32,
+        colors: WorkbenchColors,
+    ) {
+        if let Some(frame) = self.source_frame(row).cloned() {
+            self.database
+                .inspect(ui, &frame, origin, height, colors, true);
+        } else if self.detail_failed == Some(row) {
+            ui.weak(format!("Frame {} unavailable", row + 1));
+        } else {
+            ui.weak(format!("Reading frame {}…", row + 1));
         }
     }
 
@@ -602,6 +728,7 @@ impl Viewer {
     }
 
     fn select(&mut self, row: u64, extend: bool) {
+        self.clear_plot_selection();
         let time = self.source_frame(row).map(|frame| frame.timestamp_ns);
         self.selected_row_span = None;
         self.selection = if extend && self.filtered.is_none() {
@@ -615,12 +742,7 @@ impl Viewer {
             self.row_anchor = Some((row, time));
             None
         };
-        if self.selected != Some(row) {
-            self.detail_job = None;
-            self.detail_failed = None;
-        }
-        self.selected = Some(row);
-        self.jump_to = row + 1;
+        self.set_selected(row);
         if let Some(frame) = self.source_frame(row)
             && let Some(viewport) = &self.viewport
             && !viewport.contains(&frame.timestamp_ns)
@@ -629,12 +751,30 @@ impl Viewer {
         }
     }
 
+    fn set_selected(&mut self, row: u64) {
+        self.retire_detail_if_moving(row);
+        self.selected = Some(row);
+        self.jump_to = row + 1;
+    }
+
+    fn retire_detail_if_moving(&mut self, row: u64) {
+        if self.inspected_row() != Some(row) {
+            self.detail_job = None;
+            self.detail_failed = None;
+        }
+    }
+
+    fn filtered_position(&self, row: u64) -> Option<usize> {
+        self.filtered
+            .as_ref()?
+            .frames
+            .binary_search_by_key(&row, |frame| frame.row)
+            .ok()
+    }
+
     fn reveal(&mut self, row: u64) {
-        let position = if let Some(filtered) = &self.filtered {
-            let Ok(position) = filtered
-                .frames
-                .binary_search_by_key(&row, |frame| frame.row)
-            else {
+        let position = if self.filtered.is_some() {
+            let Some(position) = self.filtered_position(row) else {
                 return;
             };
             position as u64
@@ -686,7 +826,7 @@ impl Viewer {
     }
 
     fn request_detail(&mut self, ctx: &Context) {
-        let (Some(row), Some(index)) = (self.selected, self.index.clone()) else {
+        let (Some(row), Some(index)) = (self.inspected_row(), self.index.clone()) else {
             return;
         };
         if self.source_frame(row).is_some()
@@ -727,12 +867,31 @@ impl Viewer {
     }
 
     fn clear_filter(&mut self) {
+        self.clear_plot_selection();
         self.filter = Filter::default();
         self.id_input.clear();
         self.filter_job = None;
         self.filtered = None;
         self.error = None;
         self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn accept_detail(&mut self, row: u64, frame: Option<Frame>) {
+        self.detail = frame;
+        let resolves_anchor = self.row_anchor.as_mut().is_some_and(|(anchor, time)| {
+            if *anchor != row || time.is_some() {
+                return false;
+            }
+            *time = self.detail.as_ref().map(|frame| frame.timestamp_ns);
+            true
+        });
+        if resolves_anchor
+            && self.plot_selection.is_none()
+            && let Some((span, frame)) = self.viewport.as_ref().zip(self.detail.as_ref())
+            && !span.contains(&frame.timestamp_ns)
+        {
+            self.viewport = None;
+        }
     }
 
     fn poll(&mut self) {
@@ -750,22 +909,7 @@ impl Viewer {
         }
         if let Some((row, result)) = keyed_poll(&mut self.detail_job) {
             match result {
-                Ok(mut frames) => {
-                    self.detail = frames.pop();
-                    if let Some((anchor, time)) = &mut self.row_anchor
-                        && *anchor == row
-                    {
-                        *time = self.detail.as_ref().map(|frame| frame.timestamp_ns);
-                    }
-                    if let Some(viewport) = &self.viewport
-                        && self
-                            .detail
-                            .as_ref()
-                            .is_some_and(|frame| !viewport.contains(&frame.timestamp_ns))
-                    {
-                        self.viewport = None;
-                    }
-                }
+                Ok(mut frames) => self.accept_detail(row, frames.pop()),
                 Err(error) => {
                     self.detail_failed = Some(row);
                     self.error = Some(error);
@@ -775,6 +919,7 @@ impl Viewer {
         if let Some(result) = poll(&mut self.filter_job) {
             match result {
                 Ok(filtered) => {
+                    self.clear_plot_selection();
                     let first = filtered.frames.first().map(|frame| frame.row);
                     self.filtered = Some(filtered);
                     self.selection = None;
@@ -866,5 +1011,88 @@ fn direction(direction: Direction) -> &'static str {
         Direction::Rx => "Rx",
         Direction::Tx => "Tx",
         Direction::Unknown => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::engineering::can::series::Point;
+
+    #[test]
+    fn plot_frame_visits_keep_filter_matches_brush_and_viewport() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("Bench.asc");
+        std::fs::write(
+            &path,
+            concat!(
+                "date Mon Nov 2 03:22:02 2026\nbase hex timestamps absolute\n",
+                "0.100 1 123 Tx d 2 0A 00\n",
+                "0.180 1 124 Rx d 2 14 00\n",
+                "0.400 1 123 Tx d 2 30 00\n",
+                "0.680 1 124 Rx d 2 18 00\n",
+            ),
+        )
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut view = Viewer::load(&path, &cancel).unwrap();
+        let index = view.capture.index(&cancel).unwrap();
+        let command = parse_identifier("123").unwrap();
+        view.filtered = Some(
+            view.capture
+                .filter(
+                    &index,
+                    &Filter {
+                        id: Some(command),
+                        ..Filter::default()
+                    },
+                    &cancel,
+                )
+                .unwrap(),
+        );
+        let brush = 150_000_000..680_000_001;
+        let visible = 100_000_000..220_000_000;
+        view.selection = Some(Selection::Time(brush.clone()));
+        view.viewport = Some(visible.clone());
+        let hit = |row, field| {
+            let frame = &view.prefix.sample[row as usize];
+            signal_plot::Hit {
+                signal: signal_plot::Signal {
+                    channel: frame.channel.clone(),
+                    id: frame.id.unwrap(),
+                    field,
+                },
+                point: Point {
+                    row,
+                    time_ns: frame.timestamp_ns,
+                    decoded: None,
+                },
+            }
+        };
+        let original = hit(0, 0);
+        let response = hit(3, 1);
+        let later_command = hit(2, 1);
+        view.database.reveal_plot_field(&original.signal);
+        let original_field = view.database.field_selection();
+
+        view.follow_signal_hit(response);
+        assert_eq!(view.inspected_row(), Some(3));
+        assert_eq!(view.selected, Some(0));
+        assert!(view.filtered_position(3).is_none());
+        assert_eq!(view.frame_cursor().unwrap().time_ns, 680_000_000);
+        assert_eq!(view.selected_span(), Some(brush.clone()));
+        assert_eq!(view.viewport, Some(visible.clone()));
+
+        view.clear_plot_selection();
+        assert_eq!(view.inspected_row(), Some(0));
+        assert_eq!(view.database.field_selection(), original_field);
+
+        view.follow_signal_hit(later_command);
+        assert_eq!(view.selected, Some(2));
+        assert_eq!(view.inspected_row(), Some(2));
+        assert_eq!(view.scroll_to, Some(1));
+        assert_eq!(view.selected_span(), Some(brush));
+        assert_eq!(view.viewport, Some(visible));
+        assert_eq!(view.table_count(), 2);
     }
 }
