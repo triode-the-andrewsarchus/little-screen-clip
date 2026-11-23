@@ -6,10 +6,11 @@ pub(super) struct Image {
     pub pixels: ColorImage,
     pub low_dbfs: f32,
     pub high_dbfs: f32,
+    pub has_absolute_axis: bool,
 }
 
 impl Image {
-    pub(super) fn prepare(data: Waterfall) -> Self {
+    pub(super) fn prepare(data: Waterfall, has_absolute_axis: bool) -> Self {
         let limits = contrast(&data);
         let time = data.rows.len();
         let frequencies = data.rows[0].bins_dbfs.len();
@@ -22,6 +23,7 @@ impl Image {
             pixels: ColorImage::new([frequencies, time], pixels),
             low_dbfs: limits.0,
             high_dbfs: limits.1,
+            has_absolute_axis,
         }
     }
 }
@@ -119,7 +121,7 @@ mod tests {
             rows: vec![row(0, [-45.0, -90.0, -52.0]), row(8, [-76.0, -79.0, -16.0])],
             sampled: false,
         };
-        let image = Image::prepare(waterfall);
+        let image = Image::prepare(waterfall, false);
         assert_eq!(image.pixels.size, [3, 2]);
         let rect = Rect::from_min_size(pos2(20.0, 30.0), vec2(300.0, 200.0));
         for (position, time_row, bin) in [(pos2(70.0, 80.0), 0, 0), (pos2(270.0, 180.0), 1, 2)] {

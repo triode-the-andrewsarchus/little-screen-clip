@@ -2,6 +2,7 @@
 mod panels;
 mod plot;
 mod raw;
+mod spectrum;
 pub(super) mod strip;
 mod waterfall;
 
@@ -10,7 +11,7 @@ use crate::file_source::{FileSource, ReadCheck};
 use egui::{Context, TextureHandle, TextureOptions, Ui};
 use little_clip_core::{
     BackgroundJobs,
-    engineering::iq::{PowerOverview, RawInterpretation, Recording, Spectrum, Waterfall},
+    engineering::iq::{PowerOverview, RawInterpretation, Recording, Waterfall},
     palette::AppPalette,
 };
 use std::{
@@ -58,6 +59,7 @@ struct WaterfallFrame {
     data: Waterfall,
     texture: TextureHandle,
     color_span: (f32, f32),
+    has_absolute_axis: bool,
 }
 
 #[derive(Default)]
@@ -65,9 +67,9 @@ struct Displays {
     waterfall: Option<WaterfallFrame>,
     waterfall_key: Option<WaterfallKey>,
     waterfall_job: Option<ReadJob<waterfall::Image>>,
-    spectrum: Option<Spectrum>,
-    spectrum_range: Option<Range<u64>>,
-    spectrum_job: Option<ReadJob<Spectrum>>,
+    spectrum: Option<Result<spectrum::Measurement, String>>,
+    spectrum_key: Option<spectrum::Request>,
+    spectrum_job: Option<ReadJob<spectrum::Measurement>>,
 }
 
 pub(super) struct Viewer {
@@ -84,6 +86,7 @@ pub(super) struct Viewer {
     fft: usize,
     threshold_dbfs: f32,
     show_density: bool,
+    peak_hold: bool,
     error: Option<String>,
     request_after: f64,
     displays: Displays,
@@ -120,6 +123,7 @@ impl Viewer {
             fft: 512,
             threshold_dbfs: -45.0,
             show_density: true,
+            peak_hold: false,
             error: None,
             request_after: 0.0,
             displays: Displays::default(),
@@ -215,6 +219,7 @@ impl Viewer {
         let count = loaded.power.samples.end;
         self.view = 0..count;
         self.selection = None;
+        self.peak_hold = false;
         self.frequency = None;
         self.cursor = loaded
             .power
@@ -243,10 +248,7 @@ impl Viewer {
             }
         }
         if let Some(result) = take_result(&mut self.displays.spectrum_job) {
-            match result {
-                Ok(frame) => self.displays.spectrum = Some(frame),
-                Err(error) => self.error = Some(error),
-            }
+            self.displays.spectrum = Some(result);
         }
     }
 
@@ -266,6 +268,7 @@ impl Viewer {
             data: frame.data,
             texture,
             color_span: (frame.low_dbfs, frame.high_dbfs),
+            has_absolute_axis: frame.has_absolute_axis,
         });
     }
 
@@ -302,33 +305,57 @@ impl Viewer {
         self.displays.waterfall_job = Some(start_job(ctx, move |cancel| {
             recording
                 .checked(cancel, |capture| {
-                    capture.waterfall(read.span, read.fft, WATERFALL_ROWS, cancel)
+                    let has_absolute_axis = spectrum::shared_center(capture, &read.span)
+                        .is_ok_and(|center| center.is_some());
+                    let data = capture.waterfall(read.span, read.fft, WATERFALL_ROWS, cancel)?;
+                    Ok((data, has_absolute_axis))
                 })
-                .map(waterfall::Image::prepare)
+                .map(|(data, has_absolute_axis)| waterfall::Image::prepare(data, has_absolute_axis))
         }));
     }
 
     fn request_spectrum(&mut self, ctx: &Context) {
-        let range = self.spectrum_range();
-        if self.displays.spectrum_range.as_ref() == Some(&range) {
+        let request = self.spectrum_request();
+        if self.displays.spectrum_key.as_ref() == Some(&request) {
             return;
         }
         let Some(recording) = self.recording() else {
             return;
         };
-        self.displays.spectrum_range = Some(range.clone());
+        self.displays.spectrum_key = Some(request.clone());
+        self.displays.spectrum = None;
         self.displays.spectrum_job = Some(start_job(ctx, move |cancel| {
-            recording.checked(cancel, |capture| capture.spectrum(range, cancel))
+            recording.checked(cancel, |capture| request.read(capture, cancel))
         }));
+    }
+
+    fn spectrum_request(&self) -> spectrum::Request {
+        if self.peak_hold
+            && let Some(selection) = self.spectrum_selection()
+        {
+            return spectrum::Request::PeakHold {
+                selection: selection.clone(),
+                fft: self.fft,
+            };
+        }
+        spectrum::Request::Window(self.spectrum_range())
+    }
+
+    fn current_spectrum(&self) -> Option<Result<&spectrum::Measurement, &str>> {
+        let result = self.displays.spectrum.as_ref()?;
+        let key = self.displays.spectrum_key.as_ref()?;
+        (key == &self.spectrum_request()).then(|| result.as_ref().map_err(String::as_str))
+    }
+
+    fn spectrum_selection(&self) -> Option<&Range<u64>> {
+        self.selection
+            .as_ref()
+            .filter(|selection| selection.end - selection.start >= 2)
     }
 
     fn spectrum_range(&self) -> Range<u64> {
         let count = self.count();
-        let range = self
-            .selection
-            .as_ref()
-            .filter(|selection| selection.end - selection.start >= 2)
-            .unwrap_or(&self.view);
+        let range = self.spectrum_selection().unwrap_or(&self.view);
         let width = (range.end - range.start).min(self.fft as u64).max(2);
         let center = self
             .selection

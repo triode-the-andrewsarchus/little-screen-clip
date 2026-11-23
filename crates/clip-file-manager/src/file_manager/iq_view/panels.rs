@@ -1,10 +1,16 @@
-use super::{Copies, MAX_EXPORT_SAMPLES, Viewer, WaterfallFrame, midpoint, plot, waterfall};
+use super::{
+    Copies, MAX_EXPORT_SAMPLES, Viewer, WaterfallFrame, midpoint, plot,
+    spectrum::{MAX_PEAK_WINDOWS, Measurement},
+    waterfall,
+};
 use crate::file_manager::preview_copy;
 use egui::{
     Align2, Color32, FontId, PointerButton, Pos2, Rect, Response, Sense, Stroke, Ui, pos2, vec2,
 };
 use little_clip_core::engineering::{iq::Spectrum, waveforms::display_value};
 use std::ops::Range;
+
+const MEASURED: Color32 = Color32::from_rgb(247, 150, 203);
 
 impl Viewer {
     pub(super) fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) {
@@ -325,6 +331,9 @@ impl Viewer {
                 clipped.hline(rect.x_range(), y, Stroke::new(1.0, accent));
             }
         }
+        if let Some(Ok(measurement)) = self.current_spectrum() {
+            paint_measured_windows(&clipped, rect, &self.view, measurement);
+        }
         if let Some(cursor) = self.cursor.filter(|cursor| self.view.contains(cursor)) {
             clipped.hline(
                 rect.x_range(),
@@ -393,28 +402,35 @@ impl Viewer {
     }
 
     fn spectrum_panel(&mut self, ui: &mut Ui, width: f32, height: f32) {
-        let density_available = self.rate().is_some();
-        ui.horizontal(|ui| {
-            ui.strong("Selection spectrum");
-            if density_available {
-                ui.toggle_value(&mut self.show_density, "dBFS/Hz")
-                    .on_hover_text("Show power per Hertz instead of coherent peak amplitude");
+        let first_y = ui.next_widget_position().y;
+        self.spectrum_controls(ui);
+        let measurement = self.current_spectrum();
+        match measurement {
+            Some(Ok(measurement)) => show_measurement(ui, measurement),
+            Some(Err(error)) => {
+                ui.colored_label(ui.visuals().error_fg_color, error);
             }
-        });
-        let (outer, _) =
-            ui.allocate_exact_size(vec2(width, (height - 54.0).max(58.0)), Sense::hover());
+            None => {
+                ui.weak(if self.count() < 2 {
+                    "Needs at least two samples"
+                } else {
+                    "Reading spectrum…"
+                });
+            }
+        }
+        let controls_height = ui.next_widget_position().y - first_y;
+        let (outer, _) = ui.allocate_exact_size(
+            vec2(width, (height - controls_height).max(58.0)),
+            Sense::hover(),
+        );
         let rect = Rect::from_min_max(outer.min, outer.max - vec2(0.0, 18.0));
         let response = ui.interact(rect, ui.make_persistent_id("iq-spectrum"), Sense::click());
         let paint = ui.painter_at(outer);
         paint.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-        let Some(frame) = self.displays.spectrum.as_ref() else {
-            ui.weak(if self.count() < 2 {
-                "Needs at least two samples"
-            } else {
-                "Reading spectrum…"
-            });
+        let Some(Ok(measurement)) = measurement else {
             return;
         };
+        let frame = &measurement.frame;
         let density = self.show_density && frame.noise_bandwidth_hz.is_some();
         plot::spectrum(
             &paint,
@@ -425,18 +441,6 @@ impl Viewer {
             ui.visuals().weak_text_color(),
             density,
         );
-        let label = if frame.crosses_tuning {
-            "Spans a retune"
-        } else if frame.center_hz.is_none() {
-            "Relative frequencies"
-        } else {
-            "Recorded frequencies"
-        };
-        ui.weak(format!(
-            "{} · {}",
-            plot::sample_label(frame.samples.start, self.rate()),
-            label
-        ));
         if let Some(position) = response.hover_pos() {
             let fraction = x_fraction(rect, position);
             let bin =
@@ -458,6 +462,101 @@ impl Viewer {
         {
             self.frequency = Some(x_fraction(rect, point));
         }
+    }
+
+    fn spectrum_controls(&mut self, ui: &mut Ui) {
+        let has_selection = self.spectrum_selection().is_some();
+        self.peak_hold &= has_selection;
+        ui.strong(if self.peak_hold {
+            "Selection peak hold"
+        } else {
+            "Window spectrum"
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(
+                    has_selection,
+                    egui::Button::new("Peak hold over selection").selected(self.peak_hold),
+                )
+                .on_disabled_hover_text("Brush a range of at least two samples")
+                .on_hover_text(format!(
+                    "Keep the strongest level at each frequency across up to {MAX_PEAK_WINDOWS} FFT windows"
+                ))
+                .clicked()
+            {
+                self.peak_hold = !self.peak_hold;
+            }
+            if self.rate().is_some() && !self.peak_hold {
+                ui.toggle_value(&mut self.show_density, "dBFS/Hz")
+                    .on_hover_text("Show power per Hertz instead of coherent peak amplitude");
+            }
+        });
+    }
+}
+
+fn show_measurement(ui: &mut Ui, measurement: &Measurement) {
+    let frame = &measurement.frame;
+    let ink = if ui.visuals().dark_mode {
+        MEASURED
+    } else {
+        Color32::from_rgb(152, 46, 105)
+    };
+    if let Some(coverage) = &measurement.coverage {
+        let description = if coverage.sampled() {
+            "Sampled coverage"
+        } else {
+            "Complete window coverage"
+        };
+        ui.weak(format!(
+            "Selection · {}",
+            sample_span(&coverage.selection, frame.sample_rate_hz),
+        ));
+        ui.colored_label(
+            ink,
+            format!(
+                "{description} · {} FFT windows · {}/{} samples",
+                coverage.windows.len(),
+                coverage.observed_samples,
+                coverage.selection.end - coverage.selection.start,
+            ),
+        );
+    } else {
+        ui.colored_label(
+            ink,
+            format!(
+                "FFT window · {}",
+                sample_span(&frame.samples, frame.sample_rate_hz),
+            ),
+        );
+    }
+    let tuning = if frame.crosses_tuning && frame.center_hz.is_none() {
+        "Spans a retune · Relative frequencies"
+    } else if frame.center_hz.zip(frame.sample_rate_hz).is_some() {
+        "Absolute RF frequencies"
+    } else {
+        "Relative frequencies"
+    };
+    let has_invalid_samples = measurement.coverage.as_ref().map_or_else(
+        || frame.finite_samples < frame.samples.end - frame.samples.start,
+        |coverage| coverage.has_invalid_samples,
+    );
+    ui.weak(if has_invalid_samples {
+        format!("{tuning} · Contains invalid samples")
+    } else {
+        tuning.to_owned()
+    });
+}
+
+fn sample_span(samples: &Range<u64>, rate: Option<f64>) -> String {
+    let start = samples.start;
+    let last = samples.end - 1;
+    match rate {
+        Some(rate) => format!(
+            "Samples {start}–{last} · {}–{}",
+            plot::sample_label(start, Some(rate)),
+            plot::sample_label(last, Some(rate)),
+        ),
+        None => format!("Samples {start}–{last}"),
     }
 }
 
@@ -534,6 +633,38 @@ fn paint_selection(
     }
 }
 
+fn paint_measured_windows(
+    paint: &egui::Painter,
+    rect: Rect,
+    view: &Range<u64>,
+    measurement: &Measurement,
+) {
+    for window in measurement.measured_windows() {
+        let start = window.start.max(view.start);
+        let end = window.end.min(view.end);
+        if start >= end {
+            continue;
+        }
+        let top = waterfall_y(rect, view, start);
+        let bottom = waterfall_y(rect, view, end);
+        let mark = Rect::from_min_max(
+            pos2(rect.left(), top),
+            pos2(
+                rect.left() + 4.0,
+                (top + 2.0).max(bottom).min(rect.bottom()),
+            ),
+        );
+        paint.rect_filled(mark, 0.0, MEASURED);
+        if measurement.coverage.is_none() {
+            let band = Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), bottom));
+            paint.rect_filled(band, 0.0, MEASURED.gamma_multiply(0.14));
+            for y in [top, bottom] {
+                paint.hline(rect.x_range(), y, Stroke::new(1.0, MEASURED));
+            }
+        }
+    }
+}
+
 fn paint_image(
     paint: &egui::Painter,
     rect: Rect,
@@ -584,18 +715,13 @@ fn waterfall_time_labels(
 
 fn waterfall_labels(paint: &egui::Painter, rect: Rect, frame: &WaterfallFrame, ink: Color32) {
     let row = &frame.data.rows[0];
-    let same_center = frame
-        .data
-        .rows
-        .iter()
-        .all(|row2| row2.center_hz == row.center_hz);
     for (fraction, align) in [
         (0.0, Align2::LEFT_TOP),
         (0.5, Align2::CENTER_TOP),
         (1.0, Align2::RIGHT_TOP),
     ] {
         let bin = ((row.bins_dbfs.len() - 1) as f32 * fraction).round() as usize;
-        let label = if same_center {
+        let label = if frame.has_absolute_axis {
             plot::frequency_label(row, bin)
         } else {
             relative_label(row, bin)
