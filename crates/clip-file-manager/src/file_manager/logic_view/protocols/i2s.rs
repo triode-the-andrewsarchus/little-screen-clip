@@ -1,4 +1,4 @@
-use super::{DECODE_EDGES, Decoded, Inputs, TraceInput, lane_picker, lane_window, named_lane};
+use super::{DECODE_EDGES, Decoded, Inputs, TraceInput, lane_window, named_lane};
 use egui::Ui;
 use little_clip_core::engineering::{
     logic::Lane,
@@ -30,29 +30,17 @@ impl I2sInputs {
         }
     }
 
-    pub(super) fn controls(&mut self, ui: &mut Ui, lanes: &[Lane]) {
-        for ((id, label), channel) in [
-            ("i2s-clock", "Clock"),
-            ("i2s-ws", "Word select"),
-            ("i2s-data", "Data"),
-        ]
-        .into_iter()
-        .zip(&mut self.channels)
-        {
-            lane_picker(ui, id, label, channel, lanes);
+    pub(super) fn controls(&mut self, ui: &mut Ui) {
+        for format in [I2sFormat::Philips, I2sFormat::LeftJustified] {
+            if ui
+                .add(egui::Button::new(format.label()).selected(self.config.format == format))
+                .clicked()
+                && self.config.format != format
+            {
+                self.config.format = format;
+                self.config.left_high = format == I2sFormat::LeftJustified;
+            }
         }
-        egui::ComboBox::from_id_salt("i2s-framing")
-            .selected_text(self.config.format.label())
-            .show_ui(ui, |ui| {
-                for format in [I2sFormat::Philips, I2sFormat::LeftJustified] {
-                    if ui
-                        .selectable_value(&mut self.config.format, format, format.label())
-                        .changed()
-                    {
-                        self.config.left_high = format == I2sFormat::LeftJustified;
-                    }
-                }
-            });
         ui.add(
             egui::DragValue::new(&mut self.config.bits)
                 .range(8..=32)

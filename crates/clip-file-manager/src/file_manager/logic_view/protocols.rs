@@ -1,7 +1,9 @@
 //! Controls and bounded reads for passive bus decoding.
 use super::{JOBS, Task, event_list};
+use crate::file_manager::signal_view::timeline;
 use egui::{Context, Ui};
 use little_clip_core::engineering::{
+    analysis::Clock,
     logic::{Capture, Lane, Trace},
     logic_decode::{self, Event, Kind, SpiConfig},
     logic_preview::Recording,
@@ -17,8 +19,10 @@ pub(in crate::file_manager) const DECODE_EDGES: usize = 8192;
 
 mod i2s;
 mod samples;
+pub(super) mod wiring;
 use i2s::I2sInputs;
 pub(in crate::file_manager) use samples::Pins;
+use wiring::{Pin, Role, Wiring};
 
 pub(in crate::file_manager) trait TraceInput: Send + Sync {
     fn time_bounds(&self, index: usize) -> Option<Range<f64>>;
@@ -88,18 +92,16 @@ impl SpiInputs {
             .flatten()
     }
 
-    fn controls(&mut self, ui: &mut Ui, lanes: &[Lane]) {
-        lane_picker(ui, "spi-clock", "Clock", &mut self.clock, lanes);
-        optional_lane(ui, "spi-mosi", "MOSI", &mut self.data[0], lanes);
-        optional_lane(ui, "spi-miso", "MISO", &mut self.data[1], lanes);
-        optional_lane(ui, "spi-cs", "Select", &mut self.select, lanes);
-        egui::ComboBox::from_id_salt("spi-mode")
-            .selected_text(format!("Mode {}", self.config.mode))
-            .show_ui(ui, |ui| {
-                for mode in 0..4 {
-                    ui.selectable_value(&mut self.config.mode, mode, format!("Mode {mode}"));
-                }
-            });
+    fn controls(&mut self, ui: &mut Ui) {
+        ui.label("Mode");
+        for mode in 0..4 {
+            if ui
+                .add(egui::Button::new(mode.to_string()).selected(self.config.mode == mode))
+                .clicked()
+            {
+                self.config.mode = mode;
+            }
+        }
         ui.add(
             egui::DragValue::new(&mut self.config.bits)
                 .range(1..=32)
@@ -169,11 +171,23 @@ struct Decoded {
     events: Vec<Event>,
 }
 
+pub(in crate::file_manager) enum EventAction {
+    Select(Event),
+    Inspect(Event),
+}
+
+struct Inspection {
+    origin: Range<f64>,
+    reveal: bool,
+}
+
 #[derive(Default)]
 pub(in crate::file_manager) struct Panel {
     decoders: Vec<Decoder>,
     selected: Option<usize>,
     pins: Option<Pins>,
+    // Keep the decode window available while examining individual pulses.
+    inspection: Option<Inspection>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -224,33 +238,23 @@ impl Panel {
             .collect();
         self.selected = state.selected;
         self.pins = pins;
+        self.inspection = None;
         Ok(())
     }
 
     pub fn remap_channels(&mut self, lanes: &[Option<usize>]) {
-        let mapped = |index| lanes.get(index).copied().flatten().unwrap_or(usize::MAX);
+        self.inspection = None;
         for decoder in &mut self.decoders {
-            match decoder.settings.mode {
-                Mode::I2c => {
-                    decoder.settings.clock = mapped(decoder.settings.clock);
-                    decoder.settings.data = mapped(decoder.settings.data);
-                }
-                Mode::Uart => decoder.settings.uart = mapped(decoder.settings.uart),
-                Mode::Pwm => decoder.settings.pwm = mapped(decoder.settings.pwm),
-                Mode::Spi => {
-                    decoder.settings.spi.clock = mapped(decoder.settings.spi.clock);
-                    decoder.settings.spi.select = decoder.settings.spi.select.map(mapped);
-                    decoder.settings.spi.data =
-                        decoder.settings.spi.data.map(|lane| lane.map(mapped));
-                }
-                Mode::I2s => {
-                    decoder.settings.i2s.channels = decoder.settings.i2s.channels.map(mapped)
-                }
+            for pin in &mut decoder.settings.wiring() {
+                pin.remap(lanes);
             }
+            decoder.wiring.close();
+            decoder.lane_count = None;
             decoder.task = None;
             decoder.request = None;
             decoder.result = None;
             decoder.follow = None;
+            decoder.picked = None;
         }
     }
 
@@ -273,23 +277,48 @@ impl Panel {
         self.selected.and_then(|index| self.decoders.get_mut(index))
     }
 
-    pub fn add_menu(&mut self, ui: &mut Ui, lanes: &[Lane]) -> bool {
-        let mut added = false;
-        ui.menu_button("Add decoder", |ui| {
-            for mode in [Mode::Spi, Mode::I2c, Mode::Uart, Mode::I2s, Mode::Pwm] {
-                if ui
-                    .add_enabled(self.decoders.len() < 12, egui::Button::new(mode.label()))
-                    .clicked()
-                {
-                    self.close();
-                    self.decoders.push(Decoder::new(mode, lanes));
-                    self.selected = Some(self.decoders.len() - 1);
-                    added = true;
-                    ui.close();
+    pub fn decoder_buttons(&mut self, ui: &mut Ui, lanes: &[Lane]) -> bool {
+        let added = ui
+            .horizontal_wrapped(|ui| {
+                ui.label("Add decoder");
+                let mut added = None;
+                let enabled = !lanes.is_empty() && self.decoders.len() < 12;
+                for mode in [Mode::Spi, Mode::I2c, Mode::Uart, Mode::I2s, Mode::Pwm] {
+                    if ui
+                        .add_enabled(enabled, egui::Button::new(mode.label()))
+                        .clicked()
+                    {
+                        added = Some(mode);
+                    }
                 }
-            }
-        });
-        added
+                added
+            })
+            .inner;
+        let Some(mode) = added else { return false };
+        self.cancel_wiring();
+        self.close();
+        self.inspection = None;
+        self.decoders.push(Decoder::new(mode, lanes));
+        self.selected = Some(self.decoders.len() - 1);
+        true
+    }
+
+    pub(super) fn wiring_active(&self) -> bool {
+        self.current()
+            .is_some_and(|decoder| decoder.wiring.active())
+    }
+
+    pub(super) fn wire_lane(&mut self, lane: usize) {
+        if let Some(decoder) = self.current_mut() {
+            decoder.wiring.choose(&mut decoder.settings.wiring(), lane);
+            self.inspection = None;
+        }
+    }
+
+    pub(super) fn cancel_wiring(&mut self) {
+        if let Some(decoder) = self.current_mut() {
+            decoder.wiring.close();
+        }
     }
 
     pub fn edges(&self) -> bool {
@@ -322,28 +351,104 @@ impl Panel {
         let mut selected = self.selected;
         let mut remove = false;
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut selected, None, "Edges");
+            if ui
+                .add(egui::Button::new("Edges").selected(selected.is_none()))
+                .clicked()
+            {
+                selected = None;
+            }
             for (index, decoder) in self.decoders.iter().enumerate() {
-                ui.selectable_value(
-                    &mut selected,
-                    Some(index),
-                    format!("{} {}", decoder.settings.mode.label(), index + 1),
-                );
+                let label = format!("{} {}", decoder.settings.mode.label(), index + 1);
+                if ui
+                    .add(egui::Button::new(label).selected(selected == Some(index)))
+                    .clicked()
+                {
+                    selected = Some(index);
+                }
             }
             if selected.is_some() {
                 remove = ui.button("Remove decoder").clicked();
             }
         });
         if self.selected != selected {
+            self.cancel_wiring();
             self.close();
+            self.inspection = None;
             self.selected = selected;
         }
         if remove && let Some(index) = self.selected.take() {
             self.decoders.remove(index);
+            self.inspection = None;
         }
         if let Some(decoder) = self.current_mut() {
+            let previous = decoder.inputs().ok();
             decoder.controls(ui, lanes);
+            if previous != decoder.inputs().ok() {
+                self.inspection = None;
+            }
         }
+    }
+
+    pub fn inspecting(&self) -> bool {
+        self.inspection.is_some()
+    }
+
+    fn inspect(&mut self, event: &Event, visible: &mut Range<f64>, domain: &Range<f64>, step: f64) {
+        let inspection = self.inspection.get_or_insert_with(|| Inspection {
+            origin: visible.clone(),
+            reveal: false,
+        });
+        let origin = &inspection.origin;
+        let padding = ((event.time.end - event.time.start) * 0.18)
+            .max((origin.end - origin.start) * 0.002)
+            .max(2.0 * step);
+        *visible = timeline::fit(
+            domain,
+            event.time.start - padding..event.time.end + padding,
+            step,
+        );
+        inspection.reveal = true;
+    }
+
+    pub fn follow_event(
+        &mut self,
+        action: EventAction,
+        visible: &mut Range<f64>,
+        domain: &Range<f64>,
+        step: f64,
+    ) -> f64 {
+        match action {
+            EventAction::Select(event) => event.time.start,
+            EventAction::Inspect(event) => {
+                self.inspect(&event, visible, domain, step);
+                event.time.start
+            }
+        }
+    }
+
+    pub fn return_controls(&mut self, ui: &mut Ui, visible: &mut Range<f64>) {
+        let Some(inspection) = &mut self.inspection else {
+            return;
+        };
+        let back = ui.button("Back to decoded window");
+        if std::mem::take(&mut inspection.reveal) {
+            back.scroll_to_me(Some(egui::Align::TOP));
+        }
+        if back.clicked() {
+            self.exit_inspection(visible);
+        }
+    }
+
+    pub fn exit_inspection(&mut self, visible: &mut Range<f64>) {
+        if let Some(inspection) = self.inspection.take() {
+            *visible = inspection.origin;
+        }
+    }
+
+    fn decode_window<'a>(&'a self, visible: &'a Range<f64>) -> &'a Range<f64> {
+        self.inspection
+            .as_ref()
+            .map_or(visible, |inspection| &inspection.origin)
     }
 
     pub fn update(
@@ -353,6 +458,7 @@ impl Panel {
         refined: bool,
         recording: &Arc<Recording>,
     ) {
+        let span = self.decode_window(&span).clone();
         if let Some(decoder) = self.current_mut() {
             decoder.update(
                 ctx,
@@ -370,6 +476,7 @@ impl Panel {
         revision: u64,
         source: Arc<dyn TraceInput>,
     ) {
+        let span = self.decode_window(&span).clone();
         if let Some(decoder) = self.current_mut() {
             decoder.update(ctx, span, revision, Source::Materialized(source));
         }
@@ -382,7 +489,8 @@ impl Panel {
     }
 
     pub fn cursor_event(&self, span: &Range<f64>, cursor: Option<f64>) -> Option<&Event> {
-        self.current()?.cursor_event(span, cursor)
+        self.current()?
+            .cursor_event(self.decode_window(span), cursor)
     }
 
     pub fn table(
@@ -391,14 +499,19 @@ impl Panel {
         span: &Range<f64>,
         cursor: Option<f64>,
         selection: Option<&Range<f64>>,
-    ) -> Option<Event> {
+        clock: Clock,
+    ) -> Option<EventAction> {
+        let span = self
+            .inspection
+            .as_ref()
+            .map_or(span, |inspection| &inspection.origin);
         let decoder = self.decoders.get_mut(self.selected?)?;
-        decoder.table(ui, span, cursor, self.pins.as_mut(), selection)
+        decoder.table(ui, span, cursor, self.pins.as_mut(), selection, clock)
     }
 
     pub fn events(&self, span: &Range<f64>) -> &[Event] {
         self.current()
-            .and_then(|decoder| decoder.current(span))
+            .and_then(|decoder| decoder.current(self.decode_window(span)))
             .and_then(|result| result.as_ref().ok())
             .map_or(&[], |output| output.events.as_slice())
     }
@@ -418,12 +531,45 @@ struct DecoderSettings {
     baud: String,
 }
 
+impl DecoderSettings {
+    fn wiring(&mut self) -> Vec<Pin<'_>> {
+        match self.mode {
+            Mode::I2c => vec![
+                Pin::required(Role::Clock, &mut self.clock),
+                Pin::required(Role::Data, &mut self.data),
+            ],
+            Mode::Uart => vec![Pin::required(Role::Data, &mut self.uart)],
+            Mode::Pwm => vec![Pin::required(Role::Signal, &mut self.pwm)],
+            Mode::Spi => {
+                let [mosi, miso] = &mut self.spi.data;
+                vec![
+                    Pin::required(Role::Clock, &mut self.spi.clock),
+                    Pin::optional(Role::Mosi, mosi),
+                    Pin::optional(Role::Miso, miso),
+                    Pin::optional(Role::ChipSelect, &mut self.spi.select),
+                ]
+            }
+            Mode::I2s => {
+                let [clock, select, data] = &mut self.i2s.channels;
+                vec![
+                    Pin::required(Role::Clock, clock),
+                    Pin::required(Role::WordSelect, select),
+                    Pin::required(Role::Data, data),
+                ]
+            }
+        }
+    }
+}
+
 struct Decoder {
     settings: DecoderSettings,
+    wiring: Wiring,
+    lane_count: Option<usize>,
     request: Option<Key>,
     task: Option<Task<Result<Decoded, String>>>,
     result: Option<Result<Decoded, String>>,
     follow: Option<f64>,
+    picked: Option<usize>,
     next_request: f64,
 }
 
@@ -464,10 +610,13 @@ impl Decoder {
     fn from_settings(settings: DecoderSettings) -> Self {
         Self {
             settings,
+            wiring: Wiring::default(),
+            lane_count: None,
             request: None,
             task: None,
             result: None,
             follow: None,
+            picked: None,
             next_request: 0.0,
         }
     }
@@ -496,20 +645,27 @@ impl Decoder {
     }
 
     pub(super) fn controls(&mut self, ui: &mut Ui, lanes: &[Lane]) {
+        self.lane_count = Some(lanes.len());
+        self.wiring.ui(ui, &mut self.settings.wiring(), lanes);
         ui.horizontal_wrapped(|ui| match self.settings.mode {
-            Mode::Spi => self.settings.spi.controls(ui, lanes),
-            Mode::I2s => self.settings.i2s.controls(ui, lanes),
+            Mode::Spi => self.settings.spi.controls(ui),
+            Mode::I2s => self.settings.i2s.controls(ui),
             Mode::Pwm => {
-                lane_picker(ui, "pwm-data", "Signal", &mut self.settings.pwm, lanes);
-                ui.selectable_value(&mut self.settings.pwm_active_high, true, "Active high");
-                ui.selectable_value(&mut self.settings.pwm_active_high, false, "Active low");
+                if ui
+                    .add(egui::Button::new("Active high").selected(self.settings.pwm_active_high))
+                    .clicked()
+                {
+                    self.settings.pwm_active_high = true;
+                }
+                if ui
+                    .add(egui::Button::new("Active low").selected(!self.settings.pwm_active_high))
+                    .clicked()
+                {
+                    self.settings.pwm_active_high = false;
+                }
             }
-            Mode::I2c => {
-                lane_picker(ui, "i2c-scl", "Clock", &mut self.settings.clock, lanes);
-                lane_picker(ui, "i2c-sda", "Data", &mut self.settings.data, lanes);
-            }
+            Mode::I2c => {}
             Mode::Uart => {
-                lane_picker(ui, "uart-data", "Data", &mut self.settings.uart, lanes);
                 ui.label("Baud");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.settings.baud)
@@ -521,9 +677,18 @@ impl Decoder {
                 ui.weak("8N1");
             }
         });
+        if let Err(message) = self.inputs() {
+            ui.colored_label(ui.visuals().error_fg_color, message);
+        }
     }
 
     fn inputs(&self) -> Result<Inputs, &'static str> {
+        if self
+            .lane_count
+            .is_some_and(|count| self.channels().iter().any(|lane| *lane >= count))
+        {
+            return Err("Assign a channel to each unavailable input.");
+        }
         match self.settings.mode {
             Mode::Spi => self.settings.spi.validate(),
             Mode::I2s => self.settings.i2s.validate(),
@@ -593,6 +758,7 @@ impl Decoder {
         self.task = None;
         self.request = None;
         self.result = None;
+        self.picked = None;
         let now = ctx.input(|input| input.time);
         if now < self.next_request {
             ctx.request_repaint_after(Duration::from_secs_f64(self.next_request - now));
@@ -621,7 +787,17 @@ impl Decoder {
 
     pub(super) fn cursor_event(&self, span: &Range<f64>, cursor: Option<f64>) -> Option<&Event> {
         let events = &self.current(span)?.as_ref().ok()?.events;
-        active_event(events, cursor).map(|index| &events[index])
+        self.event_index(events, cursor).map(|index| &events[index])
+    }
+
+    fn event_index(&self, events: &[Event], cursor: Option<f64>) -> Option<usize> {
+        self.picked
+            .filter(|&index| {
+                events
+                    .get(index)
+                    .is_some_and(|event| cursor == Some(event.time.start))
+            })
+            .or_else(|| active_event(events, cursor))
     }
 
     pub(super) fn table(
@@ -631,19 +807,19 @@ impl Decoder {
         cursor: Option<f64>,
         pins: Option<&mut Pins>,
         selection: Option<&Range<f64>>,
-    ) -> Option<Event> {
-        if let Err(message) = self.inputs() {
-            ui.weak(message);
-            return None;
-        }
+        clock: Clock,
+    ) -> Option<EventAction> {
+        self.inputs().ok()?;
         // Move the scroll-follow state out while the decoded result is borrowed.
         let mut followed = self.follow;
         let mut show_samples = self.settings.show_samples;
+        let mut clicked = None;
         let mut destination = None;
         match self.current(span) {
             Some(Ok(output)) => {
                 let events = &output.events;
-                decoded_controls(
+                let selected = self.event_index(events, cursor);
+                let inspect = decoded_controls(
                     ui,
                     events,
                     self.settings.mode,
@@ -651,6 +827,7 @@ impl Decoder {
                     pins,
                     selection.unwrap_or(span),
                     self.request.as_ref(),
+                    selected,
                 );
                 coverage(ui, output, span);
                 let plot = enabled_plot(self.settings.mode);
@@ -661,8 +838,8 @@ impl Decoder {
                     None
                 };
                 let cursor = picked.map(|index| events[index].time.start).or(cursor);
-                let selected = picked.or_else(|| active_event(events, cursor));
-                destination = event_list(
+                let selected = picked.or(selected);
+                clicked = event_list(
                     ui,
                     ("logic-protocol-rows", "Decoded event"),
                     cursor,
@@ -672,13 +849,15 @@ impl Decoder {
                     |index| {
                         let event = &events[index];
                         (
-                            display_value(event.time.start, "s"),
+                            display_value(clock.to_workspace(event.time.start), "s"),
                             event_label(event.kind),
                         )
                     },
                 )
-                .or(picked)
-                .map(|index| events[index].clone());
+                .or(picked);
+                destination = clicked
+                    .map(|index| EventAction::Select(events[index].clone()))
+                    .or(inspect.map(EventAction::Inspect));
             }
             Some(Err(error)) => {
                 ui.colored_label(ui.visuals().error_fg_color, error);
@@ -686,6 +865,9 @@ impl Decoder {
             None => {
                 ui.weak("Decoding the visible window…");
             }
+        }
+        if let Some(index) = clicked {
+            self.picked = Some(index);
         }
         self.follow = followed;
         self.settings.show_samples = show_samples;
@@ -701,11 +883,15 @@ fn decoded_controls(
     pins: Option<&mut Pins>,
     selection: &Range<f64>,
     request: Option<&Key>,
-) {
+    selected: Option<usize>,
+) -> Option<Event> {
     if events.is_empty() {
-        return;
+        return None;
     }
     ui.horizontal_wrapped(|ui| {
+        let inspect = ui
+            .add_enabled(selected.is_some(), egui::Button::new("Show pulses"))
+            .clicked();
         if ui.button("Copy decoded").clicked() {
             use std::fmt::Write;
             let mut text = String::from("Start (s)\tEnd (s)\tEvent\n");
@@ -734,7 +920,12 @@ fn decoded_controls(
                 pins.controls(ui, plot, events, &recipe);
             }
         }
-    });
+        inspect
+            .then_some(selected)
+            .flatten()
+            .map(|index| events[index].clone())
+    })
+    .inner
 }
 
 fn enabled_plot(mode: Mode) -> Option<samples::Measure> {
@@ -844,34 +1035,6 @@ fn lane_window(
     Ok(span)
 }
 
-fn lane_picker(ui: &mut Ui, id: &str, label: &str, index: &mut usize, lanes: &[Lane]) {
-    ui.label(label);
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(lanes.get(*index).map_or("Unavailable", |lane| &lane.name))
-        .show_ui(ui, |ui| {
-            for (lane, signal) in lanes.iter().enumerate() {
-                ui.selectable_value(index, lane, &signal.name);
-            }
-        });
-}
-
-fn optional_lane(ui: &mut Ui, id: &str, label: &str, index: &mut Option<usize>, lanes: &[Lane]) {
-    ui.label(label);
-    let title = index.map_or("None", |index| {
-        lanes
-            .get(index)
-            .map_or("Unavailable", |lane| lane.name.as_str())
-    });
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(title)
-        .show_ui(ui, |ui| {
-            ui.selectable_value(index, None, "None");
-            for (lane, signal) in lanes.iter().enumerate() {
-                ui.selectable_value(index, Some(lane), &signal.name);
-            }
-        });
-}
-
 fn named_lane(lanes: &[Lane], aliases: &[&str]) -> Option<usize> {
     lanes.iter().position(|lane| {
         let label = lane.name.rsplit('.').next().unwrap_or_default();
@@ -977,12 +1140,86 @@ mod tests {
             decoders: vec![decoder],
             selected: Some(0),
             pins: None,
+            ..Default::default()
         };
         panel.remap_channels(&[None, Some(0), Some(1)]);
         let spi = panel.current().unwrap().settings.spi;
         assert_eq!(spi.clock, 0);
         assert_eq!(spi.select, Some(usize::MAX));
         assert_eq!(spi.data, [Some(1), None]);
+    }
+
+    #[test]
+    fn pulse_inspection_keeps_the_decoded_window_and_exact_event_selection() {
+        let original = 0.0..0.025;
+        let event = Event {
+            time: 0.012..0.01209,
+            kind: Kind::I2cAddress {
+                address: 0x68,
+                ten_bit: false,
+                read: false,
+                ack: true,
+            },
+        };
+        let coincident = Event {
+            time: event.time.clone(),
+            kind: Kind::I2cStart { repeated: false },
+        };
+        let mut decoder = Decoder::new(Mode::I2c, &[]);
+        decoder.settings.data = 1;
+        decoder.picked = Some(0);
+        decoder.request = Some(Key {
+            span: original.clone(),
+            inputs: decoder.inputs().unwrap(),
+            source_revision: 1,
+        });
+        decoder.result = Some(Ok(Decoded {
+            window: original.clone(),
+            inspected_until: original.end,
+            events: vec![event.clone(), coincident],
+        }));
+        let mut panel = Panel {
+            decoders: vec![decoder],
+            selected: Some(0),
+            ..Default::default()
+        };
+
+        let mut visible = original.clone();
+        panel.inspect(&event, &mut visible, &original, 1e-6);
+        assert!(visible.start < event.time.start && visible.end > event.time.end);
+        assert!(visible.end - visible.start < 0.001);
+        assert_eq!(panel.events(&visible).len(), 2);
+        assert_eq!(
+            panel
+                .cursor_event(&visible, Some(event.time.start))
+                .unwrap()
+                .kind,
+            event.kind
+        );
+        panel.exit_inspection(&mut visible);
+        assert_eq!(visible, original);
+        assert!(!panel.inspecting());
+    }
+
+    #[test]
+    fn unavailable_decoder_inputs_can_be_rewired_before_decoding() {
+        let mut decoder = Decoder::new(Mode::I2c, &[]);
+        decoder.lane_count = Some(3);
+        decoder.settings.data = usize::MAX;
+        assert_eq!(
+            decoder.inputs().err(),
+            Some("Assign a channel to each unavailable input.")
+        );
+        decoder.settings.data = 0;
+        assert_eq!(
+            decoder.inputs().err(),
+            Some("Choose different clock and data channels.")
+        );
+        decoder.settings.data = 2;
+        assert!(matches!(
+            decoder.inputs(),
+            Ok(Inputs::I2c { clock: 0, data: 2 })
+        ));
     }
 
     #[test]

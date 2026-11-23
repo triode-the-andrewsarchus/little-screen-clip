@@ -254,6 +254,7 @@ impl Derived {
             ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover())
                 .0
         });
+        self.decoders.return_controls(ui, span);
         let (mut plots, action) = self.equation_plots(ui, inputs, frame.as_deref());
         if let Some(action) = action {
             if self.apply(action, inputs, span) {
@@ -438,7 +439,7 @@ impl Derived {
                 plots.iter().map(|plot| plot.rect),
                 span,
             );
-            self.decoders.table(ui, span, pointed);
+            self.decoders.table(ui, span, domain, pointed, frame.step);
         }
         pointed.or(self.decoders.cursor())
     }

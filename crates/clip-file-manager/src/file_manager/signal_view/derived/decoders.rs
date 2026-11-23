@@ -44,20 +44,21 @@ impl Decoders {
         if frame.digital.is_empty() {
             return;
         }
-        self.panel.add_menu(ui, &frame.digital);
+        self.panel.decoder_buttons(ui, &frame.digital);
+        self.panel.controls(ui, &frame.digital);
         if self.panel.edges() {
             return;
         }
-        self.panel.controls(ui, &frame.digital);
-        if self
-            .frame
-            .as_ref()
-            .is_none_or(|old| !Arc::ptr_eq(old, frame))
+        if !self.panel.inspecting()
+            && self
+                .frame
+                .as_ref()
+                .is_none_or(|old| !Arc::ptr_eq(old, frame))
         {
             self.frame = Some(frame.clone());
             self.revision = self.revision.wrapping_add(1);
         }
-        let source: Arc<dyn TraceInput> = frame.clone();
+        let source: Arc<dyn TraceInput> = self.frame.as_ref().unwrap_or(frame).clone();
         self.panel
             .update_materialized(ui.ctx(), span.clone(), self.revision, source);
     }
@@ -99,12 +100,26 @@ impl Decoders {
         self.cursor
     }
 
-    pub(super) fn table(&mut self, ui: &mut Ui, span: &Range<f64>, probe: Option<f64>) {
+    pub(super) fn return_controls(&mut self, ui: &mut Ui, span: &mut Range<f64>) {
+        self.panel.return_controls(ui, span);
+    }
+
+    pub(super) fn table(
+        &mut self,
+        ui: &mut Ui,
+        span: &mut Range<f64>,
+        domain: &Range<f64>,
+        probe: Option<f64>,
+        step: f64,
+    ) {
         if !self.active() {
             return;
         }
-        if let Some(event) = self.panel.table(ui, span, probe.or(self.cursor), None) {
-            self.cursor = Some(event.time.start);
+        if let Some(action) =
+            self.panel
+                .table(ui, span, probe.or(self.cursor), None, Default::default())
+        {
+            self.cursor = Some(self.panel.follow_event(action, span, domain, step));
             ui.ctx().request_repaint();
         }
     }

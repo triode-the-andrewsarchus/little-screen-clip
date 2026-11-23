@@ -97,6 +97,41 @@ fn y_at(rect: Rect, level: Option<Level>) -> f32 {
     }
 }
 
+pub(super) fn wire_label(
+    ui: &egui::Ui,
+    painter: &Painter,
+    lane: Rect,
+    name: &str,
+    index: usize,
+) -> bool {
+    let half = (lane.height() * 0.5 - 2.0).clamp(3.0, 12.0);
+    let rect = Rect::from_min_max(
+        pos2(lane.left() - 74.0, lane.center().y - half),
+        pos2(lane.left() - 4.0, lane.center().y + half),
+    );
+    let response = ui.interact(
+        rect,
+        ui.scope_id().with(("wire-logic-lane", index)),
+        egui::Sense::click(),
+    );
+    let style = ui.style().interact(&response);
+    painter.rect(
+        rect,
+        2.0,
+        style.weak_bg_fill,
+        style.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    painter.with_clip_rect(rect.shrink(2.0)).text(
+        rect.right_center() - egui::vec2(4.0, 0.0),
+        egui::Align2::RIGHT_CENTER,
+        name.rsplit('.').next().unwrap_or(name),
+        egui::FontId::monospace(11.0),
+        style.text_color(),
+    );
+    response.on_hover_text(format!("Choose {name}")).clicked()
+}
+
 pub(in crate::file_manager) fn annotations(
     painter: &Painter,
     rect: Rect,
@@ -107,7 +142,10 @@ pub(in crate::file_manager) fn annotations(
 ) {
     let painter = painter.with_clip_rect(rect);
     let mut represented_until = rect.left() - 2.0;
-    for event in events {
+    for event in events.iter().filter(|event| {
+        event.time.start < span.end
+            && (event.time.end > span.start || event.time.start == span.start)
+    }) {
         let left = x_at(rect, span, event.time.start).max(rect.left());
         let right = x_at(rect, span, event.time.end)
             .max(left + 2.0)

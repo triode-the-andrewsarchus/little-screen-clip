@@ -104,11 +104,21 @@ The sample scan is capped at 65,536 readings and the edge scan at 8,192 transiti
 
 ## 11. Add and wire logic decoders in place
 
-- [ ] Replace the Add decoder popup with visible protocol actions in the recording and equation workspaces.
-- [ ] Put the signal assignments where a user can see the participating lanes and inspect the effect of a wiring change. Keep the current assignments and invalid combinations legible in a narrow window.
-- [ ] Walk from an undecoded SPI or I²C capture to usable annotations, then follow a surprising decoded value to its source pulses. Confirm that saved decoder settings still reopen.
+- [x] Replace the Add decoder popup with visible protocol actions in the recording and equation workspaces.
+- [x] Put the signal assignments where a user can see the participating lanes and inspect the effect of a wiring change. Keep the current assignments and invalid combinations legible in a narrow window.
+- [x] Walk from an undecoded SPI or I²C capture to usable annotations, then follow a surprising decoded value to its source pulses. Confirm that saved decoder settings still reopen.
 
-A multi-recording workspace uses vertical space to show timing relationships. Put the five protocol actions together near the decoder row so adding a decoder uses the same space as editing it. Present signal assignments inline. For a capture with many lanes, let the user choose from the named lane list with the current assignment in view.
+The five supported protocols have direct add buttons above the traces. Each assignment shows its current signal, and the matching trace labels become targets during assignment. The same inline picker serves the active channel and the decoder roles. Large channel lists can be searched. SPI modes and I²S formats have direct buttons. Invalid assignments report the error beside the wiring while the user can still see the signals. The workflow keeps the existing name-based assignment and waveform annotations described in the PulseView manual. [PulseView user manual](https://sigrok.org/doc/pulseview/unstable/manual.html#_basic_operation)
+
+In the two-transfer fixture, assigning SDA to the clock triggered the duplicate-channel error beside the controls. Selecting Bench.SDA again restored the decoded addresses 0x68 and 0x50. Clicking 0x68 at 109 µs and using Show pulses zoomed from 25 ms to about 190 µs and highlighted the address on SCL and SDA. Back to decoded window kept the selected event. The same action highlighted the pulses after decoding two digital equation lanes, and the recorded decoder reopened with its assignments and cursor at 800 × 620 in the light theme.
+
+## 12. Make packet filters visible in the capture
+
+- [ ] Surface protocol choices and the criteria currently applied to the packet table. Preserve editing of the Wireshark-style filter expression and report whether an edit has been applied.
+- [ ] Let a result reveal its source packet and related conversation while retaining the current query and selected time range.
+- [ ] Verify adding a criterion from the packet inspector, tightening it from the overview, and recovering the prior set and selection. Check narrow windows and a bounded scan.
+
+The packet viewer already links its diagram, field tree, and bytes. Use those links as entry points to the query, and put the applied protocol and time restrictions next to the count they affect.
 
 ## Review after each addition
 

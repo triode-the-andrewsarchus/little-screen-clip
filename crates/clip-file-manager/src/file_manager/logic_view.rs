@@ -22,6 +22,7 @@ use little_clip_core::{
         waveforms::display_value,
     },
 };
+use protocols::wiring::{Pin, Role, Wiring};
 use std::{
     io::Write,
     ops::Range,
@@ -41,6 +42,7 @@ pub(super) struct Viewer {
     overview: Overview,
     span: Range<f64>,
     active: usize,
+    channel_picker: Wiring,
     selected: Option<Range<f64>>,
     cursor: Option<f64>,
     frame: Option<Frame>,
@@ -114,6 +116,7 @@ impl Viewer {
         self.protocols
             .restore_session(state.protocols, Some(&self.recording), cancel)?;
         self.active = state.active;
+        self.channel_picker.close();
         self.selected = state.selected.filter(|range| !range.is_empty());
         self.cursor = state.cursor;
         self.show_transitions = state.show_transitions;
@@ -130,6 +133,7 @@ impl Viewer {
             overview,
             recording: Arc::new(recording),
             active: 0,
+            channel_picker: Wiring::default(),
             selected: None,
             cursor: None,
             frame: None,
@@ -183,10 +187,14 @@ impl Viewer {
     }
 
     pub(super) fn measurement_channel(&self) -> (usize, Option<bool>, bool) {
-        let (lane, polarity) = self.protocols.active_pwm().map_or_else(
-            || (self.focused_lane(), None),
-            |(lane, active_high)| (lane, Some(active_high)),
-        );
+        let (lane, polarity) = self
+            .protocols
+            .active_pwm()
+            .filter(|(lane, _)| *lane < self.overview.lanes.len())
+            .map_or_else(
+                || (self.focused_lane(), None),
+                |(lane, active_high)| (lane, Some(active_high)),
+            );
         (lane, polarity, self.refined)
     }
 
@@ -204,9 +212,21 @@ impl Viewer {
         copies: &mut Copies,
         link: Option<&Link>,
     ) -> Interaction {
+        if link.is_none() {
+            return egui::ScrollArea::vertical()
+                .id_salt("logic-content")
+                .auto_shrink([false, false])
+                .show(ui, |ui| self.capture_ui(ui, copies, None))
+                .inner;
+        }
+        self.capture_ui(ui, copies, link)
+    }
+
+    fn capture_ui(&mut self, ui: &mut Ui, copies: &mut Copies, link: Option<&Link>) -> Interaction {
         self.poll(ui.ctx());
         self.refine(ui.ctx(), link.is_none());
         let share = self.toolbar(ui, copies, link);
+        self.channel_choices(ui);
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
             ui.weak(message);
         }
@@ -217,26 +237,46 @@ impl Viewer {
             Link::clock(link),
         );
         if self.frequency.visible && self.frequency.spectra.origin().is_none() {
+            self.protocols.cancel_wiring();
+            self.protocols.exit_inspection(&mut self.span);
             self.protocols.close();
             self.frequency(ui, link);
             return Interaction { probe: None, share };
         }
+        if self.protocols.decoder_buttons(ui, &self.overview.lanes) {
+            self.channel_picker.close();
+            self.show_transitions = true;
+        }
         if self.show_transitions {
             self.protocols.controls(ui, &self.overview.lanes);
+            self.protocols.return_controls(ui, &mut self.span);
+        } else {
+            self.protocols.cancel_wiring();
+            self.protocols.exit_inspection(&mut self.span);
         }
         let reserved = if self.show_transitions { 238.0 } else { 39.0 };
-        let height = (ui.available_height() - reserved).max(75.0);
+        let minimum = (44.0 + 24.0 * self.visible_lanes().len() as f32).max(75.0);
+        let height = (ui.available_height() - reserved).max(minimum);
         let probe = self.waveforms(ui, height, link);
         self.overview(ui);
         self.request_window(ui.ctx());
         if self.show_transitions && !self.protocols.edges() {
             self.protocols
                 .update(ui.ctx(), self.span.clone(), self.refined, &self.recording);
-            if let Some(event) =
-                self.protocols
-                    .table(ui, &self.span, self.cursor, self.selected.as_ref())
-            {
-                self.cursor = Some(event.time.start);
+            if let Some(action) = self.protocols.table(
+                ui,
+                &self.span,
+                self.cursor,
+                self.selected.as_ref(),
+                Link::clock(link),
+            ) {
+                let domain = link.map_or(&self.overview.span, |link| &link.domain);
+                let step = self.interval();
+                self.cursor =
+                    Some(
+                        self.protocols
+                            .follow_event(action, &mut self.span, domain, step),
+                    );
                 ui.ctx().request_repaint();
             }
         } else {
@@ -263,28 +303,29 @@ impl Viewer {
                 "s",
             ));
             if self.frequency.visible || !self.show_transitions || self.protocols.edges() {
-                egui::ComboBox::from_id_salt("logic_active_lane")
-                    .selected_text(&self.overview.lanes[self.active].name)
-                    .show_ui(ui, |ui| {
-                        for (index, lane) in self.overview.lanes.iter().enumerate() {
-                            if ui
-                                .selectable_value(&mut self.active, index, &lane.name)
-                                .changed()
-                            {
-                                self.frequency.spectra.clear_result();
-                            }
-                        }
-                    });
+                self.channel_picker.button(
+                    ui,
+                    &Pin::required(Role::Channel, &mut self.active),
+                    &self.overview.lanes,
+                );
+            } else {
+                self.channel_picker.close();
             }
             if ui.button("Fit").clicked() {
                 self.span = self.overview.span.clone();
             }
-            if self.frequency.spectra.origin().is_none() {
-                ui.toggle_value(&mut self.frequency.visible, "Spectrum");
+            if self.frequency.spectra.origin().is_none()
+                && ui
+                    .add(egui::Button::new("Spectrum").selected(self.frequency.visible))
+                    .clicked()
+            {
+                self.frequency.visible = !self.frequency.visible;
             }
-            ui.toggle_value(&mut self.show_transitions, "Transitions");
-            if self.protocols.add_menu(ui, &self.overview.lanes) {
-                self.show_transitions = true;
+            if ui
+                .add(egui::Button::new("Transitions").selected(self.show_transitions))
+                .clicked()
+            {
+                self.show_transitions = !self.show_transitions;
             }
             if !self.refined {
                 ui.weak("Finding capture extent…");
@@ -317,11 +358,36 @@ impl Viewer {
         .inner
     }
 
+    fn channel_choices(&mut self, ui: &mut Ui) {
+        let previous = self.active;
+        self.channel_picker.choices(
+            ui,
+            &mut [Pin::required(Role::Channel, &mut self.active)],
+            &self.overview.lanes,
+        );
+        if previous != self.active {
+            self.frequency.spectra.clear_result();
+        }
+    }
+
+    fn pick_plotted_lane(&mut self, lane: usize) {
+        if self.channel_picker.active() {
+            self.channel_picker
+                .choose(&mut [Pin::required(Role::Channel, &mut self.active)], lane);
+            self.frequency.spectra.clear_result();
+        } else {
+            self.protocols.wire_lane(lane);
+        }
+    }
+
     fn visible_lanes(&self) -> Vec<usize> {
         if self.show_transitions
-            && let Some(channels) = self.protocols.channels()
+            && let Some(mut channels) = self.protocols.channels()
         {
-            return channels;
+            channels.retain(|lane| *lane < self.overview.lanes.len());
+            if !channels.is_empty() {
+                return channels;
+            }
         }
         let first = self.active / LANES_PER_PAGE * LANES_PER_PAGE;
         (first..(first + LANES_PER_PAGE).min(self.overview.lanes.len())).collect()
@@ -329,7 +395,10 @@ impl Viewer {
 
     fn focused_lane(&self) -> usize {
         if self.show_transitions
-            && let Some(lane) = self.protocols.data_lane()
+            && let Some(lane) = self
+                .protocols
+                .data_lane()
+                .filter(|lane| *lane < self.overview.lanes.len())
         {
             return lane;
         }
@@ -342,9 +411,7 @@ impl Viewer {
         let annotations = self.show_transitions && !self.protocols.edges();
         let top = if annotations { 25.0 } else { 3.0 };
         let rect = Rect::from_min_max(outer.min + vec2(78.0, top), outer.max - vec2(9.0, 18.0));
-        if let Some(span) =
-            timeline::navigate(ui.ctx(), rect, &response, &self.span, link.is_some())
-        {
+        if let Some(span) = timeline::navigate(ui.ctx(), rect, &response, &self.span, true) {
             let domain = link.map_or(&self.overview.span, |link| &link.domain);
             self.span = timeline::fit(domain, span, self.interval());
         }
@@ -374,7 +441,7 @@ impl Viewer {
         let axis = Link::clock(link).workspace_range(&self.span);
         timing::axes(&painter, rect, &axis, ink);
         let clipped = painter.with_clip_rect(rect);
-        self.draw_channels(&painter, &clipped, rect, ink);
+        self.draw_channels(ui, &painter, &clipped, rect, ink);
         super::signal_view::frequency_plot::paint_origin(
             ui,
             &clipped,
@@ -430,7 +497,8 @@ impl Viewer {
     }
 
     fn draw_channels(
-        &self,
+        &mut self,
+        ui: &Ui,
         painter: &egui::Painter,
         clipped: &egui::Painter,
         rect: Rect,
@@ -444,6 +512,8 @@ impl Viewer {
                 && frame.key.span.end >= self.span.end
         });
         let count = visible.len();
+        let mut wired = None;
+        let picking = self.protocols.wiring_active() || self.channel_picker.active();
         for (offset, index) in visible.into_iter().enumerate() {
             let lane = timing::lane(rect, offset, count);
             let color = if selected == index {
@@ -451,13 +521,20 @@ impl Viewer {
             } else {
                 ink
             };
-            painter.text(
-                pos2(lane.left() - 5.0, lane.center().y),
-                egui::Align2::RIGHT_CENTER,
-                &self.overview.lanes[index].name,
-                egui::FontId::monospace(11.0),
-                color,
-            );
+            let name = &self.overview.lanes[index].name;
+            if picking {
+                if plot::wire_label(ui, painter, lane, name, index) {
+                    wired = Some(index);
+                }
+            } else {
+                painter.text(
+                    pos2(lane.left() - 5.0, lane.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    name,
+                    egui::FontId::monospace(11.0),
+                    color,
+                );
+            }
             clipped.hline(
                 lane.x_range(),
                 lane.bottom(),
@@ -478,6 +555,10 @@ impl Viewer {
                     }
                 }
             }
+        }
+        if let Some(lane) = wired {
+            self.pick_plotted_lane(lane);
+            ui.ctx().request_repaint();
         }
     }
 
@@ -715,10 +796,14 @@ fn event_list(
                 let (time, value) = values(index);
                 row.set_selected(selected == Some(index));
                 row.col(|ui| {
-                    ui.monospace(time);
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(time).monospace()).selectable(false),
+                    );
                 });
                 row.col(|ui| {
-                    ui.monospace(value);
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(value).monospace()).selectable(false),
+                    );
                 });
                 if row.response().clicked() {
                     clicked = Some(index);
