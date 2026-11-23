@@ -9,6 +9,7 @@ mod rf_sweep;
 mod rich_media;
 mod splat;
 mod structured;
+mod tags;
 mod text;
 
 use crate::file_preview::Preview;
@@ -528,6 +529,10 @@ impl ScreenRenderer {
             }
             Some(Preview::Pulses(capture)) => {
                 self.draw_pulse_signals(pixmap, capture, [rx, ry, rw, rh]);
+                true
+            }
+            Some(Preview::Tags(tags)) => {
+                self.draw_tags_card(pixmap, tags, [rx, ry, rw, rh]);
                 true
             }
             Some(Preview::Midi(score)) => {

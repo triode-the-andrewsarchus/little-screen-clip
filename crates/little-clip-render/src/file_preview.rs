@@ -39,6 +39,7 @@ pub(crate) enum Preview {
     Packets(little_clip_core::engineering::packets::Summary),
     Can(little_clip_core::engineering::can::Summary),
     Pulses(little_clip_core::engineering::pulses::Capture),
+    Tags(little_clip_core::engineering::tags::Document),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -59,6 +60,7 @@ enum Kind {
     Packets,
     Can,
     Pulses,
+    Tags,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -199,6 +201,7 @@ impl crate::ScreenRenderer {
             Some(Format::PacketCapture) => return load(path, Kind::Packets, extension),
             Some(Format::CanCapture) => return load(path, Kind::Can, extension),
             Some(Format::PulseSignals) => return load(path, Kind::Pulses, extension),
+            Some(Format::TagCapture | Format::OneWire) => return load(path, Kind::Tags, extension),
             _ => {}
         }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
@@ -388,6 +391,14 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             little_clip_core::engineering::pulses::Capture::preview(path, &AtomicBool::new(false))
                 .ok()
                 .map(Preview::Pulses)
+        }
+        Kind::Tags => {
+            use little_clip_core::{engineering::tags, file_source::ReadCheck};
+            let cancel = AtomicBool::new(false);
+            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
+            let tags = tags::preview(path, std::io::BufReader::new(&file), &cancel).ok()?;
+            source.check_file(&file).ok()?;
+            Some(Preview::Tags(tags))
         }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);

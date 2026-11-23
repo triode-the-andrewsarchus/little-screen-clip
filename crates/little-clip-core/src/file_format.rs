@@ -32,6 +32,8 @@ pub enum Format {
     PacketCapture,
     CanCapture,
     PulseSignals,
+    TagCapture,
+    OneWire,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -74,6 +76,7 @@ impl Format {
 /// Whether an extension requires positive content evidence to override routing.
 pub fn ambiguous_engineering_path(path: &Path) -> bool {
     packet_probe_path(path)
+        || crate::engineering::tags::is_candidate_path(path)
         || path.extension().is_some_and(|extension| {
             [
                 "csv", "bin", "ts", "dsl", "trace", "asc", "blf", "trc", "log", "candump", "sub",
@@ -94,7 +97,7 @@ fn packet_probe_path(path: &Path) -> bool {
 /// validate its own pinned input, including any format-specific offsets.
 pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format> {
     use crate::{
-        engineering::{can, logic, packets, pulses, scope, touchstone},
+        engineering::{can, logic, packets, pulses, scope, tags, touchstone},
         file_source::ReadCheck,
     };
 
@@ -103,12 +106,15 @@ pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format>
     }
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     let packet = packet_probe_path(path);
+    let tag = tags::is_candidate_path(path);
     let can = matches!(
         extension.as_str(),
         "trace" | "asc" | "blf" | "trc" | "log" | "candump"
     );
     let bound = if packet || extension == "ts" {
         64 * 1024
+    } else if tag {
+        32 * 1024
     } else if can {
         can::HEADER_BYTES
     } else {
@@ -124,7 +130,15 @@ pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format>
     }
     let format = match extension.as_str() {
         _ if packet => packets::recognizes(&bytes, path).then_some(Format::PacketCapture),
-        _ if can => can::identify(&bytes).map(|_| Format::CanCapture),
+        _ if can && can::identify(&bytes).is_some() => Some(Format::CanCapture),
+        _ if tag => {
+            tags::recognizes_with_length(&bytes, path, length).then_some(if extension == "ibtn" {
+                Format::OneWire
+            } else {
+                Format::TagCapture
+            })
+        }
+        _ if can => None,
         "ts" => touchstone::recognizes(&bytes, path).then_some(Format::Touchstone),
         "sub" => matches!(
             pulses::identify(&bytes),

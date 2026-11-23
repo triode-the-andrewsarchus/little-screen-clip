@@ -60,6 +60,7 @@ mod spreadsheet_strip;
 mod subtitle_strip;
 pub(crate) mod system;
 mod system_route;
+mod tags_view;
 mod text_editor;
 mod text_strip;
 mod touchstone_view;
@@ -138,6 +139,10 @@ pub(super) enum DocumentPosition {
     ScopeSamples {
         first: u64,
         end: u64,
+        revision: u64,
+    },
+    TagRecord {
+        ordinal: u64,
         revision: u64,
     },
     PulseSignal {

@@ -59,6 +59,7 @@ enum Loaded {
     PacketCapture(Box<super::packets_view::Viewer>),
     CanCapture(Box<super::can_view::Viewer>),
     PulseSignals(Box<super::pulse_view::Viewer>),
+    Tags(Box<super::tags_view::Viewer>),
     Video(super::media::VideoMetadata),
     VideoAudio(video_audio::Prepared),
     External,
@@ -92,6 +93,7 @@ enum ViewerSession {
     PacketCapture(Box<super::packets_view::Viewer>),
     CanCapture(Box<super::can_view::Viewer>),
     PulseSignals(Box<super::pulse_view::Viewer>),
+    Tags(Box<super::tags_view::Viewer>),
     Video(video::Video),
 }
 struct Loading {
@@ -436,6 +438,10 @@ impl Viewers {
                 Some(ViewerSession::PulseSignals(state)),
                 Some(super::DocumentPosition::PulseSignal { ordinal, .. }),
             ) => state.focus_signal(ordinal),
+            (
+                Some(ViewerSession::Tags(state)),
+                Some(super::DocumentPosition::TagRecord { ordinal, .. }),
+            ) => state.focus_record(ordinal),
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::SubtitleCue(cue))) => {
                 state.preview.select_subtitle(cue)
             }
@@ -480,6 +486,7 @@ impl Viewers {
                 | ViewerSession::PacketCapture(_)
                 | ViewerSession::CanCapture(_)
                 | ViewerSession::PulseSignals(_)
+                | ViewerSession::Tags(_)
                 | ViewerSession::Sheet(_),
             )
             | None => {}
@@ -794,7 +801,7 @@ fn load_file_session(
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
     use super::DocumentPosition::{
-        ArchiveMember, CanFrame, CapturedPacket, LogicRegion, PulseSignal, ScopeSamples,
+        ArchiveMember, CanFrame, CapturedPacket, LogicRegion, PulseSignal, ScopeSamples, TagRecord,
         TouchstoneBand, VideoAudioRange, VideoAudioTrack,
     };
     let revision = match position {
@@ -806,7 +813,8 @@ fn load_file_session(
             | LogicRegion { revision, .. }
             | CapturedPacket { revision, .. }
             | CanFrame { revision, .. }
-            | PulseSignal { revision, .. },
+            | PulseSignal { revision, .. }
+            | TagRecord { revision, .. },
         ) => Some(revision),
         _ => None,
     };
@@ -914,6 +922,11 @@ fn load(
         Kind::Document(Format::PulseSignals) => super::pulse_view::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::PulseSignals),
+        Kind::Document(Format::TagCapture | Format::OneWire) => {
+            super::tags_view::Viewer::load(path, cancelled)
+                .map(Box::new)
+                .map(Loaded::Tags)
+        }
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
@@ -1041,6 +1054,10 @@ fn session(
             ViewerSession::CanCapture(viewer)
         }
         Loaded::PulseSignals(viewer) => ViewerSession::PulseSignals(viewer),
+        Loaded::Tags(mut viewer) => {
+            viewer.set_check(check);
+            ViewerSession::Tags(viewer)
+        }
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
@@ -1147,6 +1164,7 @@ fn render(
         ViewerSession::PacketCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::CanCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::PulseSignals(state) => state.ui(ui, close, palette),
+        ViewerSession::Tags(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Video(state) => state.ui(ui, close, palette, copies),
     }
 }

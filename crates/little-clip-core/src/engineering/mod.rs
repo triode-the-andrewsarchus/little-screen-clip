@@ -8,5 +8,6 @@ pub mod logic_preview;
 pub mod packets;
 pub mod pulses;
 pub mod scope;
+pub mod tags;
 pub mod touchstone;
 pub mod waveforms;
