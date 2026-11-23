@@ -3,6 +3,7 @@
 mod blf;
 pub mod dbc;
 mod index;
+pub mod series;
 #[cfg(test)]
 mod tests;
 mod text;

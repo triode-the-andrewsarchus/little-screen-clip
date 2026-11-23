@@ -212,15 +212,51 @@ pub(super) fn frames(
     limit: usize,
     cancel: &AtomicBool,
 ) -> Result<Vec<Frame>, String> {
-    valid_index(capture, index)?;
-    if limit > MAX_DETAIL_ROWS || window.start > window.end {
+    if limit > MAX_DETAIL_ROWS {
         return Err("Invalid CAN frame page request".into());
     }
-    if limit == 0 || window.is_empty() {
-        return Ok(Vec::new());
+    if limit == 0 {
+        valid_index(capture, index)?;
+        return if window.start <= window.end {
+            Ok(Vec::new())
+        } else {
+            Err("Invalid CAN time interval".into())
+        };
     }
     let mut output = Vec::with_capacity(limit.min(256));
+    let scan = scan_time(capture, index, &window, cancel, |frame| {
+        output.push(frame);
+        output.len() < limit
+    })?;
+    if scan.truncated {
+        return Err("CAN time window is too widely interleaved; use the frame table".into());
+    }
+    Ok(output)
+}
+
+pub(super) struct TimeScan {
+    pub scanned: u64,
+    pub truncated: bool,
+}
+
+pub(super) fn scan_time(
+    capture: &Capture,
+    index: &Index,
+    window: &Range<i128>,
+    cancel: &AtomicBool,
+    mut visit: impl FnMut(Frame) -> bool,
+) -> Result<TimeScan, String> {
+    valid_index(capture, index)?;
+    if window.start > window.end {
+        return Err("Invalid CAN time interval".into());
+    }
     let mut scanned = 0u64;
+    if window.is_empty() {
+        return Ok(TimeScan {
+            scanned,
+            truncated: false,
+        });
+    }
     let mut reader = None;
     for (point, checkpoint) in index.checkpoints.iter().enumerate() {
         if checkpoint.bounds[1] < window.start || checkpoint.bounds[0] >= window.end {
@@ -236,25 +272,31 @@ pub(super) fn frames(
             .get(point + 1)
             .map_or(index.summary.frames, |next| next.row);
         for row in checkpoint.row..end {
+            if scanned == MAX_RANGE_SCAN_ROWS {
+                return Ok(TimeScan {
+                    scanned,
+                    truncated: true,
+                });
+            }
             let (_, mut frame) = scanner
                 .next(true, cancel)?
                 .ok_or("CAN frame index is incomplete")?;
+            scanned += 1;
             if window.contains(&frame.timestamp_ns) {
                 frame.row = row;
-                output.push(frame);
-                if output.len() == limit {
-                    return Ok(output);
+                if !visit(frame) {
+                    return Ok(TimeScan {
+                        scanned,
+                        truncated: false,
+                    });
                 }
-            }
-            scanned += 1;
-            if scanned >= MAX_RANGE_SCAN_ROWS {
-                return Err(
-                    "CAN time window is too widely interleaved; use the frame table".into(),
-                );
             }
         }
     }
-    Ok(output)
+    Ok(TimeScan {
+        scanned,
+        truncated: false,
+    })
 }
 
 fn valid_index(capture: &Capture, index: &Index) -> Result<(), String> {
