@@ -12,10 +12,24 @@ use std::{
 pub(in crate::file_manager) const FILTER_COLOR: Color32 = Color32::from_rgb(221, 163, 93);
 const MAX_STAGES: usize = 8;
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(in crate::file_manager) struct StageList(Vec<FilterStage>);
 
 impl StageList {
+    pub(in crate::file_manager) fn validate(&self) -> Result<(), String> {
+        if self.0.len() > MAX_STAGES
+            || self.0.iter().any(|stage| {
+                !stage.frequency_hz.is_finite()
+                    || stage.frequency_hz <= 0.0
+                    || !stage.q.is_finite()
+                    || stage.q <= 0.0
+            })
+        {
+            return Err("Invalid filter stages".into());
+        }
+        Ok(())
+    }
+
     pub(in crate::file_manager) fn can_add(&self) -> bool {
         self.0.len() < MAX_STAGES
     }

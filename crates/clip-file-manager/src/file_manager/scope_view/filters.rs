@@ -18,6 +18,20 @@ use std::{
 
 pub(super) use crate::file_manager::signal_view::filter_editor::FILTER_COLOR;
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct SavedFilter {
+    channel: usize,
+    settings: LaneSettings,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct LaneSettings {
+    name: String,
+    visible: bool,
+    rows: Range<u64>,
+    stages: StageList,
+}
+
 #[derive(Default)]
 pub(super) struct Filters {
     lanes: BTreeMap<usize, Lane>,
@@ -27,10 +41,7 @@ pub(super) struct Filters {
 }
 
 struct Lane {
-    name: String,
-    visible: bool,
-    rows: Range<u64>,
-    stages: StageList,
+    settings: LaneSettings,
     output: Option<Output>,
     completed: Option<Request>,
     error: Option<String>,
@@ -62,11 +73,25 @@ pub(in crate::file_manager) struct FilterSamples {
 }
 
 impl Lane {
+    fn new(settings: LaneSettings) -> Self {
+        Self {
+            settings,
+            output: None,
+            completed: None,
+            error: None,
+        }
+    }
+
+    fn matches(&self, key: &Request) -> bool {
+        key.rows == self.settings.rows && key.stages == self.settings.stages
+    }
+
+    fn finished(&self) -> bool {
+        self.completed.as_ref().is_some_and(|key| self.matches(key))
+    }
+
     fn ready(&self) -> Option<&Output> {
-        self.completed
-            .as_ref()
-            .filter(|key| key.rows == self.rows && key.stages == self.stages)?;
-        self.output.as_ref()
+        self.output.as_ref().filter(|_| self.finished())
     }
 }
 
@@ -93,29 +118,32 @@ impl Viewer {
             return;
         };
         ui.add(
-            egui::TextEdit::singleline(&mut lane.name)
+            egui::TextEdit::singleline(&mut lane.settings.name)
                 .id_salt(("filtered-lane-name", self.active))
                 .hint_text("Lane name")
                 .desired_width(110.0)
                 .char_limit(48),
         );
         if ui
-            .add_enabled(lane.rows != rows, egui::Button::new("Use current range"))
+            .add_enabled(
+                lane.settings.rows != rows,
+                egui::Button::new("Use current range"),
+            )
             .on_hover_text("Use the interval selected in the spectrum controls")
             .clicked()
         {
-            lane.rows = rows;
+            lane.settings.rows = rows;
         }
         ui.weak(format!(
             "{} to {}",
-            display_value(channel.time_at(lane.rows.start), "s"),
-            display_value(channel.time_at(lane.rows.end), "s")
+            display_value(channel.time_at(lane.settings.rows.start), "s"),
+            display_value(channel.time_at(lane.settings.rows.end), "s")
         ));
         if let Some(error) = &lane.error {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        lane.stages.controls(ui, rate);
-        if lane.stages.is_empty() {
+        lane.settings.stages.controls(ui, rate);
+        if lane.settings.stages.is_empty() {
             self.filters.lanes.remove(&self.active);
         }
     }
@@ -124,7 +152,7 @@ impl Viewer {
         self.filters
             .lanes
             .get(&self.active)
-            .is_none_or(|lane| lane.stages.can_add())
+            .is_none_or(|lane| lane.settings.stages.can_add())
     }
 
     pub(super) fn add_filter(&mut self, kind: FilterKind) {
@@ -136,21 +164,18 @@ impl Viewer {
         let rows = self
             .spectrum_interval()
             .map_or(0..channel.sample_count, |range| sample_span(channel, range));
-        let lane = self
-            .filters
-            .lanes
-            .entry(self.active)
-            .or_insert_with(|| Lane {
+        let lane = self.filters.lanes.entry(self.active).or_insert_with(|| {
+            Lane::new(LaneSettings {
                 name: format!("{} filtered", channel.name),
                 visible: true,
                 rows,
                 stages: StageList::default(),
-                output: None,
-                completed: None,
-                error: None,
-            });
+            })
+        });
         let span = self.spectrum_span.clone().unwrap_or(0.0..rate * 0.5);
-        lane.stages.add(kind, rate, &span, self.spectrum_marker);
+        lane.settings
+            .stages
+            .add(kind, rate, &span, self.spectrum_marker);
     }
 
     pub(super) fn draw_filters(&self, painter: &Painter, clip: &Painter, rect: Rect) {
@@ -177,7 +202,11 @@ impl Viewer {
                 );
                 lane.scale(painter, output.bounds, &channel.unit, FILTER_COLOR);
             }
-            lane.label(painter, &format!("{}{status}", derived.name), FILTER_COLOR);
+            lane.label(
+                painter,
+                &format!("{}{status}", derived.settings.name),
+                FILTER_COLOR,
+            );
         }
     }
 
@@ -186,24 +215,68 @@ impl Viewer {
             return;
         };
         let rate = self.overview.channels[self.active].interval_seconds.recip();
-        lane.stages.draw(ui, rect, span, rate);
+        lane.settings.stages.draw(ui, rect, span, rate);
     }
 }
 
 impl Filters {
+    pub(super) fn save(&self) -> Vec<SavedFilter> {
+        self.lanes
+            .iter()
+            .map(|(&channel, lane)| SavedFilter {
+                channel,
+                settings: lane.settings.clone(),
+            })
+            .collect()
+    }
+
+    pub(super) fn restore(
+        &mut self,
+        filters: Vec<SavedFilter>,
+        channels: &[Channel],
+    ) -> Result<(), String> {
+        if filters.len() > channels.len() {
+            return Err("Too many saved scope filters".into());
+        }
+        let mut lanes = BTreeMap::new();
+        for filter in filters {
+            filter.settings.stages.validate()?;
+            if channels.get(filter.channel).is_none_or(|channel| {
+                filter.settings.rows.start > filter.settings.rows.end
+                    || filter.settings.rows.end > channel.sample_count
+            }) || filter.settings.name.len() > 192
+            {
+                return Err("Invalid scope filter channel or sample range".into());
+            }
+            let old = lanes.insert(filter.channel, Lane::new(filter.settings));
+            if old.is_some() {
+                return Err("Duplicate scope filter channel".into());
+            }
+        }
+        self.lanes = lanes;
+        Ok(())
+    }
+
     pub(super) fn len(&self) -> usize {
         self.visible().count()
     }
 
     fn visible(&self) -> impl Iterator<Item = (&usize, &Lane)> {
-        self.lanes.iter().filter(|(_, lane)| lane.visible)
+        self.lanes.iter().filter(|(_, lane)| lane.settings.visible)
     }
 
     pub(super) fn visibility_controls(&mut self, ui: &mut Ui) {
         for lane in self.lanes.values_mut() {
-            let action = if lane.visible { "Hide" } else { "Show" };
-            if ui.button(format!("{action} {}", lane.name)).clicked() {
-                lane.visible = !lane.visible;
+            let action = if lane.settings.visible {
+                "Hide"
+            } else {
+                "Show"
+            };
+            if ui
+                .button(format!("{action} {}", lane.settings.name))
+                .clicked()
+            {
+                lane.settings.visible = !lane.settings.visible;
             }
         }
     }
@@ -217,7 +290,13 @@ impl Filters {
             .filter_map(move |(slot, (&index, lane))| {
                 let output = lane.ready()?;
                 let value = output.samples.raw.value_at(time)?;
-                Some((slot, index, lane.name.as_str(), output.bounds, value))
+                Some((
+                    slot,
+                    index,
+                    lane.settings.name.as_str(),
+                    output.bounds,
+                    value,
+                ))
             })
     }
 
@@ -229,7 +308,7 @@ impl Filters {
         let lane = self.lanes.get(&channel)?;
         let output = lane.ready()?;
         Some(Input::derived(
-            lane.name.clone(),
+            lane.settings.name.clone(),
             unit.to_owned(),
             output.samples.raw.clone(),
         ))
@@ -238,38 +317,36 @@ impl Filters {
     pub(super) fn channels(&self) -> impl Iterator<Item = FilteredChannel<'_>> {
         self.lanes.iter().map(|(&channel, lane)| FilteredChannel {
             channel,
-            name: &lane.name,
+            name: &lane.settings.name,
             samples: lane.ready().map(|output| output.samples.clone()),
         })
     }
 
     pub(super) fn update(&mut self, ui: &Ui, recording: &Arc<Recording>, active: usize) {
         self.poll();
-        let Some(lane) = self.lanes.get_mut(&active) else {
-            return;
-        };
-        let request = Request {
-            channel: active,
-            rows: lane.rows.clone(),
-            stages: lane.stages.clone(),
-        };
-        if lane.completed.as_ref() == Some(&request) {
+        if self.task.as_ref().is_some_and(|(key, _)| {
+            self.lanes
+                .get(&key.channel)
+                .is_some_and(|lane| lane.matches(key))
+        }) {
             return;
         }
-        if self
-            .task
-            .as_ref()
-            .is_some_and(|(key, _)| key == &request || key.channel != active)
-        {
+        self.task = None;
+        let Some(channel) = self.next_channel(active) else {
             return;
-        }
+        };
         let now = ui.input(|input| input.time);
         if now < self.retry_at {
             ui.ctx()
                 .request_repaint_after(Duration::from_secs_f64(self.retry_at - now));
             return;
         }
-        self.task = None;
+        let lane = self.lanes.get_mut(&channel).expect("pending filter");
+        let request = Request {
+            channel,
+            rows: lane.settings.rows.clone(),
+            stages: lane.settings.stages.clone(),
+        };
         lane.output = None;
         lane.error = None;
         let rows = request.rows.end.saturating_sub(request.rows.start);
@@ -278,6 +355,7 @@ impl Filters {
             lane.error = Some(format!(
                 "Choose a range of 1 to {MAX_SAMPLES_PER_READ} samples."
             ));
+            ui.ctx().request_repaint();
             return;
         }
         self.retry_at = now + 0.08;
@@ -295,6 +373,15 @@ impl Filters {
         ui.ctx().request_repaint_after(Duration::from_millis(33));
     }
 
+    fn next_channel(&self, active: usize) -> Option<usize> {
+        if self.lanes.get(&active).is_some_and(|lane| !lane.finished()) {
+            return Some(active);
+        }
+        self.lanes
+            .iter()
+            .find_map(|(&channel, lane)| (!lane.finished()).then_some(channel))
+    }
+
     fn poll(&mut self) {
         let Some((key, result)) = take_query_result(&mut self.task) else {
             return;
@@ -302,7 +389,7 @@ impl Filters {
         let Some(lane) = self.lanes.get_mut(&key.channel) else {
             return;
         };
-        if lane.rows != key.rows || lane.stages != key.stages {
+        if !lane.matches(&key) {
             return;
         }
         lane.completed = Some(key);

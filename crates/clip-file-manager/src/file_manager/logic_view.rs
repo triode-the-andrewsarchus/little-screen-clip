@@ -56,6 +56,16 @@ pub(super) struct Viewer {
     error: Option<String>,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(in crate::file_manager) struct SessionSettings {
+    active: usize,
+    selected: Option<Range<f64>>,
+    cursor: Option<f64>,
+    show_transitions: bool,
+    protocols: protocols::SessionSettings,
+    frequency: frequency::SavedFrequency,
+}
+
 #[derive(Clone, PartialEq)]
 struct WindowKey {
     span: Range<f64>,
@@ -77,6 +87,40 @@ enum Wave {
 }
 
 impl Viewer {
+    pub(super) fn restoring_details(&self) -> bool {
+        self.show_transitions && self.protocols.decoding()
+    }
+
+    pub(in crate::file_manager) fn session_settings(&self) -> SessionSettings {
+        SessionSettings {
+            active: self.active,
+            selected: self.selected.clone(),
+            cursor: self.cursor,
+            show_transitions: self.show_transitions,
+            protocols: self.protocols.session_settings(),
+            frequency: self.frequency.save(),
+        }
+    }
+
+    pub(in crate::file_manager) fn restore_session(
+        &mut self,
+        state: SessionSettings,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
+        let count = self.overview.lanes.len();
+        if state.active >= count {
+            return Err("The saved logic channels do not match this recording".into());
+        }
+        self.protocols
+            .restore_session(state.protocols, Some(&self.recording), cancel)?;
+        self.active = state.active;
+        self.selected = state.selected.filter(|range| !range.is_empty());
+        self.cursor = state.cursor;
+        self.show_transitions = state.show_transitions;
+        self.frequency.restore(state.frequency, count);
+        Ok(())
+    }
+
     pub fn load(path: &Path, cancel: &AtomicBool) -> Result<Self, String> {
         let recording = Recording::open(path, cancel)?;
         let overview = recording.overview(cancel)?;

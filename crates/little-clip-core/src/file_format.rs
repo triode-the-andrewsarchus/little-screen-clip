@@ -28,6 +28,7 @@ pub enum Format {
     Spreadsheet,
     VcvPatch,
     Oscilloscope,
+    AnalysisSession,
     PowerRecording,
     Touchstone,
     LogicCapture,
@@ -53,6 +54,7 @@ impl Format {
             "gpx" | "geojson" | "rctrk" => Some(Self::Geography),
             "gcode" => Some(Self::Toolpath),
             "wfm" => Some(Self::Oscilloscope),
+            "clip-analysis" => Some(Self::AnalysisSession),
             "jls" => Some(Self::PowerRecording),
             "sr" | "sal" | "vcd" => Some(Self::LogicCapture),
             "pcap" | "pcapng" => Some(Self::PacketCapture),
@@ -77,6 +79,7 @@ impl Format {
         matches!(
             self,
             Self::Oscilloscope
+                | Self::AnalysisSession
                 | Self::PowerRecording
                 | Self::Touchstone
                 | Self::LogicCapture

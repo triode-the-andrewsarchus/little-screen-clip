@@ -1,6 +1,6 @@
 use super::{Event, Kind, Line, Trace, earliest, emit, validate_trace};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum I2sFormat {
     /// Word select changes one bit clock before the new word's MSB.
     Philips,
@@ -32,7 +32,7 @@ impl I2sChannel {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct I2sConfig {
     pub bits: u8,
     pub format: I2sFormat,

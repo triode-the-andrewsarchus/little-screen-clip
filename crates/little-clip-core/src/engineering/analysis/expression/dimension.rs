@@ -1,7 +1,7 @@
 use std::fmt;
 
 /// Physical dimensions carried by a numerical signal.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Dimension {
     volts: i8,
     amps: i8,

@@ -116,6 +116,7 @@ pub(in crate::file_manager) fn load_engineering(
     use super::super::document_format::Format;
     type Loader = fn(&Path, &AtomicBool) -> Data;
     let load: Loader = match format {
+        Format::AnalysisSession => super::super::signal_view::session::preview,
         Format::Oscilloscope | Format::PowerRecording => super::super::scope_view::strip::load,
         Format::Touchstone => super::super::touchstone_view::strip::load,
         Format::LogicCapture => super::super::logic_view::strip::load,

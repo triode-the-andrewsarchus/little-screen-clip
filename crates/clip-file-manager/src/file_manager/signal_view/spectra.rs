@@ -16,7 +16,7 @@ use std::{
 
 static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 4));
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(in crate::file_manager) enum Region {
     #[default]
     Current,
@@ -46,7 +46,7 @@ impl Region {
     }
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(in crate::file_manager) enum LaneKind {
     #[default]
     Recorded,
@@ -220,7 +220,29 @@ pub(in crate::file_manager) struct Spectra {
     request_after: f64,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(in crate::file_manager) struct DisplaySettings {
+    kind: LaneKind,
+    region: Region,
+    only: bool,
+}
+
 impl Spectra {
+    pub(in crate::file_manager) fn settings(&self) -> DisplaySettings {
+        DisplaySettings {
+            kind: self.kind,
+            region: self.region,
+            only: self.only,
+        }
+    }
+
+    pub(in crate::file_manager) fn restore_settings(&mut self, settings: DisplaySettings) {
+        self.kind = settings.kind;
+        self.region = settings.region;
+        self.only = settings.only;
+        self.clear_result();
+    }
+
     pub(in crate::file_manager) fn update(
         &mut self,
         ctx: &Context,

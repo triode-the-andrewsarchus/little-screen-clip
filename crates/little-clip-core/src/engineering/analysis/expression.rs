@@ -21,7 +21,7 @@ pub struct Expression {
 }
 
 /// Type of a source or an intermediate signal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SignalType {
     /// Equally or unevenly sampled values in a physical unit.
     Analog(Dimension),

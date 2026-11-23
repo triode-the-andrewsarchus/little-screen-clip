@@ -1,8 +1,12 @@
-use super::{Event, Kind, active_event, event_label};
+use super::{Event, Inputs, Kind, PinRecipe, Recording, active_event, event_label};
 use crate::file_manager::scope_view::plot as timing;
 use egui::{Align2, FontId, Mesh, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::engineering::logic_decode::{I2sChannel, PcmLane, PwmLane};
-use std::{fmt::Write, ops::Range, sync::Arc};
+use std::{
+    fmt::Write,
+    ops::Range,
+    sync::{Arc, atomic::AtomicBool},
+};
 
 #[derive(Default)]
 pub(in crate::file_manager) struct Pins {
@@ -10,7 +14,47 @@ pub(in crate::file_manager) struct Pins {
     pwm: PwmPins,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct SavedPins {
+    pcm: Option<PinRecipe>,
+    pwm: Option<PinRecipe>,
+}
+
 impl Pins {
+    pub(super) fn save(&self) -> SavedPins {
+        SavedPins {
+            pcm: self.pcm.recipe.clone(),
+            pwm: self.pwm.recipe.clone(),
+        }
+    }
+
+    pub(super) fn restore(
+        saved: SavedPins,
+        recording: &Recording,
+        cancel: &AtomicBool,
+    ) -> Result<Self, String> {
+        let mut pins = Self::default();
+        if let Some(recipe) = saved.pcm {
+            if !matches!(recipe.inputs, Inputs::I2s(_))
+                || !pins
+                    .pcm
+                    .pin(&recipe.read(recording, cancel)?.events, &recipe)
+            {
+                return Err("The saved I²S interval no longer produces PCM pins".into());
+            }
+        }
+        if let Some(recipe) = saved.pwm {
+            if !matches!(recipe.inputs, Inputs::Pwm { .. })
+                || !pins
+                    .pwm
+                    .pin(&recipe.read(recording, cancel)?.events, &recipe)
+            {
+                return Err("The saved PWM interval no longer produces pins".into());
+            }
+        }
+        Ok(pins)
+    }
+
     pub(in crate::file_manager) fn pcm(&self) -> impl Iterator<Item = (usize, u64, &Arc<PcmLane>)> {
         self.pcm
             .lanes
@@ -33,11 +77,11 @@ impl Pins {
         ui: &mut Ui,
         measure: Measure,
         events: &[Event],
-        span: &Range<f64>,
+        recipe: &PinRecipe,
     ) {
         match measure {
-            Measure::Pcm => self.pcm.controls(ui, events, span),
-            Measure::Duty => self.pwm.controls(ui, events, span),
+            Measure::Pcm => self.pcm.controls(ui, events, recipe),
+            Measure::Duty => self.pwm.controls(ui, events, recipe),
         }
     }
 }
@@ -46,11 +90,24 @@ impl Pins {
 struct PcmPins {
     generation: u64,
     lanes: [Option<Arc<PcmLane>>; 2],
+    recipe: Option<PinRecipe>,
     error: bool,
 }
 
 impl PcmPins {
-    fn controls(&mut self, ui: &mut Ui, events: &[Event], span: &Range<f64>) {
+    fn pin(&mut self, events: &[Event], recipe: &PinRecipe) -> bool {
+        let lanes = [I2sChannel::Left, I2sChannel::Right]
+            .map(|channel| PcmLane::from_events(events, channel, &recipe.selection).map(Arc::new));
+        if lanes.iter().all(Option::is_none) {
+            return false;
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.lanes = lanes;
+        self.recipe = Some(recipe.clone());
+        true
+    }
+
+    fn controls(&mut self, ui: &mut Ui, events: &[Event], recipe: &PinRecipe) {
         if ui
             .button("Pin PCM for equations")
             .on_hover_text(
@@ -58,16 +115,11 @@ impl PcmPins {
             )
             .clicked()
         {
-            let lanes = [I2sChannel::Left, I2sChannel::Right]
-                .map(|channel| PcmLane::from_events(events, channel, span).map(Arc::new));
-            self.error = lanes.iter().all(Option::is_none);
-            if !self.error {
-                self.generation = self.generation.wrapping_add(1);
-                self.lanes = lanes;
-            }
+            self.error = !self.pin(events, recipe);
         }
         if self.lanes.iter().any(Option::is_some) && ui.button("Clear PCM pins").clicked() {
             self.lanes = [None, None];
+            self.recipe = None;
             self.error = false;
         }
         if self.error {
@@ -80,27 +132,34 @@ impl PcmPins {
 struct PwmPins {
     generation: u64,
     lane: Option<Arc<PwmLane>>,
+    recipe: Option<PinRecipe>,
     error: bool,
 }
 
 impl PwmPins {
-    fn controls(&mut self, ui: &mut Ui, events: &[Event], span: &Range<f64>) {
+    fn pin(&mut self, events: &[Event], recipe: &PinRecipe) -> bool {
+        let Some(lane) = PwmLane::from_events(events, &recipe.selection) else {
+            return false;
+        };
+        self.generation = self.generation.wrapping_add(1);
+        self.lane = Some(Arc::new(lane));
+        self.recipe = Some(recipe.clone());
+        true
+    }
+
+    fn controls(&mut self, ui: &mut Ui, events: &[Event], recipe: &PinRecipe) {
         if ui
             .button("Pin PWM for equations")
             .on_hover_text("Pin duty, frequency, active time and period from complete cycles in the visible or brushed region.")
             .clicked()
         {
-            let lane = PwmLane::from_events(events, span);
-            self.error = lane.is_none();
-            if let Some(lane) = lane {
-                self.generation = self.generation.wrapping_add(1);
-                self.lane = Some(Arc::new(lane));
-            }
+            self.error = !self.pin(events, recipe);
         }
         if let Some(lane) = &self.lane {
             ui.weak(format!("{} cycles pinned", lane.cycle_count()));
             if ui.button("Clear PWM pins").clicked() {
                 self.lane = None;
+                self.recipe = None;
                 self.error = false;
             }
         }

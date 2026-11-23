@@ -26,9 +26,9 @@ Place each equation next to the trace it produces, with a direct Spectrum action
 
 ## 3. Save and reopen an analysis
 
-- [ ] Save a versioned recipe with stable source and lane identities, lossless paths, source revisions, alignment, equations and their sampling settings, filters, decoder wiring, markers, selections and display state.
-- [ ] Restore the guarded sources and the dependencies needed to reconstruct results. Show missing and changed recordings at their affected lanes, with a way to repair the binding. Retain surviving identities and edits.
-- [ ] Use the existing safe save and viewer close paths. Verify a round trip with PWM or I²S pins, derived lanes, an active filter and an offset, plus removed sources, a corrupt recipe and a Save As collision.
+- [x] Save a versioned recipe with stable source and lane identities, lossless paths, source revisions, alignment, equations and their sampling settings, filters, decoder wiring, markers, selections and display state.
+- [x] Restore the guarded sources and the dependencies needed to reconstruct results. Show missing and changed recordings at their affected lanes, with a way to repair the binding. Retain surviving identities and edits.
+- [x] Use the existing safe save and viewer close paths. Verify a round trip with PWM or I²S pins, derived lanes, an active filter and an offset, plus removed sources, a corrupt recipe and a Save As collision.
 
 Put Save analysis by the workspace actions. For a new session, collect its filename and destination in place, then show the saved filename in the header. Reopening from Files should restore the named workspace, land at its last working interval and list any source that needs attention beside its recording row. Use paths relative to the recipe directory where possible and preserve the recording identities already held by the readers.
 
@@ -37,6 +37,8 @@ Put Save analysis by the workspace actions. For a new session, collect its filen
 - [ ] Let the user pair landmarks from the traces, inspect each pair and use two or more pairs to propose drift correction. Show the reference epoch, offset, rate in ppm and per-pair residuals. Each residual links back to both native landmarks.
 - [ ] Route timelines, inputs, selections, decoders and caches through a centered native/workspace transform. Preserve native times and expose preview, apply and reset in the alignment panel. Keep single-offset alignment available.
 - [ ] Verify the existing fixed-delay fixture, a three-pair case with an inconsistent landmark, coincident and reversed landmarks, large timestamps and a changed source during calculation.
+
+Open alignment in the workspace above the linked recordings. Keep the reference and target visible there. Take each landmark from its recording’s cursor, then place both native times and the residual on the same row. Selecting an endpoint should bring that landmark into view without discarding the rest of the pair. Use a single pair for an offset and two or more pairs for drift. Preview the correction on the linked traces before applying it, keep the residuals visible, and save applied correction and native landmarks with the session.
 
 ## 5. Explore CAN inter-frame intervals
 

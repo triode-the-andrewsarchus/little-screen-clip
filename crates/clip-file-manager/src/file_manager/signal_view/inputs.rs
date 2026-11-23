@@ -29,10 +29,23 @@ pub(super) struct Signature {
     alias: String,
     offset: u64,
     generation: Option<u64>,
+    missing: bool,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct SavedInput {
+    pub alias: String,
+    label: String,
+    kind: SignalType,
+    rate: Option<f64>,
 }
 
 #[derive(Clone)]
 enum Source {
+    Missing {
+        kind: SignalType,
+        rate: Option<f64>,
+    },
     Analog {
         reader: Arc<Recording>,
         index: usize,
@@ -107,6 +120,27 @@ impl Measurement {
 }
 
 impl Input {
+    pub(super) fn snapshot(&self) -> SavedInput {
+        SavedInput {
+            alias: self.alias.clone(),
+            label: self.label.clone(),
+            kind: self.binding().signal_type,
+            rate: self.rate(),
+        }
+    }
+
+    pub(super) fn missing(saved: &SavedInput, offset: f64) -> Self {
+        Self {
+            alias: saved.alias.clone(),
+            label: format!("{} (unavailable)", saved.label),
+            offset,
+            source: Source::Missing {
+                kind: saved.kind,
+                rate: saved.rate,
+            },
+        }
+    }
+
     pub(super) fn analog(id: u64, offset: f64, label: &str, reader: &Arc<Recording>) -> Vec<Self> {
         reader
             .channels()
@@ -234,6 +268,7 @@ impl Input {
             alias: self.alias.clone(),
             offset: self.offset.to_bits(),
             generation,
+            missing: matches!(self.source, Source::Missing { .. }),
         }
     }
 
@@ -241,8 +276,13 @@ impl Input {
         matches!(self.source, Source::Filtered { samples: None, .. })
     }
 
+    pub(super) fn unavailable(&self) -> bool {
+        matches!(self.source, Source::Missing { .. })
+    }
+
     pub(super) fn binding(&self) -> Binding<'_> {
         let signal_type = match &self.source {
+            Source::Missing { kind, .. } => *kind,
             Source::Analog { reader, index } => {
                 let unit = &reader.channels()[*index].unit;
                 SignalType::Analog(Dimension::from_unit(unit).unwrap_or(Dimension::SCALAR))
@@ -259,6 +299,7 @@ impl Input {
 
     pub(super) fn rate(&self) -> Option<f64> {
         match &self.source {
+            Source::Missing { rate, .. } => *rate,
             Source::Analog { reader, index } => {
                 Some(reader.channels()[*index].interval_seconds.recip())
             }
@@ -272,6 +313,7 @@ impl Input {
     pub(super) fn read(&self, span: &Range<f64>, cancel: &AtomicBool) -> Result<Samples, String> {
         let native = translate(span, -self.offset);
         match &self.source {
+            Source::Missing { .. } => Ok(Samples::Empty),
             Source::Analog { reader, index } => self.read_analog(reader, *index, native, cancel),
             Source::Filtered { samples, .. } => {
                 Ok(samples

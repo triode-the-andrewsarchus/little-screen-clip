@@ -7,7 +7,7 @@ use little_clip_core::engineering::analysis::{Binding, SignalGraph, SignalType};
 
 const MAX_DRAFT_CHARS: usize = 12_000;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Equation {
     pub id: u64,
     pub text: String,
@@ -44,6 +44,29 @@ pub(super) struct Change {
 }
 
 impl Book {
+    pub fn restore(&mut self, rows: Vec<Equation>) -> Result<String, String> {
+        let mut ids = std::collections::BTreeSet::new();
+        if rows.len() > 32
+            || rows.iter().any(|row| {
+                !ids.insert(row.id)
+                    || row.id > u64::MAX / 2
+                    || row.name.chars().count() > MAX_DRAFT_CHARS
+                    || row.text.chars().count() > MAX_DRAFT_CHARS
+                    || row.text.lines().count() != 1
+                    || row.text.trim().is_empty()
+            })
+        {
+            return Err("Invalid saved equation rows".into());
+        }
+        let program = rows
+            .iter()
+            .map(|row| row.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.next_id = ids.last().map_or(0, |id| id + 1);
+        self.rows = rows;
+        Ok(program)
+    }
     pub fn open(&self) -> bool {
         self.edit.is_some() || !self.rows.is_empty()
     }

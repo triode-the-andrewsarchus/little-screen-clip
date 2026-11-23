@@ -1,7 +1,7 @@
 use super::{Event, Kind, Line, Trace, earliest, emit, validate_trace};
 
 /// Sampling and framing parameters for one SPI bus.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpiConfig {
     pub bits: u8,
     pub mode: u8,

@@ -534,6 +534,11 @@ impl EntryPreviews {
         self.listing(entry);
         let ready = self.cache.get(id);
         let show: Strip = match format {
+            Format::AnalysisSession => {
+                let detail = ready.map_or("Analysis session", |ready| ready.data.detail.as_str());
+                super::ui::information_strip(ui, row, entry, detail, Some(columns), colors);
+                return (None, false);
+            }
             Format::Oscilloscope | Format::PowerRecording => {
                 return super::scope_view::strip::show(
                     ui,

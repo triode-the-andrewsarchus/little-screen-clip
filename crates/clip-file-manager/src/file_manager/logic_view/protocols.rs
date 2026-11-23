@@ -52,7 +52,7 @@ enum Source {
     Materialized(Arc<dyn TraceInput>),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Mode {
     I2c,
     Spi,
@@ -73,7 +73,7 @@ impl Mode {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 struct SpiInputs {
     clock: usize,
     select: Option<usize>,
@@ -126,7 +126,7 @@ impl SpiInputs {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 enum Inputs {
     I2c { clock: usize, data: usize },
     Uart { data: usize, baud: f64 },
@@ -142,6 +142,27 @@ struct Key {
     source_revision: u64,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct PinRecipe {
+    inputs: Inputs,
+    decoded_span: Range<f64>,
+    selection: Range<f64>,
+}
+
+impl PinRecipe {
+    fn read(&self, recording: &Recording, cancel: &AtomicBool) -> Result<Decoded, String> {
+        if self.decoded_span.is_empty() || self.selection.is_empty() {
+            return Err("Invalid saved decoder pin interval".into());
+        }
+        let key = Key {
+            inputs: self.inputs,
+            span: self.decoded_span.clone(),
+            source_revision: 0,
+        };
+        recording.checked(cancel, |capture| decode(capture, &key, cancel))
+    }
+}
+
 struct Decoded {
     window: Range<f64>,
     inspected_until: f64,
@@ -155,23 +176,76 @@ pub(in crate::file_manager) struct Panel {
     pins: Option<Pins>,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(in crate::file_manager) struct SessionSettings {
+    decoders: Vec<DecoderSettings>,
+    selected: Option<usize>,
+    pins: Option<samples::SavedPins>,
+}
+
 impl Panel {
+    pub(in crate::file_manager) fn session_settings(&self) -> SessionSettings {
+        SessionSettings {
+            decoders: self
+                .decoders
+                .iter()
+                .map(|decoder| decoder.settings.clone())
+                .collect(),
+            selected: self.selected,
+            pins: self.pins.as_ref().map(Pins::save),
+        }
+    }
+
+    pub(in crate::file_manager) fn restore_session(
+        &mut self,
+        state: SessionSettings,
+        recording: Option<&Recording>,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
+        if state.decoders.len() > 12
+            || state
+                .selected
+                .is_some_and(|index| index >= state.decoders.len())
+            || state.decoders.iter().any(|decoder| decoder.baud.len() > 64)
+        {
+            return Err("Invalid saved decoder settings".into());
+        }
+        let pins = match state.pins {
+            Some(saved) => {
+                let source = recording.ok_or("Decoder pins require a recorded logic capture")?;
+                Some(Pins::restore(saved, source, cancel)?)
+            }
+            None => recording.map(|_| Pins::default()),
+        };
+        self.decoders = state
+            .decoders
+            .into_iter()
+            .map(Decoder::from_settings)
+            .collect();
+        self.selected = state.selected;
+        self.pins = pins;
+        Ok(())
+    }
+
     pub fn remap_channels(&mut self, lanes: &[Option<usize>]) {
         let mapped = |index| lanes.get(index).copied().flatten().unwrap_or(usize::MAX);
         for decoder in &mut self.decoders {
-            match decoder.mode {
+            match decoder.settings.mode {
                 Mode::I2c => {
-                    decoder.clock = mapped(decoder.clock);
-                    decoder.data = mapped(decoder.data);
+                    decoder.settings.clock = mapped(decoder.settings.clock);
+                    decoder.settings.data = mapped(decoder.settings.data);
                 }
-                Mode::Uart => decoder.uart = mapped(decoder.uart),
-                Mode::Pwm => decoder.pwm = mapped(decoder.pwm),
+                Mode::Uart => decoder.settings.uart = mapped(decoder.settings.uart),
+                Mode::Pwm => decoder.settings.pwm = mapped(decoder.settings.pwm),
                 Mode::Spi => {
-                    decoder.spi.clock = mapped(decoder.spi.clock);
-                    decoder.spi.select = decoder.spi.select.map(mapped);
-                    decoder.spi.data = decoder.spi.data.map(|lane| lane.map(mapped));
+                    decoder.settings.spi.clock = mapped(decoder.settings.spi.clock);
+                    decoder.settings.spi.select = decoder.settings.spi.select.map(mapped);
+                    decoder.settings.spi.data =
+                        decoder.settings.spi.data.map(|lane| lane.map(mapped));
                 }
-                Mode::I2s => decoder.i2s.channels = decoder.i2s.channels.map(mapped),
+                Mode::I2s => {
+                    decoder.settings.i2s.channels = decoder.settings.i2s.channels.map(mapped)
+                }
             }
             decoder.task = None;
             decoder.request = None;
@@ -222,6 +296,10 @@ impl Panel {
         self.selected.is_none()
     }
 
+    pub(super) fn decoding(&self) -> bool {
+        self.current().is_some_and(|decoder| decoder.task.is_some())
+    }
+
     pub fn data_lane(&self) -> Option<usize> {
         self.current().and_then(Decoder::data_lane)
     }
@@ -242,7 +320,7 @@ impl Panel {
                 ui.selectable_value(
                     &mut selected,
                     Some(index),
-                    format!("{} {}", decoder.mode.label(), index + 1),
+                    format!("{} {}", decoder.settings.mode.label(), index + 1),
                 );
             }
             if selected.is_some() {
@@ -319,7 +397,8 @@ impl Panel {
     }
 }
 
-struct Decoder {
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct DecoderSettings {
     mode: Mode,
     spi: SpiInputs,
     i2s: I2sInputs,
@@ -330,6 +409,10 @@ struct Decoder {
     pwm: usize,
     pwm_active_high: bool,
     baud: String,
+}
+
+struct Decoder {
+    settings: DecoderSettings,
     request: Option<Key>,
     task: Option<Task<Result<Decoded, String>>>,
     result: Option<Result<Decoded, String>>,
@@ -343,7 +426,7 @@ impl Decoder {
         let data =
             named_lane(lanes, &["SDA"]).unwrap_or(usize::from(lanes.len() > 1 && clock == 0));
         let uart = named_lane(lanes, &["UART", "TX", "RX", "TXD", "RXD"]).unwrap_or(0);
-        Self {
+        Self::from_settings(DecoderSettings {
             mode,
             i2s: I2sInputs::new(lanes),
             show_samples: true,
@@ -368,6 +451,12 @@ impl Decoder {
             pwm: named_lane(lanes, &["PWM", "DUTY"]).unwrap_or(0),
             pwm_active_high: true,
             baud: String::new(),
+        })
+    }
+
+    fn from_settings(settings: DecoderSettings) -> Self {
+        Self {
+            settings,
             request: None,
             task: None,
             result: None,
@@ -377,22 +466,22 @@ impl Decoder {
     }
 
     fn data_lane(&self) -> Option<usize> {
-        match self.mode {
-            Mode::I2c => Some(self.data),
-            Mode::Uart => Some(self.uart),
-            Mode::Spi => self.spi.data.into_iter().flatten().next(),
-            Mode::I2s => Some(self.i2s.channels[2]),
-            Mode::Pwm => Some(self.pwm),
+        match self.settings.mode {
+            Mode::I2c => Some(self.settings.data),
+            Mode::Uart => Some(self.settings.uart),
+            Mode::Spi => self.settings.spi.data.into_iter().flatten().next(),
+            Mode::I2s => Some(self.settings.i2s.channels[2]),
+            Mode::Pwm => Some(self.settings.pwm),
         }
     }
 
     fn channels(&self) -> Vec<usize> {
-        let mut channels = match self.mode {
-            Mode::I2c => vec![self.clock, self.data],
-            Mode::Uart => vec![self.uart],
-            Mode::Spi => self.spi.channels().collect(),
-            Mode::I2s => self.i2s.channels.to_vec(),
-            Mode::Pwm => vec![self.pwm],
+        let mut channels = match self.settings.mode {
+            Mode::I2c => vec![self.settings.clock, self.settings.data],
+            Mode::Uart => vec![self.settings.uart],
+            Mode::Spi => self.settings.spi.channels().collect(),
+            Mode::I2s => self.settings.i2s.channels.to_vec(),
+            Mode::Pwm => vec![self.settings.pwm],
         };
         channels.sort_unstable();
         channels.dedup();
@@ -400,23 +489,23 @@ impl Decoder {
     }
 
     pub(super) fn controls(&mut self, ui: &mut Ui, lanes: &[Lane]) {
-        ui.horizontal_wrapped(|ui| match self.mode {
-            Mode::Spi => self.spi.controls(ui, lanes),
-            Mode::I2s => self.i2s.controls(ui, lanes),
+        ui.horizontal_wrapped(|ui| match self.settings.mode {
+            Mode::Spi => self.settings.spi.controls(ui, lanes),
+            Mode::I2s => self.settings.i2s.controls(ui, lanes),
             Mode::Pwm => {
-                lane_picker(ui, "pwm-data", "Signal", &mut self.pwm, lanes);
-                ui.selectable_value(&mut self.pwm_active_high, true, "Active high");
-                ui.selectable_value(&mut self.pwm_active_high, false, "Active low");
+                lane_picker(ui, "pwm-data", "Signal", &mut self.settings.pwm, lanes);
+                ui.selectable_value(&mut self.settings.pwm_active_high, true, "Active high");
+                ui.selectable_value(&mut self.settings.pwm_active_high, false, "Active low");
             }
             Mode::I2c => {
-                lane_picker(ui, "i2c-scl", "Clock", &mut self.clock, lanes);
-                lane_picker(ui, "i2c-sda", "Data", &mut self.data, lanes);
+                lane_picker(ui, "i2c-scl", "Clock", &mut self.settings.clock, lanes);
+                lane_picker(ui, "i2c-sda", "Data", &mut self.settings.data, lanes);
             }
             Mode::Uart => {
-                lane_picker(ui, "uart-data", "Data", &mut self.uart, lanes);
+                lane_picker(ui, "uart-data", "Data", &mut self.settings.uart, lanes);
                 ui.label("Baud");
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.baud)
+                    egui::TextEdit::singleline(&mut self.settings.baud)
                         .id_salt("uart-baud")
                         .desired_width(80.0)
                         .char_limit(16)
@@ -428,21 +517,24 @@ impl Decoder {
     }
 
     fn inputs(&self) -> Result<Inputs, &'static str> {
-        match self.mode {
-            Mode::Spi => self.spi.validate(),
-            Mode::I2s => self.i2s.validate(),
+        match self.settings.mode {
+            Mode::Spi => self.settings.spi.validate(),
+            Mode::I2s => self.settings.i2s.validate(),
             Mode::Pwm => Ok(Inputs::Pwm {
-                data: self.pwm,
-                active_high: self.pwm_active_high,
+                data: self.settings.pwm,
+                active_high: self.settings.pwm_active_high,
             }),
-            Mode::I2c if self.clock != self.data => Ok(Inputs::I2c {
-                clock: self.clock,
-                data: self.data,
+            Mode::I2c if self.settings.clock != self.settings.data => Ok(Inputs::I2c {
+                clock: self.settings.clock,
+                data: self.settings.data,
             }),
             Mode::I2c => Err("Choose different clock and data channels."),
-            Mode::Uart if self.baud.trim().is_empty() => Err("Enter the recorded UART baud rate."),
+            Mode::Uart if self.settings.baud.trim().is_empty() => {
+                Err("Enter the recorded UART baud rate.")
+            }
             Mode::Uart => {
                 let baud = self
+                    .settings
                     .baud
                     .trim()
                     .parse::<f64>()
@@ -450,7 +542,7 @@ impl Decoder {
                     .filter(|baud| baud.is_finite() && *baud > 0.0)
                     .ok_or("Enter a positive baud rate.")?;
                 Ok(Inputs::Uart {
-                    data: self.uart,
+                    data: self.settings.uart,
                     baud,
                 })
             }
@@ -539,7 +631,7 @@ impl Decoder {
         }
         // Move the scroll-follow state out while the decoded result is borrowed.
         let mut followed = self.follow;
-        let mut show_samples = self.show_samples;
+        let mut show_samples = self.settings.show_samples;
         let mut destination = None;
         match self.current(span) {
             Some(Ok(output)) => {
@@ -547,13 +639,14 @@ impl Decoder {
                 decoded_controls(
                     ui,
                     events,
-                    self.mode,
+                    self.settings.mode,
                     &mut show_samples,
                     pins,
                     selection.unwrap_or(span),
+                    self.request.as_ref(),
                 );
                 coverage(ui, output, span);
-                let plot = enabled_plot(self.mode);
+                let plot = enabled_plot(self.settings.mode);
                 let picked = if let Some(plot) = plot.filter(|_| show_samples && !events.is_empty())
                 {
                     samples::plot(ui, span, cursor, events, plot)
@@ -588,7 +681,7 @@ impl Decoder {
             }
         }
         self.follow = followed;
-        self.show_samples = show_samples;
+        self.settings.show_samples = show_samples;
         destination
     }
 }
@@ -600,6 +693,7 @@ fn decoded_controls(
     show_samples: &mut bool,
     pins: Option<&mut Pins>,
     selection: &Range<f64>,
+    request: Option<&Key>,
 ) {
     if events.is_empty() {
         return;
@@ -624,8 +718,13 @@ fn decoded_controls(
                 ui.ctx().copy_text(plot.tsv(events));
             }
             ui.toggle_value(show_samples, plot.label());
-            if let Some(pins) = pins {
-                pins.controls(ui, plot, events, selection);
+            if let Some((pins, key)) = pins.zip(request) {
+                let recipe = PinRecipe {
+                    inputs: key.inputs,
+                    decoded_span: key.span.clone(),
+                    selection: selection.clone(),
+                };
+                pins.controls(ui, plot, events, &recipe);
             }
         }
     });
@@ -864,16 +963,16 @@ mod tests {
     #[test]
     fn remap_moves_surviving_decoder_inputs_and_marks_missing_inputs() {
         let mut decoder = Decoder::new(Mode::Spi, &[]);
-        decoder.spi.clock = 1;
-        decoder.spi.select = Some(0);
-        decoder.spi.data = [Some(2), None];
+        decoder.settings.spi.clock = 1;
+        decoder.settings.spi.select = Some(0);
+        decoder.settings.spi.data = [Some(2), None];
         let mut panel = Panel {
             decoders: vec![decoder],
             selected: Some(0),
             pins: None,
         };
         panel.remap_channels(&[None, Some(0), Some(1)]);
-        let spi = panel.current().unwrap().spi;
+        let spi = panel.current().unwrap().settings.spi;
         assert_eq!(spi.clock, 0);
         assert_eq!(spi.select, Some(usize::MAX));
         assert_eq!(spi.data, [Some(1), None]);

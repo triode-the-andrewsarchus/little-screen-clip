@@ -46,6 +46,7 @@ impl Viewers {
             Some(ViewerSession::Midi(state)) => state.export_pending(),
             Some(ViewerSession::Geography(state)) => state.writes_pending(),
             Some(ViewerSession::VcvPatch(state)) => state.panel_job_pending(),
+            Some(ViewerSession::Signals(state)) => state.session_write_pending(),
             _ => false,
         }
     }

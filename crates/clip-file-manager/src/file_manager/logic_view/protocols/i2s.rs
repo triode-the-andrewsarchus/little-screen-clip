@@ -6,7 +6,7 @@ use little_clip_core::engineering::{
 };
 use std::{ops::Range, sync::atomic::AtomicBool};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct I2sInputs {
     pub channels: [usize; 3],
     config: I2sConfig,

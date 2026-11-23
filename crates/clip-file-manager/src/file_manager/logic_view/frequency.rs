@@ -22,6 +22,17 @@ pub(super) struct Frequency {
     sampled_rate: Option<f64>,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct SavedFrequency {
+    visible: bool,
+    spectra: super::super::signal_view::spectra::DisplaySettings,
+    window: SpectrumWindow,
+    span: Option<Range<f64>>,
+    marker: Option<f64>,
+    selected_lane: usize,
+    sampled_rate: Option<f64>,
+}
+
 impl Viewer {
     pub(super) fn frequency(&mut self, ui: &mut Ui, link: Option<&Link>) {
         let index = self.active;
@@ -55,6 +66,27 @@ impl Viewer {
 }
 
 impl Frequency {
+    pub(super) fn save(&self) -> SavedFrequency {
+        SavedFrequency {
+            visible: self.visible,
+            spectra: self.spectra.settings(),
+            window: self.window,
+            span: self.span.clone(),
+            marker: self.marker,
+            selected_lane: self.selected_lane,
+            sampled_rate: self.sampled_rate,
+        }
+    }
+
+    pub(super) fn restore(&mut self, state: SavedFrequency, lanes: usize) {
+        self.visible = state.visible;
+        self.spectra.restore_settings(state.spectra);
+        self.window = state.window;
+        self.span = state.span.filter(|span| !span.is_empty());
+        self.marker = state.marker;
+        self.selected_lane = state.selected_lane.min(lanes.saturating_sub(1));
+        self.sampled_rate = state.sampled_rate.filter(|rate| *rate > 0.0);
+    }
     fn controls(
         &mut self,
         ui: &mut Ui,

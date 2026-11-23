@@ -11,7 +11,9 @@ mod logic_export;
 mod math;
 pub(super) mod plot;
 pub(super) mod reads;
+mod session;
 mod snap;
+pub(super) use session::Settings as SessionSettings;
 pub(super) mod strip;
 
 use super::signal_view::spectra as spectrum_input;
@@ -43,6 +45,7 @@ static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(3, 
 
 const MATH_COLOR: Color32 = Color32::from_rgb(215, 153, 246);
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct MarkedRange {
     span: Range<f64>,
     peak_to_peak: Option<(f32, String)>,

@@ -5,7 +5,7 @@ use std::f64::consts::TAU;
 pub const MAX_ANALYSIS_SAMPLES: usize = 65_536;
 
 /// Apodization used when preparing a spectrum.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum SpectrumWindow {
     /// A periodic Hann window for general-purpose spectral analysis.
     #[default]

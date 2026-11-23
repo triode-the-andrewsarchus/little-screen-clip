@@ -81,6 +81,7 @@ pub(super) enum Category {
     VcvRack,
     Image,
     Brushes,
+    AnalysisSession,
     Oscilloscope,
     PowerRecording,
     RfSweep,
@@ -145,6 +146,7 @@ fn format_family(entry: &Entry) -> Category {
 fn extension_category(entry: &Entry) -> Category {
     use super::document_format::Format;
     match entry.document_format() {
+        Some(Format::AnalysisSession) => return Category::AnalysisSession,
         Some(Format::Oscilloscope) => return Category::Oscilloscope,
         Some(Format::PowerRecording) => return Category::PowerRecording,
         Some(Format::Touchstone) => return Category::RfSweep,
@@ -198,6 +200,7 @@ impl Category {
             Self::VcvRack => "VCV Rack",
             Self::Image => "Images",
             Self::Brushes => "Brushes",
+            Self::AnalysisSession => "Analysis sessions",
             Self::Oscilloscope => "Oscilloscope captures",
             Self::PowerRecording => "Power recordings",
             Self::RfSweep => "RF measurements",

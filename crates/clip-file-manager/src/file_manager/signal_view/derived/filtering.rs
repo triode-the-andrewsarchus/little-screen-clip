@@ -28,7 +28,7 @@ pub(super) struct Filters {
     anchor: Option<f64>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct Settings {
     pub stages: StageList,
     pub interval: Option<Range<f64>>,

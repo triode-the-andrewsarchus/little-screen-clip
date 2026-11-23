@@ -1,3 +1,4 @@
+use super::super::spectra::DisplaySettings;
 use super::{
     compute::{Frame, Lane},
     filtering::{Filters, PlotLane},
@@ -30,7 +31,59 @@ pub(super) struct Frequency {
     reveal: bool,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct SavedFrequency {
+    lane: Option<usize>,
+    window: SpectrumWindow,
+    spectra: DisplaySettings,
+    span: Option<Range<f64>>,
+    marker: Option<f64>,
+    linear: bool,
+    filters: std::collections::BTreeMap<usize, super::filtering::Settings>,
+    filtered_spectrum: bool,
+}
+
 impl Frequency {
+    pub(super) fn save(&self) -> SavedFrequency {
+        SavedFrequency {
+            lane: self.lane,
+            window: self.window,
+            spectra: self.spectra.settings(),
+            span: self.span.clone(),
+            marker: self.marker,
+            linear: self.linear,
+            filters: self.filters.settings.clone(),
+            filtered_spectrum: self.filtered_spectrum,
+        }
+    }
+
+    pub(super) fn restore(&mut self, state: SavedFrequency, lanes: usize) -> Result<(), String> {
+        if state.lane.is_some_and(|index| index >= lanes)
+            || state.filters.keys().any(|&key| key >= lanes)
+        {
+            return Err("Invalid derived spectrum lane".into());
+        }
+        for settings in state.filters.values() {
+            settings.stages.validate()?;
+            if settings
+                .interval
+                .as_ref()
+                .is_some_and(|span| span.is_empty())
+            {
+                return Err("Invalid derived filter interval".into());
+            }
+        }
+        self.lane = state.lane;
+        self.window = state.window;
+        self.spectra.restore_settings(state.spectra);
+        self.span = state.span.filter(|span| !span.is_empty());
+        self.marker = state.marker;
+        self.linear = state.linear;
+        self.filters.settings = state.filters;
+        self.filtered_spectrum = state.filtered_spectrum;
+        Ok(())
+    }
+
     pub(super) fn update_filters(&mut self, ui: &Ui, frame: &Frame) {
         self.filters.update(ui.ctx(), frame);
     }

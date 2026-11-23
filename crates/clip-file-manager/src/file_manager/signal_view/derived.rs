@@ -32,6 +32,23 @@ pub(super) struct Derived {
     accepted: Option<(Key, Result<Arc<Frame>, String>)>,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct SessionSettings {
+    equations: Vec<equations::Equation>,
+    sample_rate: Option<f64>,
+    history_span: Option<Range<f64>>,
+    selected: Option<Range<f64>>,
+    frequency: frequency::SavedFrequency,
+    measurements: measurements::SavedMeasurements,
+    decoders: logic_view::protocols::SessionSettings,
+}
+
+impl SessionSettings {
+    pub(super) fn equation_count(&self) -> usize {
+        self.equations.len()
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct Key {
     revision: u64,
@@ -40,8 +57,47 @@ struct Key {
 }
 
 impl Derived {
+    pub(super) fn session_settings(&self) -> SessionSettings {
+        SessionSettings {
+            equations: self.equations.rows.clone(),
+            sample_rate: self.program_rate,
+            history_span: self.history_span.clone(),
+            selected: self.selected.clone(),
+            frequency: self.frequency.save(),
+            measurements: self.measurements.save(),
+            decoders: self.decoders.save(),
+        }
+    }
+
+    pub(super) fn restore_session(&mut self, state: SessionSettings) -> Result<(), String> {
+        if state
+            .sample_rate
+            .is_some_and(|rate| !(1e-6..=1e15).contains(&rate))
+            || state
+                .history_span
+                .as_ref()
+                .is_some_and(|span| span.is_empty())
+        {
+            return Err("Invalid saved equation clock or history interval".into());
+        }
+        let count = state.equations.len();
+        self.program = self.equations.restore(state.equations)?;
+        self.program_rate = state.sample_rate;
+        self.history_span = state.history_span;
+        self.selected = state.selected.filter(|span| !span.is_empty());
+        self.frequency.restore(state.frequency, count)?;
+        self.measurements.restore(state.measurements, count);
+        self.decoders.restore(state.decoders)?;
+        self.invalidate();
+        Ok(())
+    }
+
     pub(super) fn open(&self) -> bool {
         self.equations.open()
+    }
+
+    pub(super) fn calculating(&self) -> bool {
+        self.pending.is_some()
     }
 
     pub(super) fn button(&mut self, ui: &mut Ui) {

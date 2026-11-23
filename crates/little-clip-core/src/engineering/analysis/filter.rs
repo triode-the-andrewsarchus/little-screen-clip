@@ -4,7 +4,7 @@ use realfft::num_complex::Complex64;
 use std::f64::consts::TAU;
 
 /// The response produced by one second-order filter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FilterKind {
     /// Passes frequencies below the cutoff.
     LowPass,
@@ -17,7 +17,7 @@ pub enum FilterKind {
 }
 
 /// A reusable filter stage in physical frequency units.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FilterStage {
     /// Shape of the frequency response.
     pub kind: FilterKind,

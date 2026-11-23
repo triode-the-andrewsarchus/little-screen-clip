@@ -698,6 +698,9 @@ impl Viewers {
                 ViewerSession::Sheet(state) => self.path = state.path.clone(),
                 ViewerSession::Midi(state) => self.path.clone_from(&state.path),
                 ViewerSession::Model(state) => self.path.clone_from(&state.path),
+                ViewerSession::Signals(state) if state.session_path().is_some() => {
+                    self.path = state.session_path().map(Path::to_path_buf);
+                }
                 _ => {}
             }
         }
@@ -957,6 +960,11 @@ fn load(
         ) => super::signal_view::Viewer::load(path, format, cancelled)
             .map(Box::new)
             .map(Loaded::Signals),
+        Kind::Document(Format::AnalysisSession) => {
+            super::signal_view::Viewer::load_session(path, cancelled)
+                .map(Box::new)
+                .map(Loaded::Signals)
+        }
         Kind::Document(Format::Touchstone) => super::touchstone_view::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Touchstone),

@@ -22,6 +22,18 @@ pub(super) struct Decoders {
 }
 
 impl Decoders {
+    pub(super) fn save(&self) -> crate::file_manager::logic_view::protocols::SessionSettings {
+        self.panel.session_settings()
+    }
+
+    pub(super) fn restore(
+        &mut self,
+        state: crate::file_manager::logic_view::protocols::SessionSettings,
+    ) -> Result<(), String> {
+        self.panel
+            .restore_session(state, None, &AtomicBool::new(false))
+    }
+
     pub(super) fn remap(&mut self, digital: &[Option<usize>]) {
         self.panel.remap_channels(digital);
         self.frame = None;

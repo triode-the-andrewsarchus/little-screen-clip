@@ -5,6 +5,7 @@ mod derived;
 pub(super) mod filter_editor;
 pub(super) mod frequency_plot;
 mod inputs;
+pub(super) mod session;
 pub(super) mod spectra;
 pub(super) mod timeline;
 
@@ -32,6 +33,8 @@ pub(super) struct Viewer {
     span: Range<f64>,
     probe: Option<f64>,
     reference: Option<Reference>,
+    reveal_source: Option<u64>,
+    session: session::Session,
     error: Option<String>,
 }
 
@@ -42,8 +45,9 @@ struct Source {
     capture: Capture,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Reference {
-    path: PathBuf,
+    source: u64,
     native_time: f64,
 }
 
@@ -52,11 +56,13 @@ enum SourceAction {
     Align(f64),
     ClearReference,
     Remove,
+    Relink(Source),
 }
 
 enum Capture {
     Analog(Box<scope_view::Viewer>),
     Digital(Box<logic_view::Viewer>),
+    Unavailable(Box<session::Unavailable>),
 }
 
 pub(super) fn supports_path(path: &Path) -> bool {
@@ -118,15 +124,20 @@ impl Viewer {
             domain,
             probe: None,
             reference: None,
+            reveal_source: None,
+            session: session::Session::default(),
             error: None,
         }
     }
 
     pub(super) fn set_check(&mut self, check: ReadCheck) {
-        if let [source] = &mut self.sources[..] {
+        if self.session_path().is_none()
+            && let [source] = &mut self.sources[..]
+        {
             match &mut source.capture {
                 Capture::Analog(view) => view.set_check(check),
                 Capture::Digital(view) => view.set_check(check),
+                Capture::Unavailable(_) => {}
             }
         }
     }
@@ -172,7 +183,19 @@ impl Viewer {
         if let [source] = &mut self.sources[..]
             && source.offset == 0.0
             && !self.derived.open()
+            && self.reference.is_none()
+            && !matches!(source.capture, Capture::Unavailable(_))
         {
+            if self.session.file.is_some() {
+                ui.weak(
+                    source
+                        .path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy(),
+                )
+                .on_hover_text(little_clip_core::path_address::display_path(&source.path));
+            }
             source.capture.content(ui, palette, copies, None);
             self.span = source.capture.span().clone();
             self.domain = source.capture.domain();
@@ -184,6 +207,17 @@ impl Viewer {
     fn controls(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             self.derived.button(ui);
+            self.save_buttons(ui);
+            let unavailable = self
+                .sources
+                .iter()
+                .filter(|source| matches!(source.capture, Capture::Unavailable(_)));
+            if let Some(first) = unavailable.clone().next() {
+                let count = unavailable.count();
+                if ui.button(format!("Review {count} unavailable")).clicked() {
+                    self.reveal_source = Some(first.id);
+                }
+            }
             if self.sources.len() > 1 {
                 if ui.button("Match timing").clicked() {
                     let pinned = self.reference_time();
@@ -200,6 +234,7 @@ impl Viewer {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
         });
+        self.save_form(ui);
     }
 
     fn align_recordings(&mut self, ctx: &Context) {
@@ -213,7 +248,7 @@ impl Viewer {
                 source
                     .inputs()
                     .into_iter()
-                    .filter(|input| !input.is_awaiting_filter())
+                    .filter(|input| !input.is_awaiting_filter() && !input.unavailable())
                     .map(|input| alignment::Entry {
                         source: source.id,
                         input,
@@ -249,62 +284,76 @@ impl Viewer {
         let preview = self.alignment.preview();
         let may_remove = self.sources.len() > 1;
         let height = (ui.available_height() / self.sources.len() as f32 - 50.0).max(205.0);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (index, source) in self.sources.iter_mut().enumerate() {
-                    let id = ui.make_persistent_id(&source.path);
-                    ui.push_id(id, |ui| {
-                        let is_reference = self
-                            .reference
-                            .as_ref()
-                            .is_some_and(|pin| pin.path == source.path);
-                        if let Some(request) =
-                            source.controls(ui, may_remove, reference_time, is_reference, preview)
-                        {
+        let scroll = self.session.scroll.area(ui).show(ui, |ui| {
+            for (index, source) in self.sources.iter_mut().enumerate() {
+                let id = ui.make_persistent_id(source.id);
+                ui.push_id(id, |ui| {
+                    if let Capture::Unavailable(recording) = &mut source.capture {
+                        let reveal = self.reveal_source.take_if(|id| *id == source.id).is_some();
+                        if let Some(request) = recording.ui(ui, &source.path, may_remove, reveal) {
                             action = Some((index, request));
                         }
-                        let offset = source.display_offset(preview);
-                        let previous = translate(&self.span, -offset);
-                        *source.capture.span() = previous.clone();
-                        let link = Link {
-                            domain: translate(&self.domain, -offset),
-                            offset,
-                            probe: self.probe.map(|probe| probe - offset),
-                            reference: reference_time.map(|time| time - offset),
-                        };
-                        let height = height.max(source.capture.min_height());
-                        ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
-                            if let Some(probe) =
-                                source.capture.content(ui, palette, copies, Some(&link))
-                            {
-                                next_probe = Some(probe + offset);
-                            }
-                        });
-                        let view = source.capture.span();
-                        if *view != previous {
-                            self.span = translate(view, offset);
-                            ui.ctx().request_repaint();
-                        }
                         ui.separator();
+                        return;
+                    }
+                    let is_reference = self
+                        .reference
+                        .as_ref()
+                        .is_some_and(|pin| pin.source == source.id);
+                    if let Some(request) =
+                        source.controls(ui, may_remove, reference_time, is_reference, preview)
+                    {
+                        action = Some((index, request));
+                    }
+                    let offset = source.display_offset(preview);
+                    let previous = translate(&self.span, -offset);
+                    *source.capture.span() = previous.clone();
+                    let link = Link {
+                        domain: translate(&self.domain, -offset),
+                        offset,
+                        probe: self.probe.map(|probe| probe - offset),
+                        reference: reference_time.map(|time| time - offset),
+                    };
+                    let height = height.max(source.capture.min_height());
+                    ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
+                        if let Some(probe) =
+                            source.capture.content(ui, palette, copies, Some(&link))
+                        {
+                            next_probe = Some(probe + offset);
+                        }
                     });
-                }
-                let inputs = if self.derived.open() {
-                    self.sources.iter().flat_map(Source::inputs).collect()
-                } else {
-                    Vec::new()
-                };
-                next_probe = self
-                    .derived
-                    .content(
-                        ui,
-                        &mut self.span,
-                        &self.domain,
-                        &inputs,
-                        self.probe,
-                        reference_time,
-                    )
-                    .or(next_probe);
+                    let view = source.capture.span();
+                    if *view != previous {
+                        self.span = translate(view, offset);
+                        ui.ctx().request_repaint();
+                    }
+                    ui.separator();
+                });
+            }
+            let inputs = if self.derived.open() {
+                self.sources.iter().flat_map(Source::inputs).collect()
+            } else {
+                Vec::new()
+            };
+            next_probe = self
+                .derived
+                .content(
+                    ui,
+                    &mut self.span,
+                    &self.domain,
+                    &inputs,
+                    self.probe,
+                    reference_time,
+                )
+                .or(next_probe);
+        });
+        self.session
+            .scroll
+            .finish(ui.ctx(), scroll.state.clamped_offset().y, || {
+                self.derived.calculating()
+                || self.sources.iter().any(|source| {
+                    matches!(&source.capture, Capture::Digital(view) if view.restoring_details())
+                })
             });
         if next_probe != self.probe {
             self.probe = next_probe;
@@ -318,7 +367,9 @@ impl Viewer {
 
     fn reference_time(&self) -> Option<f64> {
         let pin = self.reference.as_ref()?;
-        let source = self.sources.iter().find(|source| source.path == pin.path)?;
+        let source = self.sources.iter().find(|source| {
+            source.id == pin.source && !matches!(source.capture, Capture::Unavailable(_))
+        })?;
         Some(pin.native_time + source.offset)
     }
 
@@ -326,7 +377,7 @@ impl Viewer {
         match action {
             SourceAction::Pin(native_time) => {
                 self.reference = Some(Reference {
-                    path: self.sources[index].path.clone(),
+                    source: self.sources[index].id,
                     native_time,
                 });
             }
@@ -337,16 +388,19 @@ impl Viewer {
                 }
             }
             SourceAction::ClearReference => self.reference = None,
+            SourceAction::Relink(source) => self.sources[index] = source,
             SourceAction::Remove => {
                 let removed = self.sources.remove(index);
                 if self
                     .reference
                     .as_ref()
-                    .is_some_and(|pin| pin.path == removed.path)
+                    .is_some_and(|pin| pin.source == removed.id)
                 {
                     self.reference = None;
                 }
-                if let [source] = &mut self.sources[..] {
+                if let [source] = &mut self.sources[..]
+                    && !matches!(source.capture, Capture::Unavailable(_))
+                {
                     let previous = translate(&self.span, -source.offset);
                     *source.capture.span() = timeline::fit(&source.capture.domain(), previous, 0.0);
                     self.probe = None;
@@ -393,6 +447,7 @@ impl Source {
             .unwrap_or(self.path.as_os_str())
             .to_string_lossy();
         match &self.capture {
+            Capture::Unavailable(source) => source.inputs(self.offset),
             Capture::Analog(view) => {
                 let recording = view.recording();
                 let mut inputs = inputs::Input::analog(self.id, self.offset, &label, recording);
@@ -538,6 +593,7 @@ impl Capture {
         match self {
             Self::Analog(view) => view.span(),
             Self::Digital(view) => view.span(),
+            Self::Unavailable(source) => source.span(),
         }
     }
 
@@ -545,6 +601,7 @@ impl Capture {
         match self {
             Self::Analog(view) => view.domain(),
             Self::Digital(view) => view.domain(),
+            Self::Unavailable(source) => source.domain(),
         }
     }
 
@@ -552,6 +609,7 @@ impl Capture {
         match self {
             Self::Analog(view) => view.cursor(),
             Self::Digital(view) => view.cursor(),
+            Self::Unavailable(_) => None,
         }
     }
 
@@ -559,6 +617,7 @@ impl Capture {
         match self {
             Self::Analog(view) => view.min_height(),
             Self::Digital(view) => view.min_height(),
+            Self::Unavailable(_) => 0.0,
         }
     }
 
@@ -572,6 +631,7 @@ impl Capture {
         match self {
             Self::Analog(view) => view.content(ui, palette, copies, link),
             Self::Digital(view) => view.content(ui, copies, link),
+            Self::Unavailable(_) => None,
         }
     }
 }

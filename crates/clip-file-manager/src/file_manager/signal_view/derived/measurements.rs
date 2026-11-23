@@ -36,6 +36,14 @@ struct Query {
     condition: Option<usize>,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(super) struct SavedMeasurements {
+    open: bool,
+    signal: usize,
+    condition: Option<usize>,
+    selected: Option<usize>,
+}
+
 impl Query {
     fn matches(&self, other: &Self) -> bool {
         Weak::ptr_eq(&self.frame, &other.frame)
@@ -46,6 +54,25 @@ impl Query {
 }
 
 impl View {
+    pub(super) fn save(&self) -> SavedMeasurements {
+        SavedMeasurements {
+            open: self.open,
+            signal: self.signal,
+            condition: self.condition,
+            selected: self.selected,
+        }
+    }
+
+    pub(super) fn restore(&mut self, saved: SavedMeasurements, lanes: usize) {
+        self.open = saved.open;
+        self.signal = if saved.signal < lanes {
+            saved.signal
+        } else {
+            usize::MAX
+        };
+        self.condition = saved.condition.filter(|&index| index < lanes);
+        self.selected = saved.selected.filter(|&group| group < 3);
+    }
     pub(super) fn remap(&mut self, lanes: &[Option<usize>]) {
         let mapped = |index| lanes.get(index).copied().flatten();
         let signal = mapped(self.signal);
