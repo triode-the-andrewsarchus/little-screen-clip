@@ -1356,23 +1356,14 @@ dependencies = [
 
 [[package]]
 name = "can-dbc"
-version = "10.0.0"
+version = "7.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e39bde77280df32da397aaabc992cd252639af9cec2dff19f293668a9c0c162f"
+checksum = "f42f0a9dd3ef6f2c7bbaca8c486ec80b2e66217e6c564d7df27d53b1c688b1db"
 dependencies = [
- "can-dbc-pest",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "can-dbc-pest"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3345d10c9b3676319c8865ce7622d03fff3c75fc21e1f7156afa629006618cf5"
-dependencies = [
+ "derive-getters",
  "encoding_rs",
- "pest",
- "pest_derive",
+ "nom 8.0.0",
+ "serde",
 ]
 
 [[package]]
@@ -2822,6 +2813,17 @@ name = "deranged"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
+
+[[package]]
+name = "derive-getters"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74ef43543e701c01ad77d3a5922755c6a1d71b22d942cb8042be4994b380caff"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "derive-where"

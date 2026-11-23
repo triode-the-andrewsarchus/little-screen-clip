@@ -36,34 +36,28 @@ impl Database {
             |_| can_dbc::encodings::WINDOWS_1252.decode(bytes).0,
             std::borrow::Cow::Borrowed,
         );
-        let parsed = Dbc::try_from(text.trim_start_matches('\u{feff}')).map_err(|error| {
-            let message = error.to_string();
-            format!(
-                "Invalid DBC: {}",
-                &message[..message.floor_char_boundary(message.len().min(800))]
-            )
-        })?;
+        let parsed = Dbc::try_from(text.trim_start_matches('\u{feff}')).map_err(parse_error)?;
         Self::compile(parsed, cancel)
     }
 
     fn compile(parsed: Dbc, cancel: &AtomicBool) -> Result<Self, String> {
         let mut messages = BTreeMap::new();
-        let mut mux = group_fields(parsed.extended_multiplex, |rule| rule.message_id);
-        let mut types = group_fields(parsed.signal_extended_value_type_list, |field| {
-            field.message_id
+        let mut mux = group_fields(parsed.extended_multiplex(), |rule| *rule.message_id());
+        let mut types = group_fields(parsed.signal_extended_value_type_list(), |field| {
+            *field.message_id()
         });
-        for message in parsed.messages {
+        for message in parsed.messages() {
             cancelled(cancel)?;
-            let Some(id) = identifier(message.id) else {
+            let Some(id) = identifier(*message.id()) else {
                 continue;
             };
-            let extended = mux.remove(&message.id.raw()).unwrap_or_default();
-            let types = types.remove(&message.id.raw()).unwrap_or_default();
+            let extended = mux.remove(&message.id().raw()).unwrap_or_default();
+            let types = types.remove(&message.id().raw()).unwrap_or_default();
             let mut result = Message::new(id, message, &extended)?;
             for entry in types {
-                if let Some(index) = result.signal_index(&entry.signal_name) {
+                if let Some(index) = result.signal_index(entry.signal_name()) {
                     result.signals[index].encoding = Encoding::from(
-                        entry.signal_extended_value_type,
+                        *entry.signal_extended_value_type(),
                         result.signals[index].encoding,
                     );
                 }
@@ -92,10 +86,27 @@ impl Database {
     }
 }
 
-fn group_fields<T>(fields: Vec<T>, id: impl Fn(&T) -> MessageId) -> BTreeMap<u32, Vec<T>> {
+fn parse_error(error: can_dbc::Error<'_>) -> String {
+    match error {
+        can_dbc::Error::Incomplete(_, rest) => {
+            let rest = rest.trim_start();
+            let end = rest.find('\n').unwrap_or(rest.len()).min(160);
+            format!(
+                "Unexpected DBC syntax near {}",
+                &rest[..rest.floor_char_boundary(end)]
+            )
+        }
+        can_dbc::Error::Nom(error) => {
+            format!("Invalid DBC syntax ({:?})", error.map(|detail| detail.code))
+        }
+        can_dbc::Error::MultipleMultiplexors => "DBC contains ambiguous multiplexers".into(),
+    }
+}
+
+fn group_fields<T>(fields: &[T], id: impl Fn(&T) -> MessageId) -> BTreeMap<u32, Vec<&T>> {
     let mut groups = BTreeMap::<_, Vec<_>>::new();
     for field in fields {
-        groups.entry(id(&field).raw()).or_default().push(field);
+        groups.entry(id(field).raw()).or_default().push(field);
     }
     groups
 }
@@ -117,42 +128,42 @@ pub struct Message {
 impl Message {
     fn new(
         id: Identifier,
-        message: can_dbc::Message,
-        extended: &[ExtendedMultiplex],
+        message: &can_dbc::Message,
+        extended: &[&ExtendedMultiplex],
     ) -> Result<Self, String> {
         let names: BTreeMap<_, _> = message
-            .signals
+            .signals()
             .iter()
             .enumerate()
-            .map(|(index, signal)| (signal.name.as_str(), index))
+            .map(|(index, signal)| (signal.name().as_str(), index))
             .collect();
-        if names.len() != message.signals.len() {
+        if names.len() != message.signals().len() {
             return Err(format!(
                 "DBC message {} has duplicate signal names",
-                message.name
+                message.name()
             ));
         }
-        let root = single_multiplexer(&message.signals);
+        let root = single_multiplexer(message.signals());
         let mut explicit = BTreeMap::<&str, Vec<&ExtendedMultiplex>>::new();
         for rule in extended {
-            explicit.entry(&rule.signal_name).or_default().push(rule);
+            explicit.entry(rule.signal_name()).or_default().push(*rule);
         }
         let signals = message
-            .signals
+            .signals()
             .iter()
             .map(|signal| {
                 let gate = gate(
                     signal,
                     root,
-                    explicit.get(signal.name.as_str()).map(Vec::as_slice),
+                    explicit.get(signal.name().as_str()).map(Vec::as_slice),
                     &names,
                 );
-                Field::new(signal, message.size, gate)
+                Field::new(signal, *message.size(), gate)
             })
             .collect();
         Ok(Self {
             id,
-            name: message.name,
+            name: message.name().clone(),
             signals,
         })
     }
@@ -200,7 +211,7 @@ fn single_multiplexer(signals: &[Signal]) -> Option<usize> {
     let mut roots = signals
         .iter()
         .enumerate()
-        .filter(|(_, signal)| signal.multiplexer_indicator == MultiplexIndicator::Multiplexor);
+        .filter(|(_, signal)| *signal.multiplexer_indicator() == MultiplexIndicator::Multiplexor);
     let (index, _) = roots.next()?;
     roots.next().is_none().then_some(index)
 }
@@ -222,7 +233,7 @@ fn gate(
     if let Some(explicit) = explicit {
         return explicit_gate(explicit, names);
     }
-    let selector = match signal.multiplexer_indicator {
+    let selector = match *signal.multiplexer_indicator() {
         MultiplexIndicator::Plain | MultiplexIndicator::Multiplexor => return Gate::Always,
         MultiplexIndicator::MultiplexedSignal(value)
         | MultiplexIndicator::MultiplexorAndMultiplexedSignal(value) => value,
@@ -235,13 +246,13 @@ fn gate(
 fn explicit_gate(explicit: &[&ExtendedMultiplex], names: &BTreeMap<&str, usize>) -> Gate {
     let mut conditions = BTreeMap::<_, Vec<_>>::new();
     for rule in explicit {
-        let Some(&index) = names.get(rule.multiplexor_signal_name.as_str()) else {
+        let Some(&index) = names.get(rule.multiplexor_signal_name().as_str()) else {
             return Gate::Unresolved;
         };
         let limits = conditions.entry(index).or_default();
-        limits.extend(rule.mappings.iter().filter_map(|mapping| {
-            (mapping.min_value <= mapping.max_value)
-                .then_some(mapping.min_value..=mapping.max_value)
+        limits.extend(rule.mappings().iter().filter_map(|mapping| {
+            (mapping.min_value() <= mapping.max_value())
+                .then_some(*mapping.min_value()..=*mapping.max_value())
         }));
     }
     Gate::Conditional(conditions.into_iter().collect())
@@ -261,12 +272,12 @@ pub struct Field {
 impl Field {
     fn new(signal: &Signal, message_size: u64, gate: Gate) -> Self {
         Self {
-            name: signal.name.clone(),
-            unit: signal.unit.clone(),
+            name: signal.name().clone(),
+            unit: signal.unit().clone(),
             factor: signal.factor,
             offset: signal.offset,
             bits: bit_layout(signal, message_size),
-            encoding: match signal.value_type {
+            encoding: match signal.value_type() {
                 ValueType::Signed => Encoding::Signed,
                 ValueType::Unsigned => Encoding::Unsigned,
             },
@@ -308,13 +319,13 @@ fn bit_layout(signal: &Signal, message_size: u64) -> Vec<u16> {
             return Vec::new();
         }
         bits.push(bit as u16);
-        bit = match signal.byte_order {
+        bit = match signal.byte_order() {
             ByteOrder::LittleEndian => bit + 1,
             ByteOrder::BigEndian if bit % 8 == 0 => bit + 15,
             ByteOrder::BigEndian => bit - 1,
         };
     }
-    if signal.byte_order == ByteOrder::BigEndian {
+    if *signal.byte_order() == ByteOrder::BigEndian {
         bits.reverse();
     }
     bits
