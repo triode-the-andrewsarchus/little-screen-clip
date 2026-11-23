@@ -26,14 +26,17 @@ use super::signal_view::spectra as spectrum_input;
 use super::{
     preview_copy::Copies,
     preview_job::Task,
-    signal_view::timeline::{self, Interaction, Link},
+    signal_view::{
+        frequency_plot::paint_window,
+        timeline::{self, Interaction, Link},
+    },
 };
 use crate::file_source::ReadCheck;
 use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2};
 use little_clip_core::{
     BackgroundJobs,
     engineering::{
-        analysis::{Dimension, SignalType, SpectrumWindow},
+        analysis::{Clock, Dimension, SignalType, SpectrumWindow},
         waveforms::{
             Envelope, Overview, Peak, Recording, display_axis_value, display_value, sample_span,
             time_span,
@@ -84,6 +87,7 @@ pub(super) struct Viewer {
     visible: Vec<bool>,
     display_offsets: Vec<f32>,
     trace_fft: std::collections::BTreeMap<ScopeTrace, trace_fft::TraceSpectrum>,
+    inline_fft_evidence: Option<Range<f64>>,
     hover: hover::Hover,
     digital: digital::Digital,
     drag: Option<CursorDrag>,
@@ -160,6 +164,7 @@ impl Viewer {
             visible,
             display_offsets,
             trace_fft: Default::default(),
+            inline_fft_evidence: None,
             hover: hover::Hover::default(),
             digital,
             drag: None,
@@ -491,6 +496,7 @@ impl Viewer {
     }
 
     fn waveform(&mut self, ui: &mut Ui, height: f32, link: Option<&Link>) -> Option<f64> {
+        self.inline_fft_evidence = None;
         let lane_height = if self.trace_fft.is_empty() {
             lanes::MIN_HEIGHT
         } else {
@@ -555,23 +561,43 @@ impl Viewer {
         let (channels, fft_change) = self.draw_channels(ui, &painter, rect, ink, link);
         self.digital
             .highlight_analog_inputs(&clipped, &self.span, &channels, self.stacked);
-        self.draw_math(ui, &painter, &clipped, rect);
-        self.draw_filters(ui, &painter, &clipped, rect);
+        let clock = Link::clock(link);
+        self.draw_math(ui, &painter, &clipped, rect, clock);
+        self.draw_filters(ui, &painter, &clipped, rect, clock);
+        self.paint_waveform_annotations(ui, &clipped, rect, link, &channels, &fft_lanes);
+        if let Some(index) = fft_change {
+            self.toggle_trace_fft(ScopeTrace::Recorded(index));
+            ui.ctx().request_repaint();
+        }
+        probe
+    }
+
+    fn paint_waveform_annotations(
+        &self,
+        ui: &Ui,
+        clipped: &egui::Painter,
+        rect: Rect,
+        link: Option<&Link>,
+        channels: &[PlottedChannel],
+        fft_lanes: &[Rect],
+    ) {
         let clock = Link::clock(link);
         if fft_lanes.is_empty() {
-            self.paint_time_markers(ui, &clipped, rect, link, true);
+            self.paint_time_markers(ui, clipped, rect, link, true);
             self.paint_hover(
-                &clipped,
+                clipped,
                 rect,
                 ui.visuals().text_color(),
                 ui.visuals().window_fill(),
                 clock,
-                &channels,
+                channels,
             );
         } else {
             let mut labelled = false;
             for lane in (0..self.lane_count()).map(|slot| self.lane(rect, slot)) {
-                if in_fft_lane(lane.plot.center()) || !ui.is_rect_visible(lane.frame) {
+                if fft_lanes.iter().any(|fft| fft.contains(lane.plot.center()))
+                    || !ui.is_rect_visible(lane.frame)
+                {
                     continue;
                 }
                 let painter = clipped.with_clip_rect(lane.frame.intersect(clipped.clip_rect()));
@@ -579,6 +605,9 @@ impl Viewer {
                     pos2(rect.left(), lane.frame.top()),
                     lane.frame.right_bottom(),
                 );
+                if let Some(interval) = self.inline_fft_evidence() {
+                    paint_window(ui, &painter, lane.plot, &self.span, interval);
+                }
                 self.paint_time_markers(ui, &painter, time_rect, link, !labelled);
                 labelled = true;
                 self.paint_hover(
@@ -587,15 +616,10 @@ impl Viewer {
                     ui.visuals().text_color(),
                     ui.visuals().window_fill(),
                     clock,
-                    &channels,
+                    channels,
                 );
             }
         }
-        if let Some(index) = fft_change {
-            self.toggle_trace_fft(ScopeTrace::Recorded(index));
-            ui.ctx().request_repaint();
-        }
-        probe
     }
 
     fn paint_time_markers(
@@ -669,10 +693,11 @@ impl Viewer {
             let fft = self.trace_fft.contains_key(&trace);
             let raw = (self.stacked && !fft).then(|| self.channel_bounds(index));
             if fft || self.stacked {
-                change = self.recorded_lane_controls(ui, lane, index, raw).or(change);
+                change = self
+                    .recorded_lane_controls(ui, lane, index, raw, Link::clock(link))
+                    .or(change);
             }
             if fft {
-                self.paint_trace_fft(ui, lane.plot, trace);
                 continue;
             }
             let channel = &self.overview.channels[index];
@@ -710,12 +735,21 @@ impl Viewer {
         lane: lanes::Lane,
         index: usize,
         raw: Option<Peak>,
+        clock: Clock,
     ) -> Option<usize> {
         let mut heading = lane.heading(ui, ("scope-channel", index));
         heading.colored_label(plot::color(index), &self.overview.channels[index].name);
         let toggle = self.trace_fft_toggle(&mut heading, ScopeTrace::Recorded(index));
         if let Some(bounds) = raw {
             self.offset_control(&mut heading, index, bounds);
+        } else {
+            self.paint_trace_fft(
+                ui,
+                &mut heading,
+                lane.plot,
+                ScopeTrace::Recorded(index),
+                clock,
+            );
         }
         toggle.then_some(index)
     }
@@ -870,6 +904,7 @@ impl Viewer {
         painter: &egui::Painter,
         clip: &egui::Painter,
         rect: Rect,
+        clock: Clock,
     ) {
         if let Some((slot, _)) = self
             .channel_slots()
@@ -917,7 +952,7 @@ impl Viewer {
             .truncate(),
         );
         if self.trace_fft.contains_key(&ScopeTrace::Math) {
-            self.paint_trace_fft(ui, lane.plot, ScopeTrace::Math);
+            self.paint_trace_fft(ui, &mut heading, lane.plot, ScopeTrace::Math, clock);
         } else if let Some((raw, bounds)) = calculated.filter(|(_, bounds)| bounds.valid()) {
             lane.scale(painter, *bounds, &self.math_unit(), MATH_COLOR);
             let (start, samples) = raw.visible(&self.span);
@@ -1038,6 +1073,9 @@ impl Viewer {
             self.span.clone(),
             Color32::from_white_alpha(65),
         );
+        if let Some(interval) = self.inline_fft_evidence() {
+            paint_window(ui, &painter, rect, &self.domain, interval);
+        }
         if (response.clicked() || response.dragged())
             && let Some(pointer) = response.interact_pointer_pos()
         {

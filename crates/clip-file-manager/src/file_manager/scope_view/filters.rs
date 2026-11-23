@@ -202,6 +202,7 @@ impl Viewer {
         painter: &Painter,
         clip: &Painter,
         rect: Rect,
+        clock: little_clip_core::engineering::analysis::Clock,
     ) {
         let first = self.physical_lanes() + usize::from(self.math_state.numeric().is_some());
         let indices = self.filters.visible_indices().collect::<Vec<_>>();
@@ -226,7 +227,7 @@ impl Viewer {
             let toggle = self.trace_fft_toggle(&mut heading, trace);
             heading.colored_label(FILTER_COLOR, format!("{}{status}", derived.settings.name));
             if self.trace_fft.contains_key(&trace) {
-                self.paint_trace_fft(ui, lane.plot, trace);
+                self.paint_trace_fft(ui, &mut heading, lane.plot, trace, clock);
             } else if let Some(output) = output {
                 draw_output(
                     &clip.with_clip_rect(lane.plot),

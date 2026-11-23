@@ -1,4 +1,6 @@
-use super::{Capture, Link, LinkedTimeline, Source, SourceAction, Viewer, alignment};
+use super::{
+    Capture, Link, LinkedTimeline, Source, SourceAction, Viewer, alignment, frequency_plot,
+};
 use crate::file_manager::{
     preview_copy::Copies,
     scope_view::{COLLAPSED_HEIGHT, plot},
@@ -247,9 +249,7 @@ impl Viewer {
             - (rows.len() - visible) as f32 * COLLAPSED_HEIGHT
             - rows.len().saturating_sub(1) as f32 * ui.spacing().item_spacing.y;
         let height = (desired / visible.max(1) as f32).max(88.0);
-        if visible > 0 {
-            comparison_time_axis(ui, &self.span);
-        }
+        let axis = (visible > 0).then(|| comparison_time_axis(ui, &self.span));
         let mut probe = None;
         let mut reorder = None;
         for row in &mut rows {
@@ -266,6 +266,9 @@ impl Viewer {
             probe = self.comparison_row(ui, rect, row, link).or(probe);
             reorder = trace_drop(ui, &target, row.trace).or(reorder);
         }
+        if let Some(axis) = axis {
+            self.paint_comparison_fft_window(ui, axis, links);
+        }
         self.comparison.focus_visible(&rows);
         if let Some((from, to, after)) = reorder {
             self.comparison.place(from, to, after);
@@ -273,6 +276,20 @@ impl Viewer {
         }
         probe
     }
+
+    fn paint_comparison_fft_window(&self, ui: &Ui, axis: Rect, links: &HashMap<u64, Link>) {
+        let interval = self.sources.iter().find_map(|source| {
+            let Capture::Analog(view) = &source.capture else {
+                return None;
+            };
+            let link = links.get(&source.id)?;
+            Some(link.clock.workspace_range(view.inline_fft_evidence()?))
+        });
+        if let Some(interval) = interval {
+            frequency_plot::paint_window(ui, ui.painter(), axis, &self.span, &interval);
+        }
+    }
+
     fn comparison_row(
         &mut self,
         ui: &mut Ui,
@@ -319,17 +336,18 @@ impl Viewer {
     }
 }
 
-fn comparison_time_axis(ui: &mut Ui, span: &std::ops::Range<f64>) {
+fn comparison_time_axis(ui: &mut Ui, span: &std::ops::Range<f64>) -> Rect {
     let (axis, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
-    let axis = Rect::from_min_max(axis.min + vec2(78.0, 0.0), pos2(axis.right(), axis.top()));
+    let ruler = Rect::from_min_max(axis.min + vec2(78.0, 0.0), pos2(axis.right(), axis.top()));
     plot::x_axis_with_grid(
         ui.painter(),
-        axis,
+        ruler,
         span,
         "s",
         ui.visuals().weak_text_color(),
         std::iter::empty(),
     );
+    Rect::from_min_max(ruler.min, axis.max)
 }
 
 fn trace_drop(ui: &Ui, target: &Response, key: Trace) -> Option<(Trace, Trace, bool)> {

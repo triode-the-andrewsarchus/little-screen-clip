@@ -113,6 +113,25 @@ impl Display<'_> {
     }
 }
 
+pub(in crate::file_manager) fn peak_reading(
+    result: ResultView<'_>,
+    survey: &SpectralSurvey,
+    bin: usize,
+    db: bool,
+) -> Option<(PeakWindow, String)> {
+    let channel = result.input.channel();
+    let measured = survey.peak_interval(bin)?;
+    let interval = channel.time_at(measured.start)..channel.time_at(measured.end);
+    let hz = bin as f64 * survey.spectrum.bin_hz;
+    let amplitude = survey.spectrum.peak_amplitude[bin];
+    let gain = if db {
+        format!("{:.2} dB", amplitude_value(amplitude, true))
+    } else {
+        display_value(f64::from(amplitude), &channel.unit)
+    };
+    Some((PeakWindow { interval, hz }, gain))
+}
+
 fn spectrum_readout(
     ui: &mut Ui,
     result: ResultView<'_>,
@@ -121,23 +140,15 @@ fn spectrum_readout(
     db: bool,
     clock: Clock,
 ) -> Option<PeakWindow> {
+    let (window, gain) = peak_reading(result, survey, bin, db)?;
     let channel = result.input.channel();
-    let measured = survey.peak_interval(bin)?;
-    let interval = channel.time_at(measured.start)..channel.time_at(measured.end);
     let requested = channel.time_at(result.rows.start)..channel.time_at(result.rows.end);
-    let hz = bin as f64 * survey.spectrum.bin_hz;
-    let amplitude = survey.spectrum.peak_amplitude[bin];
-    let gain = if db {
-        format!("{:.2} dB", amplitude_value(amplitude, true))
-    } else {
-        display_value(f64::from(amplitude), &channel.unit)
-    };
     let reveal = ui
         .horizontal_wrapped(|ui| {
-            ui.monospace(format!("{} · {gain}", display_value(hz, "Hz")));
+            ui.monospace(format!("{} · {gain}", display_value(window.hz, "Hz")));
             ui.small_button(format!(
                 "Show peak window  {}",
-                time_range(&interval, clock)
+                time_range(&window.interval, clock)
             ))
             .on_hover_text("Inspect the source samples that produced this frequency bin")
             .clicked()
@@ -153,10 +164,10 @@ fn spectrum_readout(
             ));
         }
     });
-    reveal.then_some(PeakWindow { interval, hz })
+    reveal.then_some(window)
 }
 
-fn time_range(interval: &Range<f64>, clock: Clock) -> String {
+pub(in crate::file_manager) fn time_range(interval: &Range<f64>, clock: Clock) -> String {
     format!(
         "{} to {}",
         display_value(clock.to_workspace(interval.start), "s"),
@@ -202,22 +213,32 @@ pub(in crate::file_manager) fn paint_origin(
     spectra: &Spectra,
 ) {
     if let Some(window) = spectra.origin() {
-        let color = ui.visuals().hyperlink_color;
-        plot::highlight(
-            painter,
-            rect,
-            visible,
-            window.interval.clone(),
-            color.gamma_multiply(0.18),
-        );
-        for edge in [window.interval.start, window.interval.end] {
-            if visible.contains(&edge) {
-                painter.vline(
-                    plot::x_at(rect, visible, edge),
-                    rect.y_range(),
-                    Stroke::new(1.1, color),
-                );
-            }
+        paint_window(ui, painter, rect, visible, &window.interval);
+    }
+}
+
+pub(in crate::file_manager) fn paint_window(
+    ui: &Ui,
+    painter: &egui::Painter,
+    rect: Rect,
+    visible: &Range<f64>,
+    interval: &Range<f64>,
+) {
+    let color = ui.visuals().hyperlink_color;
+    plot::highlight(
+        painter,
+        rect,
+        visible,
+        interval.clone(),
+        color.gamma_multiply(0.18),
+    );
+    for edge in [interval.start, interval.end] {
+        if visible.start <= edge && edge <= visible.end {
+            painter.vline(
+                plot::x_at(rect, visible, edge),
+                rect.y_range(),
+                Stroke::new(1.1, color),
+            );
         }
     }
 }

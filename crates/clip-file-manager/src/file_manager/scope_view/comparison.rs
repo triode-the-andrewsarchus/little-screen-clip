@@ -43,6 +43,7 @@ impl Viewer {
         }
         self.span = span;
         self.hover.time = link.probe;
+        self.inline_fft_evidence = None;
     }
 
     pub(in crate::file_manager) fn finish_comparison(&mut self, ui: &Ui) {
@@ -123,7 +124,7 @@ impl Viewer {
         if let Some(bounds) = bounds {
             interaction = self.comparison_waveform(ui, lane, index, link, bounds, interaction);
         } else {
-            self.paint_trace_fft(ui, lane.plot, trace);
+            self.paint_trace_fft(ui, &mut heading, lane.plot, trace, link.clock);
         }
         if toggle {
             self.toggle_trace_fft(trace);

@@ -204,6 +204,12 @@ In two copies of the four-channel Rigol capture, adding 0.50 V to A’s CH1 move
 
 The single-recording CPU frame benchmark ran with a threshold equation on the 50 KiB CSV and 12 MB WFM. At wide zoom the p95 was 1.12 ms and 2.34 ms respectively, including egui tessellation. The benchmark times CPU plotting for the panned views. The desktop walkthrough covers the probe and the interleaved lanes.
 
+## 23. Locate the time window behind an inline FFT peak
+
+The FFT lane header shows its frequency, amplitude, and contributing time window. Partial coverage is visible beside the result. Hovering shows the FFT input and covered sample count, and marks the contributing interval on the waveform lanes and overview. In an interleaved recording comparison, the shared ruler marks the same interval in the aligned clock. Clicking another frequency checks the window that contributed that bin.
+
+A 13-second capture placed a short burst in the first second and a stronger 1 kHz signal in the final second. The default peak read 12–13 s. Picking a bin near 4.1 kHz moved the highlight to 0–1 s. The readout reported 786,432 of 851,968 samples across 12 windows. The highlight aligned with the matching ends of the time plots at 1500 × 1000 and with the shared ruler at 800 × 620 in the light theme. A separate Rigol capture exercised the inline FFT for a channel sum and a low-pass output, and returned both lanes to waveform display.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.
