@@ -521,6 +521,10 @@ impl ScreenRenderer {
                 self.draw_packet_activity(pixmap, summary, [rx, ry, rw, rh]);
                 true
             }
+            Some(Preview::Can(summary)) => {
+                self.draw_can_activity(pixmap, summary, [rx, ry, rw, rh]);
+                true
+            }
             Some(Preview::Midi(score)) => {
                 self.draw_midi_card(pixmap, score, rx, ry, rw, rh, is_hero);
                 true

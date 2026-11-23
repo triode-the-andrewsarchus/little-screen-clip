@@ -44,6 +44,37 @@ impl ScreenRenderer {
         self.draw_activity(pixmap, [&heading, &info], &bins, bounds);
     }
 
+    pub(super) fn draw_can_activity(
+        &self,
+        pixmap: &mut Pixmap,
+        capture: &little_clip_core::engineering::can::Summary,
+        bounds: [f32; 4],
+    ) {
+        let time = capture
+            .time_bounds_ns
+            .map(|[start, end]| display_value((end - start) as f64 * 1e-9, "s"));
+        let heading = time.map_or_else(
+            || capture.format.label().to_owned(),
+            |t| format!("{} · {t}", capture.format.label()),
+        );
+        let coverage = if capture.complete { "" } else { "First " };
+        let info = format!(
+            "{coverage}{} frames · {} errors",
+            capture.frames, capture.errors
+        );
+        let bins = capture
+            .activity
+            .iter()
+            .map(|bin| {
+                [
+                    bin.frames.saturating_sub(bin.error_frames),
+                    bin.error_frames,
+                ]
+            })
+            .collect::<Vec<_>>();
+        self.draw_activity(pixmap, [&heading, &info], &bins, bounds);
+    }
+
     pub(super) fn draw_activity(
         &self,
         pixmap: &mut Pixmap,

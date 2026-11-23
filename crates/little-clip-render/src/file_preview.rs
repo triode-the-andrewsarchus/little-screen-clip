@@ -37,6 +37,7 @@ pub(crate) enum Preview {
     Touchstone(little_clip_core::engineering::touchstone::Summary),
     Logic(little_clip_core::engineering::logic_preview::Overview),
     Packets(little_clip_core::engineering::packets::Summary),
+    Can(little_clip_core::engineering::can::Summary),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -55,6 +56,7 @@ enum Kind {
     Touchstone,
     Logic,
     Packets,
+    Can,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -193,6 +195,7 @@ impl crate::ScreenRenderer {
             Some(Format::Touchstone) => return load(path, Kind::Touchstone, extension),
             Some(Format::LogicCapture) => return load(path, Kind::Logic, extension),
             Some(Format::PacketCapture) => return load(path, Kind::Packets, extension),
+            Some(Format::CanCapture) => return load(path, Kind::Can, extension),
             _ => {}
         }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
@@ -366,6 +369,15 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             let summary = packets::summary(std::io::BufReader::new(&file), &cancel).ok()?;
             source.check_file(&file).ok()?;
             Some(Preview::Packets(summary))
+        }
+        Kind::Can => {
+            use little_clip_core::{engineering::can, file_source::ReadCheck};
+            let cancel = AtomicBool::new(false);
+            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
+            let capture = can::Capture::open(file.try_clone().ok()?).ok()?;
+            let summary = capture.preview(&cancel).ok()?;
+            source.check_file(&file).ok()?;
+            Some(Preview::Can(summary))
         }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);

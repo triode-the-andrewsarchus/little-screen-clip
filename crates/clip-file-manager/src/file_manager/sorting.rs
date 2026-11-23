@@ -86,6 +86,7 @@ pub(super) enum Category {
     RfSweep,
     LogicCapture,
     PacketCapture,
+    CanCapture,
     Video,
     Scene,
     Font,
@@ -143,6 +144,7 @@ fn extension_category(entry: &Entry) -> Category {
         Some(Format::Touchstone) => return Category::RfSweep,
         Some(Format::LogicCapture) => return Category::LogicCapture,
         Some(Format::PacketCapture) => return Category::PacketCapture,
+        Some(Format::CanCapture) => return Category::CanCapture,
         _ => {}
     }
     if entry.is_geography() {
@@ -189,6 +191,7 @@ impl Category {
             Self::RfSweep => "RF measurements",
             Self::LogicCapture => "Logic captures",
             Self::PacketCapture => "Packet captures",
+            Self::CanCapture => "CAN logs",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",

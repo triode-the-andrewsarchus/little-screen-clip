@@ -43,6 +43,7 @@ use little_clip_core::path_serde;
 mod pdf_strip;
 mod photo_ratings;
 use little_clip_core::jobs::task as preview_job;
+mod can_view;
 mod logic_view;
 mod metadata;
 mod packets_view;
@@ -136,6 +137,10 @@ pub(super) enum DocumentPosition {
     ScopeSamples {
         first: u64,
         end: u64,
+        revision: u64,
+    },
+    CanFrame {
+        ordinal: u64,
         revision: u64,
     },
     CapturedPacket {
