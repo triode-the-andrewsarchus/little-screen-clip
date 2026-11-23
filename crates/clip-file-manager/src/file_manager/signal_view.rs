@@ -580,6 +580,12 @@ impl Source {
             Capture::Analog(view) => {
                 let recording = view.recording();
                 let mut inputs = inputs::Input::analog(self.id, clock, &label, recording);
+                inputs.extend(inputs::Input::threshold(
+                    self.id,
+                    clock,
+                    &label,
+                    &view.threshold_inputs(),
+                ));
                 inputs.extend(view.filtered_channels().filter_map(|filtered| {
                     inputs::Input::filtered(self.id, clock, &label, recording.channels(), filtered)
                 }));

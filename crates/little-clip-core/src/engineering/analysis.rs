@@ -8,6 +8,7 @@ mod graph;
 mod measurements;
 mod spectrum;
 mod survey;
+mod threshold;
 
 pub use alignment::{Correlation, correlate, strongest_peaks};
 pub use clock::{Clock, Landmark, fit_clock};
@@ -20,6 +21,7 @@ pub use spectrum::{
 };
 
 pub use survey::{SpectralSurvey, spectral_survey};
+pub use threshold::{Cutoffs, MiddleBand, Threshold};
 
 /// Returns the nearest zero crossing within a sample window.
 ///

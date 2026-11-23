@@ -1,4 +1,7 @@
-use crate::file_manager::scope_view::{FilterSamples, FilteredChannel, reads::RawChannel};
+use crate::file_manager::{
+    logic_view::protocols::TraceInput,
+    scope_view::{FilterSamples, FilteredChannel, ThresholdInput, reads::RawChannel},
+};
 use little_clip_core::engineering::{
     analysis::{Binding, Clock, Dimension, SignalType, Value},
     logic::{Level, Trace},
@@ -53,6 +56,10 @@ enum Source {
         dimension: Dimension,
         rate: f64,
         samples: Option<FilterSamples>,
+    },
+    Threshold {
+        reader: Arc<ThresholdInput>,
+        index: usize,
     },
     Digital {
         reader: Arc<logic_preview::Recording>,
@@ -213,6 +220,28 @@ impl Input {
             .collect()
     }
 
+    pub(super) fn threshold(
+        id: u64,
+        clock: Clock,
+        label: &str,
+        reader: &Arc<ThresholdInput>,
+    ) -> Vec<Self> {
+        reader
+            .lanes()
+            .iter()
+            .enumerate()
+            .map(|(index, lane)| Self {
+                alias: format!("s{id}_d{}", index + 1),
+                label: format!("{label} · {}", lane.name),
+                clock,
+                source: Source::Threshold {
+                    reader: reader.clone(),
+                    index,
+                },
+            })
+            .collect()
+    }
+
     pub(super) fn clock(&self) -> Clock {
         self.clock
     }
@@ -269,6 +298,7 @@ impl Input {
         let generation = match &self.source {
             Source::Filtered { samples, .. } => samples.as_ref().map(|samples| samples.generation),
             Source::Measured { generation, .. } => Some(*generation),
+            Source::Threshold { reader, .. } => Some(reader.revision()),
             _ => None,
         };
         Signature {
@@ -290,13 +320,17 @@ impl Input {
     pub(super) fn channel_names(inputs: &[Self]) -> std::collections::HashMap<String, &str> {
         let mut names = std::collections::HashMap::new();
         for input in inputs {
-            if let Source::Analog { reader, index } = &input.source {
-                let name = reader.channels()[*index].name.to_lowercase();
-                names
-                    .entry(name)
-                    .and_modify(|alias| *alias = None)
-                    .or_insert(Some(input.alias.as_str()));
-            }
+            let name = match &input.source {
+                Source::Analog { reader, index } => reader.channels()[*index].name.to_lowercase(),
+                Source::Threshold { reader, index } => {
+                    format!("{}_d", reader.channel_name(*index).to_lowercase())
+                }
+                _ => continue,
+            };
+            names
+                .entry(name)
+                .and_modify(|alias| *alias = None)
+                .or_insert(Some(input.alias.as_str()));
         }
         for input in inputs {
             names.remove(&input.alias);
@@ -315,7 +349,7 @@ impl Input {
                 SignalType::Analog(Dimension::from_unit(unit).unwrap_or(Dimension::SCALAR))
             }
             Source::Filtered { dimension, .. } => SignalType::Analog(*dimension),
-            Source::Digital { .. } => SignalType::Digital,
+            Source::Digital { .. } | Source::Threshold { .. } => SignalType::Digital,
             Source::Measured { lane, .. } => SignalType::Analog(lane.dimension()),
         };
         Binding {
@@ -338,6 +372,7 @@ impl Input {
             }
             Source::Filtered { rate, .. } => Some(*rate),
             Source::Digital { rate, .. } => *rate,
+            Source::Threshold { reader, index } => reader.lanes()[*index].sample_rate,
             Source::Measured { lane, .. } => Some(lane.rate()),
         }
         .filter(|rate| rate.is_finite() && *rate > 0.0)
@@ -357,25 +392,38 @@ impl Input {
                     }))
             }
             Source::Digital { reader, index, .. } => reader.checked(cancel, |capture| {
-                let Some(bounds) = capture.time_bounds(*index) else {
-                    return Ok(Samples::Empty);
-                };
-                let native = native.start.max(bounds.start)..native.end.min(bounds.end);
-                if native.is_empty() {
-                    return Ok(Samples::Empty);
-                }
-                let trace = capture.read_edges(*index, native.clone(), MAX_EDGES, cancel)?;
-                Ok(Samples::Digital {
-                    trace,
-                    native,
-                    clock: self.clock,
-                })
+                self.read_logic(capture, *index, native, cancel)
             }),
+            Source::Threshold { reader, index } => {
+                self.read_logic(reader.as_ref(), *index, native, cancel)
+            }
             Source::Measured { lane, .. } => Ok(Samples::Measured {
                 lane: lane.clone(),
                 clock: self.clock,
             }),
         }
+    }
+
+    fn read_logic(
+        &self,
+        input: &dyn TraceInput,
+        index: usize,
+        native: Range<f64>,
+        cancel: &AtomicBool,
+    ) -> Result<Samples, String> {
+        let Some(bounds) = input.time_bounds(index) else {
+            return Ok(Samples::Empty);
+        };
+        let native = native.start.max(bounds.start)..native.end.min(bounds.end);
+        if native.is_empty() {
+            return Ok(Samples::Empty);
+        }
+        let trace = input.read_edges(index, native.clone(), MAX_EDGES, cancel)?;
+        Ok(Samples::Digital {
+            trace,
+            native,
+            clock: self.clock,
+        })
     }
 
     fn read_analog(

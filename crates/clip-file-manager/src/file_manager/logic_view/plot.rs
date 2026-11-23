@@ -97,7 +97,7 @@ fn y_at(rect: Rect, level: Option<Level>) -> f32 {
     }
 }
 
-pub(super) fn wire_label(
+pub(in crate::file_manager) fn wire_label(
     ui: &egui::Ui,
     painter: &Painter,
     lane: Rect,

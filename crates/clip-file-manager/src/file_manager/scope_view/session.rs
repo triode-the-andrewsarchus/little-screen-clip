@@ -16,6 +16,8 @@ pub(in crate::file_manager) struct Settings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     fft_traces: Vec<ScopeTrace>,
     math: String,
+    #[serde(default)]
+    digital: Option<super::digital::Settings>,
     filters: Vec<SavedFilter>,
     spectrum: bool,
     spectra: DisplaySettings,
@@ -36,6 +38,7 @@ impl Viewer {
             display_offsets: self.display_offsets.clone(),
             fft_traces: self.trace_fft.keys().copied().collect(),
             math: self.math.clone(),
+            digital: Some(self.digital.save()),
             filters: self.filters.save(),
             spectrum: self.spectrum,
             spectra: self.spectra.settings(),
@@ -80,6 +83,9 @@ impl Viewer {
             .map(|index| (index, Default::default()))
             .collect();
         self.math = state.math;
+        if let Some(digital) = state.digital {
+            self.digital.restore(digital)?;
+        }
         self.spectrum = state.spectrum;
         self.spectra.restore_settings(state.spectra);
         self.spectrum_window = state.spectrum_window;

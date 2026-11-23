@@ -303,12 +303,12 @@ impl Panel {
         true
     }
 
-    pub(super) fn wiring_active(&self) -> bool {
+    pub(in crate::file_manager) fn wiring_active(&self) -> bool {
         self.current()
             .is_some_and(|decoder| decoder.wiring.active())
     }
 
-    pub(super) fn wire_lane(&mut self, lane: usize) {
+    pub(in crate::file_manager) fn wire_lane(&mut self, lane: usize) {
         if let Some(decoder) = self.current_mut() {
             decoder.wiring.choose(&mut decoder.settings.wiring(), lane);
             self.inspection = None;
@@ -370,12 +370,7 @@ impl Panel {
                 remove = ui.button("Remove decoder").clicked();
             }
         });
-        if self.selected != selected {
-            self.cancel_wiring();
-            self.close();
-            self.inspection = None;
-            self.selected = selected;
-        }
+        self.select_decoder(selected);
         if remove && let Some(index) = self.selected.take() {
             self.decoders.remove(index);
             self.inspection = None;
@@ -386,6 +381,15 @@ impl Panel {
             if previous != decoder.inputs().ok() {
                 self.inspection = None;
             }
+        }
+    }
+
+    pub(in crate::file_manager) fn select_decoder(&mut self, selected: Option<usize>) {
+        if self.selected != selected {
+            self.cancel_wiring();
+            self.close();
+            self.inspection = None;
+            self.selected = selected;
         }
     }
 
@@ -479,6 +483,56 @@ impl Panel {
         let span = self.decode_window(&span).clone();
         if let Some(decoder) = self.current_mut() {
             decoder.update(ctx, span, revision, Source::Materialized(source));
+        }
+    }
+
+    pub(in crate::file_manager) fn update_all_materialized(
+        &mut self,
+        ctx: &Context,
+        span: &Range<f64>,
+        revision: u64,
+        source: Arc<dyn TraceInput>,
+    ) {
+        let pinned = self.decode_window(span).clone();
+        for (index, decoder) in self.decoders.iter_mut().enumerate() {
+            let window = if Some(index) == self.selected {
+                &pinned
+            } else {
+                span
+            };
+            decoder.update(
+                ctx,
+                window.clone(),
+                revision,
+                Source::Materialized(source.clone()),
+            );
+        }
+    }
+
+    pub(in crate::file_manager) fn annotation_rows<'a>(
+        &'a self,
+        span: &'a Range<f64>,
+    ) -> impl Iterator<Item = (usize, &'static str, &'a [Event])> {
+        self.decoders
+            .iter()
+            .enumerate()
+            .map(move |(index, decoder)| {
+                let window = if Some(index) == self.selected {
+                    self.decode_window(span)
+                } else {
+                    span
+                };
+                let events = decoder
+                    .current(window)
+                    .and_then(|result| result.as_ref().ok())
+                    .map_or(&[][..], |result| result.events.as_slice());
+                (index, decoder.settings.mode.label(), events)
+            })
+    }
+
+    pub(in crate::file_manager) fn suspend_all(&mut self) {
+        for decoder in &mut self.decoders {
+            decoder.close();
         }
     }
 
@@ -1071,7 +1125,7 @@ fn coverage(ui: &mut Ui, output: &Decoded, span: &Range<f64>) {
     }
 }
 
-pub(super) fn event_label(kind: Kind) -> String {
+pub(in crate::file_manager) fn event_label(kind: Kind) -> String {
     let ack_text = |ack| if ack { "ACK" } else { "NACK" };
     match kind {
         Kind::I2cStart { repeated: false } => "START".into(),

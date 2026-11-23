@@ -2,6 +2,8 @@
 
 mod channels;
 mod comparison;
+mod digital;
+pub(super) use digital::ThresholdInput;
 mod filters;
 pub(super) use filters::{FilterSamples, FilteredChannel};
 #[cfg(test)]
@@ -84,6 +86,7 @@ pub(super) struct Viewer {
     trace_fft: std::collections::BTreeMap<ScopeTrace, trace_fft::TraceSpectrum>,
     hover: hover::Hover,
     conversion: logic_export::Conversion,
+    digital: digital::Digital,
     drag: Option<CursorDrag>,
     index: Option<Vec<Envelope>>,
     index_job: Option<Task<Result<Vec<Envelope>, String>>>,
@@ -144,8 +147,10 @@ impl Viewer {
         } else {
             domain.clone()
         };
+        let recording = Arc::new(recording);
+        let digital = digital::Digital::new(&recording);
         Ok(Self {
-            recording: Arc::new(recording),
+            recording,
             overview,
             span,
             domain,
@@ -158,6 +163,7 @@ impl Viewer {
             trace_fft: Default::default(),
             hover: hover::Hover::default(),
             conversion: logic_export::Conversion::default(),
+            digital,
             drag: None,
             index: None,
             index_job: None,
@@ -214,6 +220,10 @@ impl Viewer {
 
     pub(super) fn recording(&self) -> &Arc<Recording> {
         &self.recording
+    }
+
+    pub(super) fn threshold_inputs(&self) -> Arc<ThresholdInput> {
+        self.digital.input(self.recording.clone())
     }
 
     pub(super) fn measurement_channel(&self) -> usize {
@@ -273,6 +283,10 @@ impl Viewer {
         let showing_spectrum = self.spectrum && self.spectra.origin().is_none();
         let show_time = !showing_spectrum || !self.spectra.only;
         let interaction = if show_time {
+            let clock = Link::clock(link);
+            let domain = link.map_or_else(|| self.domain.clone(), |link| link.domain.clone());
+            self.digital
+                .content(ui, &self.recording, &mut self.span, &domain, clock);
             let available = ui.available_height();
             let content = (available - 92.0).max(100.0);
             let height = if showing_spectrum {
@@ -290,9 +304,12 @@ impl Viewer {
                     self.cursor_readout(ui, link)
                 })
                 .inner;
+            self.digital
+                .table(ui, &mut self.span, &domain, probe, clock);
             Interaction { probe, share }
         } else {
             self.hover.time = None;
+            self.digital.suspend();
             Interaction::default()
         };
         if showing_spectrum {
@@ -361,6 +378,7 @@ impl Viewer {
                 self.stacked = !self.stacked;
             }
             self.copy_selection(ui, copies);
+            self.digital.tools(ui, &self.recording);
         });
         self.channel_controls(ui);
         if self.filters.any() {
@@ -498,7 +516,9 @@ impl Viewer {
             .hover_pos()
             .filter(|point| rect.contains(*point) && !in_fft_lane(*point))
             .map(|point| plot::at(rect, &self.span, point.x));
-        self.hover.time = probe.or(link.and_then(|link| link.probe));
+        self.hover.time = probe
+            .or(link.and_then(|link| link.probe))
+            .or_else(|| self.digital.cursor());
         let (channels, fft_change) = self.draw_channels(ui, &painter, rect, ink);
         self.draw_math(ui, &painter, &clipped, rect);
         self.draw_filters(ui, &painter, &clipped, rect);
