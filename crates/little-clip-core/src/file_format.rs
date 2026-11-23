@@ -236,6 +236,55 @@ pub fn is_midi(path: &Path) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn shared_suffixes_route_to_engineering_only_after_content_checks() {
+        let directory = tempfile::tempdir().unwrap();
+        let cancel = AtomicBool::new(false);
+        let ordinary = directory.path().join("letter.eml");
+        std::fs::write(
+            &ordinary,
+            "From: a@example.invalid\nSubject: Test\n\nOrdinary email\n",
+        )
+        .unwrap();
+        assert_eq!(recognize_engineering(&ordinary, &cancel), None);
+        assert_eq!(Format::for_path(&ordinary), Some(Format::Mail));
+
+        let memory = directory.path().join("blocks.eml");
+        std::fs::write(&memory, format!("{}\n", "00".repeat(16)).repeat(64)).unwrap();
+        assert_eq!(
+            recognize_engineering(&memory, &cancel),
+            Some(Format::TagCapture)
+        );
+
+        let rf_trace = directory.path().join("rf.trace");
+        let mut bytes = Vec::new();
+        for time in [100_u32, 120] {
+            bytes.extend(time.to_le_bytes());
+            bytes.extend(5_u16.to_le_bytes());
+            bytes.extend(1_u16.to_le_bytes());
+            bytes.extend([0, 0]);
+        }
+        std::fs::write(&rf_trace, bytes).unwrap();
+        assert_eq!(
+            recognize_engineering(&rf_trace, &cancel),
+            Some(Format::TagCapture)
+        );
+
+        let subtitles = directory.path().join("movie.sub");
+        std::fs::write(&subtitles, "{20}{40}Subtitles\n").unwrap();
+        assert_eq!(recognize_engineering(&subtitles, &cancel), None);
+        let signals = directory.path().join("timing.sub");
+        std::fs::write(
+            &signals,
+            "Filetype: Flipper SubGhz RAW File\nVersion: 1\nProtocol: RAW\nRAW_Data: 40 -20\n",
+        )
+        .unwrap();
+        assert_eq!(
+            recognize_engineering(&signals, &cancel),
+            Some(Format::PulseSignals)
+        );
+    }
+
+    #[test]
     fn touchstone_detection_leaves_typescript_sources_routed_as_text() {
         let directory = tempfile::tempdir().unwrap();
         let sweep = directory.path().join("sweep.ts");

@@ -62,16 +62,7 @@ pub(in crate::file_manager) enum Source {
     Geography(PathBuf),
     Minecraft(PathBuf, u64),
     Toolpath(PathBuf),
-    Waveform(PathBuf),
-    Touchstone(PathBuf),
-    LogicCapture(PathBuf),
-    PacketCapture(PathBuf),
-    CanCapture(PathBuf),
-    PulseSignals(PathBuf),
-    Tags(PathBuf),
-    RadioProgramming(PathBuf),
-    Flowgraph(PathBuf),
-    IqCapture(PathBuf),
+    Engineering(super::super::document_format::Format, PathBuf),
     Embroidery(PathBuf),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
@@ -117,6 +108,35 @@ pub(in crate::file_manager) enum Source {
     },
 }
 
+fn load_engineering(
+    format: super::super::document_format::Format,
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Data {
+    use super::super::document_format::Format;
+    type Loader = fn(&Path, &AtomicBool) -> Data;
+    let load: Loader = match format {
+        Format::Oscilloscope | Format::PowerRecording => super::super::scope_view::strip::load,
+        Format::Touchstone => super::super::touchstone_view::strip::load,
+        Format::LogicCapture => super::super::logic_view::strip::load,
+        Format::PacketCapture => super::super::packets_view::strip::load,
+        Format::CanCapture => super::super::can_view::strip::load,
+        Format::PulseSignals => super::super::pulse_view::strip::load,
+        Format::TagCapture | Format::OneWire => super::super::tags_view::strip::load,
+        Format::Flowgraph => super::super::flowgraph_view::strip::load,
+        Format::IqCapture => super::super::iq_view::strip::load,
+        Format::RadioProgramming => super::super::radio_view::strip::load,
+        _ => {
+            return Data::new(
+                super::super::display_path(path),
+                "File".to_owned(),
+                crate::icons::Icon::Text,
+            );
+        }
+    };
+    load(path, cancel)
+}
+
 impl Source {
     pub fn checked(self, path: &Path, context: &super::super::search::PreviewContext) -> Self {
         if context.active() {
@@ -134,36 +154,22 @@ impl Source {
         path: PathBuf,
         revision: u64,
     ) -> Source {
+        use super::super::document_format::Format;
         match format {
-            super::super::document_format::Format::Font => Source::Font(path),
-            super::super::document_format::Format::Notebook => Source::Notebook(path),
-            super::super::document_format::Format::Book => Source::Book(path),
-            super::super::document_format::Format::Flowgraph => Source::Flowgraph(path),
-            super::super::document_format::Format::IqCapture => Source::IqCapture(path),
-            super::super::document_format::Format::RadioProgramming => {
-                Source::RadioProgramming(path)
-            }
-            super::super::document_format::Format::Mail => Source::Mail(path),
-            super::super::document_format::Format::Calendar => Source::Calendar(path),
-            super::super::document_format::Format::Database => Source::Database(path),
-            super::super::document_format::Format::Spreadsheet => {
-                Source::Spreadsheet(path, revision)
-            }
-            super::super::document_format::Format::Geography => Source::Geography(path),
-            super::super::document_format::Format::Oscilloscope
-            | super::super::document_format::Format::PowerRecording => Source::Waveform(path),
-            super::super::document_format::Format::Touchstone => Source::Touchstone(path),
-            super::super::document_format::Format::LogicCapture => Source::LogicCapture(path),
-            super::super::document_format::Format::PacketCapture => Source::PacketCapture(path),
-            super::super::document_format::Format::CanCapture => Source::CanCapture(path),
-            super::super::document_format::Format::PulseSignals => Source::PulseSignals(path),
-            super::super::document_format::Format::TagCapture
-            | super::super::document_format::Format::OneWire => Source::Tags(path),
-            super::super::document_format::Format::Toolpath => Source::Toolpath(path),
-            super::super::document_format::Format::Embroidery => Source::Embroidery(path),
-            super::super::document_format::Format::VcvPatch => Source::VcvPatch(path),
-            super::super::document_format::Format::Multisample => Source::Multisample(path),
-            super::super::document_format::Format::Subtitle => Source::Subtitle(path),
+            Format::Font => Source::Font(path),
+            Format::Notebook => Source::Notebook(path),
+            Format::Book => Source::Book(path),
+            Format::Mail => Source::Mail(path),
+            Format::Calendar => Source::Calendar(path),
+            Format::Database => Source::Database(path),
+            Format::Spreadsheet => Source::Spreadsheet(path, revision),
+            Format::Geography => Source::Geography(path),
+            Format::Toolpath => Source::Toolpath(path),
+            Format::Embroidery => Source::Embroidery(path),
+            Format::VcvPatch => Source::VcvPatch(path),
+            Format::Multisample => Source::Multisample(path),
+            Format::Subtitle => Source::Subtitle(path),
+            format => Source::Engineering(format, path),
         }
     }
     fn execution(&self) -> (&'static BackgroundJobs, usize, u64) {
@@ -197,16 +203,7 @@ impl Source {
             | Self::Database(_)
             | Self::Geography(_)
             | Self::Toolpath(_)
-            | Self::Waveform(_)
-            | Self::Touchstone(_)
-            | Self::LogicCapture(_)
-            | Self::PacketCapture(_)
-            | Self::CanCapture(_)
-            | Self::PulseSignals(_)
-            | Self::Tags(_)
-            | Self::RadioProgramming(_)
-            | Self::Flowgraph(_)
-            | Self::IqCapture(_)
+            | Self::Engineering(..)
             | Self::Embroidery(_)
             | Self::Multisample(_)
             | Self::Mail(_)
@@ -326,16 +323,7 @@ impl Source {
                 data
             }
             Source::System(path) => super::super::system::load(&path, token),
-            Source::Waveform(path) => super::super::scope_view::strip::load(&path, token),
-            Source::Touchstone(path) => super::super::touchstone_view::strip::load(&path, token),
-            Source::LogicCapture(path) => super::super::logic_view::strip::load(&path, token),
-            Source::PacketCapture(path) => super::super::packets_view::strip::load(&path, token),
-            Source::CanCapture(path) => super::super::can_view::strip::load(&path, token),
-            Source::PulseSignals(path) => super::super::pulse_view::strip::load(&path, token),
-            Source::Tags(path) => super::super::tags_view::strip::load(&path, token),
-            Source::Flowgraph(path) => super::super::flowgraph_view::strip::load(&path, token),
-            Source::IqCapture(path) => super::super::iq_view::strip::load(&path, token),
-            Source::RadioProgramming(path) => super::super::radio_view::strip::load(&path, token),
+            Source::Engineering(format, path) => load_engineering(format, &path, token),
             Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),
             Source::Multisample(path) => super::super::multisample::load(&path, token),

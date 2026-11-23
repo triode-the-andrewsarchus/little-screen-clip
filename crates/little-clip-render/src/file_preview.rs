@@ -1,4 +1,5 @@
 //! File previews prepared by the frame worker before card rasterization.
+mod engineering;
 use little_clip_core::{
     ClipItem, ClipPayload, ImageThumbnail,
     brushes::BrushLibrary,
@@ -64,16 +65,7 @@ enum Kind {
     Office,
     Spreadsheet,
     Midi,
-    Scope,
-    Touchstone,
-    Logic,
-    Packets,
-    Can,
-    Pulses,
-    Tags,
-    Radio,
-    Flowgraph,
-    Iq,
+    Engineering(Format),
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -207,16 +199,9 @@ impl crate::ScreenRenderer {
         if kind == Kind::Geography {
             return self.earth_preview(&Document::from_path(path).ok()?);
         }
-        match little_clip_core::file_format::recognize_engineering(path, &AtomicBool::new(false)) {
-            Some(Format::Oscilloscope) => return load(path, Kind::Scope, extension),
-            Some(Format::Touchstone) => return load(path, Kind::Touchstone, extension),
-            Some(Format::LogicCapture) => return load(path, Kind::Logic, extension),
-            Some(Format::PacketCapture) => return load(path, Kind::Packets, extension),
-            Some(Format::CanCapture) => return load(path, Kind::Can, extension),
-            Some(Format::RadioProgramming) => return load(path, Kind::Radio, extension),
-            Some(Format::PulseSignals) => return load(path, Kind::Pulses, extension),
-            Some(Format::TagCapture | Format::OneWire) => return load(path, Kind::Tags, extension),
-            _ => {}
+        let cancel = AtomicBool::new(false);
+        if let Some(format) = little_clip_core::file_format::recognize_engineering(path, &cancel) {
+            return engineering::load(path, format, &cancel);
         }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
         {
@@ -315,30 +300,13 @@ impl crate::ScreenRenderer {
 }
 
 fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Kind> {
-    let kind = if Format::for_path(path) == Some(Format::Geography) {
-        Kind::Geography
-    } else if matches!(
-        Format::for_path(path),
-        Some(Format::Oscilloscope | Format::PowerRecording)
-    ) {
-        Kind::Scope
-    } else if Format::for_path(path) == Some(Format::Touchstone) {
-        Kind::Touchstone
-    } else if Format::for_path(path) == Some(Format::LogicCapture) {
-        Kind::Logic
-    } else if Format::for_path(path) == Some(Format::PacketCapture) {
-        Kind::Packets
-    } else if Format::for_path(path) == Some(Format::PulseSignals) {
-        Kind::Pulses
-    } else if Format::for_path(path) == Some(Format::RadioProgramming) {
-        Kind::Radio
-    } else if Format::for_path(path) == Some(Format::Flowgraph) {
-        Kind::Flowgraph
-    } else if Format::for_path(path) == Some(Format::IqCapture) {
-        Kind::Iq
-    } else if Format::for_path(path) == Some(Format::Embroidery) {
-        Kind::Embroidery
-    } else if spreadsheet::is_spreadsheet_file(path) {
+    match Format::for_path(path) {
+        Some(Format::Geography) => return Some(Kind::Geography),
+        Some(Format::Embroidery) => return Some(Kind::Embroidery),
+        Some(format) if format.is_engineering() => return Some(Kind::Engineering(format)),
+        _ => {}
+    };
+    let kind = if spreadsheet::is_spreadsheet_file(path) {
         Kind::Spreadsheet
     } else if extension.is_some_and(|value| {
         value.eq_ignore_ascii_case("mid") || value.eq_ignore_ascii_case("midi")
@@ -365,88 +333,7 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
 fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
     match kind {
         Kind::Geography | Kind::Trajectory | Kind::EngineeringCandidate => None,
-        Kind::Scope => {
-            let cancel = AtomicBool::new(false);
-            let recording = little_clip_core::engineering::waveforms::Recording::open(
-                path,
-                Default::default(),
-                &cancel,
-            )
-            .ok()?;
-            recording.overview(&cancel).ok().map(Preview::Scope)
-        }
-        Kind::Touchstone => {
-            use little_clip_core::{engineering::touchstone, file_source::ReadCheck};
-            let cancel = AtomicBool::new(false);
-            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
-            let sweep = touchstone::summary(&file, path, 800, &cancel).ok()?;
-            source.check_file(&file).ok()?;
-            Some(Preview::Touchstone(sweep))
-        }
-        Kind::Logic => {
-            let cancel = AtomicBool::new(false);
-            let recording =
-                little_clip_core::engineering::logic_preview::Recording::open(path, &cancel)
-                    .ok()?;
-            recording.overview(&cancel).ok().map(Preview::Logic)
-        }
-        Kind::Packets => {
-            use little_clip_core::{engineering::packets, file_source::ReadCheck};
-            let cancel = AtomicBool::new(false);
-            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
-            let summary = packets::summary(std::io::BufReader::new(&file), &cancel).ok()?;
-            source.check_file(&file).ok()?;
-            Some(Preview::Packets(summary))
-        }
-        Kind::Can => {
-            use little_clip_core::{engineering::can, file_source::ReadCheck};
-            let cancel = AtomicBool::new(false);
-            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
-            let capture = can::Capture::open(file.try_clone().ok()?).ok()?;
-            let summary = capture.preview(&cancel).ok()?;
-            source.check_file(&file).ok()?;
-            Some(Preview::Can(summary))
-        }
-        Kind::Pulses => {
-            little_clip_core::engineering::pulses::Capture::preview(path, &AtomicBool::new(false))
-                .ok()
-                .map(Preview::Pulses)
-        }
-        Kind::Tags => {
-            use little_clip_core::{engineering::tags, file_source::ReadCheck};
-            let cancel = AtomicBool::new(false);
-            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
-            let tags = tags::preview(path, std::io::BufReader::new(&file), &cancel).ok()?;
-            source.check_file(&file).ok()?;
-            Some(Preview::Tags(tags))
-        }
-        Kind::Radio => little_clip_core::engineering::radio::preview(path, &AtomicBool::new(false))
-            .ok()
-            .map(Preview::Radio),
-        Kind::Flowgraph => {
-            use little_clip_core::{engineering::flowgraph, file_source::ReadCheck};
-            let cancel = AtomicBool::new(false);
-            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
-            let graph = flowgraph::preview(file.try_clone().ok()?, &cancel).ok()?;
-            source.check_file(&file).ok()?;
-            Some(Preview::Flowgraph(graph))
-        }
-        Kind::Iq => {
-            use little_clip_core::{engineering::iq, file_source::ReadCheck};
-            let cancel = AtomicBool::new(false);
-            let recording =
-                iq::Recording::open_sigmf(path, None, ReadCheck::default(), &cancel).ok()?;
-            recording
-                .checked(&cancel, |capture| {
-                    Ok(Preview::Iq(Iq {
-                        power: capture.overview(0..capture.sample_count(), 192, &cancel)?,
-                        rate: capture.metadata().sample_rate_hz,
-                        center: capture.tuning_at(0).and_then(|tuning| tuning.center_hz),
-                        duration: capture.duration_seconds(),
-                    }))
-                })
-                .ok()
-        }
+        Kind::Engineering(format) => engineering::load(path, format, &AtomicBool::new(false)),
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);
             let design = little_clip_core::embroidery::Design::read(path, &cancelled).ok()?;

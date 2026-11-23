@@ -149,60 +149,88 @@ fn parse(bytes: &[u8], mut complete: bool, cancel: &AtomicBool) -> Result<Captur
     let format = identify(&bytes[..bytes.len().min(HEADER_BYTES)])
         .ok_or("This file does not start with a supported Flipper signal header")?;
     let text = std::str::from_utf8(bytes).map_err(|_| "Signal capture must be UTF-8 text")?;
-    let mut signals = Vec::new();
-    let mut signal = Signal::default();
-    let mut budget = MAX_PULSES;
-    let mut next_model = None;
+    let mut records = SignalRecords::new(format);
     for line in text.lines() {
         check_cancel(cancel)?;
-        let line = line.trim_start_matches('\u{feff}').trim();
-        if let Some(model) = line.strip_prefix("# Model:") {
-            next_model = Some(model.trim().chars().take(256).collect());
-            continue;
-        }
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            return Err("A signal field has no name separator".into());
-        };
-        if key.len() > 96 {
-            return Err("Pulse field name exceeds its limit".into());
-        }
-        let value = value.trim();
-        if key == "name" && signal.has_data() {
-            signals.push(std::mem::take(&mut signal));
-            if signals.len() >= MAX_RECORDS {
-                complete = false;
-                break;
-            }
-        }
-        if key == "name" {
-            signal.model = next_model.take();
-        }
-        let fully_read = parse_field(&mut signal, key, value, format, &mut budget)?;
-        if !fully_read {
+        if !records.read_line(line.trim_start_matches('\u{feff}').trim())? {
             complete = false;
             break;
         }
     }
-    if signal.has_data() && signals.len() < MAX_RECORDS {
-        if signal.name.is_empty() {
-            signal.name = signal
-                .protocol
-                .clone()
-                .unwrap_or_else(|| format.title().to_owned());
-        }
-        signals.push(signal);
+    if records.current.has_data() && records.signals.len() < MAX_RECORDS {
+        records.push();
     }
-    if signals.is_empty() {
+    if records.signals.is_empty() {
         return Err("The signal file contains no records".into());
     }
     Ok(Capture {
         format,
-        signals,
+        signals: records.signals,
         complete,
     })
+}
+
+struct SignalRecords {
+    format: Format,
+    signals: Vec<Signal>,
+    current: Signal,
+    next_model: Option<String>,
+    remaining_pulses: usize,
+}
+
+impl SignalRecords {
+    fn new(format: Format) -> Self {
+        Self {
+            format,
+            signals: Vec::new(),
+            current: Signal::default(),
+            next_model: None,
+            remaining_pulses: MAX_PULSES,
+        }
+    }
+
+    fn push(&mut self) {
+        let mut signal = std::mem::take(&mut self.current);
+        if signal.name.is_empty() {
+            signal.name = signal
+                .protocol
+                .clone()
+                .unwrap_or_else(|| self.format.title().to_owned());
+        }
+        self.signals.push(signal);
+    }
+
+    fn read_line(&mut self, line: &str) -> Result<bool, String> {
+        if let Some(model) = line.strip_prefix("# Model:") {
+            self.next_model = Some(model.trim().chars().take(256).collect());
+            return Ok(true);
+        }
+        if line.is_empty() || line.starts_with('#') {
+            return Ok(true);
+        }
+        let (key, value) = line
+            .split_once(':')
+            .ok_or("A signal field has no name separator")?;
+        if key.len() > 96 {
+            return Err("Pulse field name exceeds its limit".into());
+        }
+        if key == "name" {
+            if self.current.has_data() {
+                self.push();
+            }
+            if self.signals.len() >= MAX_RECORDS {
+                return Ok(false);
+            }
+            self.current.model = self.next_model.take();
+        }
+        parse_field(
+            &mut self.current,
+            key,
+            value.trim(),
+            self.format,
+            &mut self.remaining_pulses,
+        )
+    }
 }
 
 fn parse_field(

@@ -420,117 +420,13 @@ impl EntryPreviews {
         palette: &little_clip_core::palette::AppPalette,
         response: &mut egui::Response,
     ) -> (Option<super::DocumentPosition>, bool) {
-        use super::document_format::Format;
-        let position = if matches!(
-            entry.document_format(),
-            Some(Format::Oscilloscope | Format::PowerRecording)
-        ) {
-            let id = self.identity(entry);
-            self.listing(entry);
-            return super::scope_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.cache.get(id),
-                &mut self.scope_selection,
-                response,
-            );
-        } else if entry.document_format() == Some(Format::Touchstone) {
-            return super::touchstone_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if entry.document_format() == Some(Format::LogicCapture) {
-            return super::logic_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if entry.document_format() == Some(Format::PacketCapture) {
-            return super::packets_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if entry.document_format() == Some(Format::CanCapture) {
-            return super::can_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if entry.document_format() == Some(Format::PulseSignals) {
-            return super::pulse_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if matches!(
-            entry.document_format(),
-            Some(Format::TagCapture | Format::OneWire)
-        ) {
-            return super::tags_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if entry.document_format() == Some(Format::RadioProgramming) {
-            return super::radio_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if entry.document_format() == Some(Format::Flowgraph) {
-            return super::flowgraph_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if entry.document_format() == Some(Format::IqCapture) {
-            return super::iq_view::strip::show(
-                ui,
-                row,
-                entry,
-                columns,
-                colors,
-                self.listing(entry),
-                response,
-            );
-        } else if entry.is_spreadsheet() {
+        if let Some(format) = entry
+            .document_format()
+            .filter(|format| format.is_engineering())
+        {
+            return self.show_engineering(ui, row, entry, columns, colors, format, response);
+        }
+        let position = if entry.is_spreadsheet() {
             let ready = self.listing(entry);
             if let Some(trajectory) = ready.filter(|ready| ready.data.solar_trajectory) {
                 show_trajectory_strip(ui, row, entry, Some(columns), colors, trajectory);
@@ -606,6 +502,60 @@ impl EntryPreviews {
         };
         (position, false)
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Engineering strips use shared list geometry"
+    )]
+    fn show_engineering(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: egui::Rect,
+        entry: &Entry,
+        columns: super::ui::ListColumns,
+        colors: crate::ui_appearance::WorkbenchColors,
+        format: super::document_format::Format,
+        response: &mut egui::Response,
+    ) -> (Option<super::DocumentPosition>, bool) {
+        use super::document_format::Format;
+        type Strip = fn(
+            &mut egui::Ui,
+            egui::Rect,
+            &Entry,
+            super::ui::ListColumns,
+            crate::ui_appearance::WorkbenchColors,
+            Option<&super::shelf::preview::Ready>,
+            &mut egui::Response,
+        ) -> (Option<super::DocumentPosition>, bool);
+        let id = self.identity(entry);
+        self.listing(entry);
+        let ready = self.cache.get(id);
+        let show: Strip = match format {
+            Format::Oscilloscope | Format::PowerRecording => {
+                return super::scope_view::strip::show(
+                    ui,
+                    row,
+                    entry,
+                    columns,
+                    colors,
+                    ready,
+                    &mut self.scope_selection,
+                    response,
+                );
+            }
+            Format::Touchstone => super::touchstone_view::strip::show,
+            Format::LogicCapture => super::logic_view::strip::show,
+            Format::PacketCapture => super::packets_view::strip::show,
+            Format::CanCapture => super::can_view::strip::show,
+            Format::PulseSignals => super::pulse_view::strip::show,
+            Format::TagCapture | Format::OneWire => super::tags_view::strip::show,
+            Format::RadioProgramming => super::radio_view::strip::show,
+            Format::Flowgraph => super::flowgraph_view::strip::show,
+            Format::IqCapture => super::iq_view::strip::show,
+            _ => return (None, false),
+        };
+        show(ui, row, entry, columns, colors, ready, response)
+    }
+
     // These data-only documents expose a row or record which can be opened
     // directly from the strip. The outer Option means this strip handled it.
     fn show_record_document(
