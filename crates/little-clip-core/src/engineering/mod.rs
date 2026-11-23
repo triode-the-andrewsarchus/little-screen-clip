@@ -7,6 +7,7 @@ pub mod logic;
 pub mod logic_preview;
 pub mod packets;
 pub mod pulses;
+pub mod radio;
 pub mod scope;
 pub mod tags;
 pub mod touchstone;

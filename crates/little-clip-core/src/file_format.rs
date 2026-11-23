@@ -34,6 +34,7 @@ pub enum Format {
     PulseSignals,
     TagCapture,
     OneWire,
+    RadioProgramming,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -60,6 +61,7 @@ impl Format {
             "sr" | "sal" | "vcd" => Some(Self::LogicCapture),
             "pcap" | "pcapng" => Some(Self::PacketCapture),
             "ir" => Some(Self::PulseSignals),
+            "chirp" => Some(Self::RadioProgramming),
             _ if crate::engineering::touchstone::extension_ports(path).is_some() => {
                 Some(Self::Touchstone)
             }
@@ -80,6 +82,7 @@ pub fn ambiguous_engineering_path(path: &Path) -> bool {
         || path.extension().is_some_and(|extension| {
             [
                 "csv", "bin", "ts", "dsl", "trace", "asc", "blf", "trc", "log", "candump", "sub",
+                "icf",
             ]
             .iter()
             .any(|candidate| extension.eq_ignore_ascii_case(candidate))
@@ -97,7 +100,7 @@ fn packet_probe_path(path: &Path) -> bool {
 /// validate its own pinned input, including any format-specific offsets.
 pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format> {
     use crate::{
-        engineering::{can, logic, packets, pulses, scope, tags, touchstone},
+        engineering::{can, logic, packets, pulses, radio, scope, tags, touchstone},
         file_source::ReadCheck,
     };
 
@@ -115,7 +118,7 @@ pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format>
         64 * 1024
     } else if tag {
         32 * 1024
-    } else if can {
+    } else if can || extension == "icf" {
         can::HEADER_BYTES
     } else {
         scope::HEADER_BYTES
@@ -140,6 +143,8 @@ pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format>
         }
         _ if can => None,
         "ts" => touchstone::recognizes(&bytes, path).then_some(Format::Touchstone),
+        "icf" => radio::is_icf(&bytes).then_some(Format::RadioProgramming),
+        "csv" if radio::is_chirp_csv(&bytes) => Some(Format::RadioProgramming),
         "sub" => matches!(
             pulses::identify(&bytes),
             Some(pulses::Format::RadioRaw | pulses::Format::RadioDecoded)

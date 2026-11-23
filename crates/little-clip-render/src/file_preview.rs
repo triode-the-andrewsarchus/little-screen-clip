@@ -40,6 +40,7 @@ pub(crate) enum Preview {
     Can(little_clip_core::engineering::can::Summary),
     Pulses(little_clip_core::engineering::pulses::Capture),
     Tags(little_clip_core::engineering::tags::Document),
+    Radio(little_clip_core::engineering::radio::Summary),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -61,6 +62,7 @@ enum Kind {
     Can,
     Pulses,
     Tags,
+    Radio,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -200,6 +202,7 @@ impl crate::ScreenRenderer {
             Some(Format::LogicCapture) => return load(path, Kind::Logic, extension),
             Some(Format::PacketCapture) => return load(path, Kind::Packets, extension),
             Some(Format::CanCapture) => return load(path, Kind::Can, extension),
+            Some(Format::RadioProgramming) => return load(path, Kind::Radio, extension),
             Some(Format::PulseSignals) => return load(path, Kind::Pulses, extension),
             Some(Format::TagCapture | Format::OneWire) => return load(path, Kind::Tags, extension),
             _ => {}
@@ -316,6 +319,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Packets
     } else if Format::for_path(path) == Some(Format::PulseSignals) {
         Kind::Pulses
+    } else if Format::for_path(path) == Some(Format::RadioProgramming) {
+        Kind::Radio
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
@@ -400,6 +405,9 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             source.check_file(&file).ok()?;
             Some(Preview::Tags(tags))
         }
+        Kind::Radio => little_clip_core::engineering::radio::preview(path, &AtomicBool::new(false))
+            .ok()
+            .map(Preview::Radio),
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);
             let design = little_clip_core::embroidery::Design::read(path, &cancelled).ok()?;

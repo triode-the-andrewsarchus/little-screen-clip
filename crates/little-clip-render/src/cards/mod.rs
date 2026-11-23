@@ -5,6 +5,7 @@ mod audio;
 mod images;
 mod logic_capture;
 mod pulse_signals;
+mod radio;
 mod rf_sweep;
 mod rich_media;
 mod splat;
@@ -533,6 +534,10 @@ impl ScreenRenderer {
             }
             Some(Preview::Tags(tags)) => {
                 self.draw_tags_card(pixmap, tags, [rx, ry, rw, rh]);
+                true
+            }
+            Some(Preview::Radio(plan)) => {
+                self.draw_radio_channels(pixmap, plan, [rx, ry, rw, rh]);
                 true
             }
             Some(Preview::Midi(score)) => {

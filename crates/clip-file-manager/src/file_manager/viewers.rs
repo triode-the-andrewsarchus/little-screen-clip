@@ -60,6 +60,7 @@ enum Loaded {
     CanCapture(Box<super::can_view::Viewer>),
     PulseSignals(Box<super::pulse_view::Viewer>),
     Tags(Box<super::tags_view::Viewer>),
+    RadioProgramming(Box<super::radio_view::Viewer>),
     Video(super::media::VideoMetadata),
     VideoAudio(video_audio::Prepared),
     External,
@@ -94,6 +95,7 @@ enum ViewerSession {
     CanCapture(Box<super::can_view::Viewer>),
     PulseSignals(Box<super::pulse_view::Viewer>),
     Tags(Box<super::tags_view::Viewer>),
+    RadioProgramming(Box<super::radio_view::Viewer>),
     Video(video::Video),
 }
 struct Loading {
@@ -442,6 +444,10 @@ impl Viewers {
                 Some(ViewerSession::Tags(state)),
                 Some(super::DocumentPosition::TagRecord { ordinal, .. }),
             ) => state.focus_record(ordinal),
+            (
+                Some(ViewerSession::RadioProgramming(state)),
+                Some(super::DocumentPosition::RadioChannel { ordinal, .. }),
+            ) => state.focus_channel(ordinal),
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::SubtitleCue(cue))) => {
                 state.preview.select_subtitle(cue)
             }
@@ -487,6 +493,7 @@ impl Viewers {
                 | ViewerSession::CanCapture(_)
                 | ViewerSession::PulseSignals(_)
                 | ViewerSession::Tags(_)
+                | ViewerSession::RadioProgramming(_)
                 | ViewerSession::Sheet(_),
             )
             | None => {}
@@ -801,8 +808,8 @@ fn load_file_session(
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
     use super::DocumentPosition::{
-        ArchiveMember, CanFrame, CapturedPacket, LogicRegion, PulseSignal, ScopeSamples, TagRecord,
-        TouchstoneBand, VideoAudioRange, VideoAudioTrack,
+        ArchiveMember, CanFrame, CapturedPacket, LogicRegion, PulseSignal, RadioChannel,
+        ScopeSamples, TagRecord, TouchstoneBand, VideoAudioRange, VideoAudioTrack,
     };
     let revision = match position {
         Some(
@@ -814,7 +821,8 @@ fn load_file_session(
             | CapturedPacket { revision, .. }
             | CanFrame { revision, .. }
             | PulseSignal { revision, .. }
-            | TagRecord { revision, .. },
+            | TagRecord { revision, .. }
+            | RadioChannel { revision, .. },
         ) => Some(revision),
         _ => None,
     };
@@ -926,6 +934,11 @@ fn load(
             super::tags_view::Viewer::load(path, cancelled)
                 .map(Box::new)
                 .map(Loaded::Tags)
+        }
+        Kind::Document(Format::RadioProgramming) => {
+            super::radio_view::Viewer::load(path, cancelled)
+                .map(Box::new)
+                .map(Loaded::RadioProgramming)
         }
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
@@ -1058,6 +1071,7 @@ fn session(
             viewer.set_check(check);
             ViewerSession::Tags(viewer)
         }
+        Loaded::RadioProgramming(viewer) => ViewerSession::RadioProgramming(viewer),
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
@@ -1165,6 +1179,7 @@ fn render(
         ViewerSession::CanCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::PulseSignals(state) => state.ui(ui, close, palette),
         ViewerSession::Tags(state) => state.ui(ui, close, palette, copies),
+        ViewerSession::RadioProgramming(state) => state.ui(ui, close, palette),
         ViewerSession::Video(state) => state.ui(ui, close, palette, copies),
     }
 }

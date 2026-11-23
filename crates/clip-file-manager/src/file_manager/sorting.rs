@@ -90,6 +90,7 @@ pub(super) enum Category {
     PulseSignals,
     TagCapture,
     OneWire,
+    RadioProgramming,
     Video,
     Scene,
     Font,
@@ -151,6 +152,7 @@ fn extension_category(entry: &Entry) -> Category {
         Some(Format::PulseSignals) => return Category::PulseSignals,
         Some(Format::TagCapture) => return Category::TagCapture,
         Some(Format::OneWire) => return Category::OneWire,
+        Some(Format::RadioProgramming) => return Category::RadioProgramming,
         _ => {}
     }
     if entry.is_geography() {
@@ -201,6 +203,7 @@ impl Category {
             Self::PulseSignals => "Infrared and Sub-GHz captures",
             Self::TagCapture => "NFC and RFID",
             Self::OneWire => "1-Wire",
+            Self::RadioProgramming => "Radio programming",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",
