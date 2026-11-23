@@ -1,6 +1,9 @@
 //! Bounded scope windows and peak-preserving waveform overviews.
 
-use super::scope::{Capture, Channel};
+use super::{
+    jls,
+    scope::{self, Channel},
+};
 use crate::file_source::{FileSource, ReadCheck};
 use std::{
     fs::File,
@@ -168,7 +171,120 @@ pub fn sample_span(channel: &Channel, time: Range<f64>) -> Range<u64> {
     index(time.start)..index(time.end)
 }
 
-/// A scope recording with the file observation retained for deferred reads.
+/// Source adapter shared by scope and power recording views.
+pub enum Capture {
+    Scope(scope::Capture),
+    Power(jls::Capture),
+}
+
+#[derive(Default)]
+pub struct PowerTotals {
+    pub charge: Option<Integral>,
+    pub energy: Option<Integral>,
+}
+
+pub struct Integral {
+    pub value: f64,
+    pub approximate: bool,
+}
+
+impl Capture {
+    pub fn model(&self) -> &str {
+        match self {
+            Self::Scope(capture) => capture.model(),
+            Self::Power(capture) => capture.model(),
+        }
+    }
+
+    pub fn channels(&self) -> &[Channel] {
+        match self {
+            Self::Scope(capture) => capture.channels(),
+            Self::Power(capture) => capture.channels(),
+        }
+    }
+
+    pub fn read_samples(
+        &self,
+        index: usize,
+        range: Range<u64>,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<f32>, String> {
+        match self {
+            Self::Scope(capture) => capture.read_samples(index, range, cancel),
+            Self::Power(capture) => capture.read_samples(index, range, cancel),
+        }
+    }
+
+    pub fn power_totals(
+        &self,
+        span: Range<f64>,
+        cancel: &AtomicBool,
+    ) -> Result<Option<PowerTotals>, String> {
+        let Self::Power(capture) = self else {
+            return Ok(None);
+        };
+        let mut totals = PowerTotals::default();
+        for (unit, output) in [("A", &mut totals.charge), ("W", &mut totals.energy)] {
+            let Some((index, channel)) = capture
+                .channels()
+                .iter()
+                .enumerate()
+                .find(|(_, channel)| channel.unit == unit)
+            else {
+                continue;
+            };
+            if span.start < channel.start_seconds
+                || span.end > channel.time_at(channel.sample_count)
+            {
+                continue;
+            }
+            let range = sample_span(channel, span.clone());
+            if range.is_empty() {
+                continue;
+            }
+            *output = if let Some(value) = capture.integral(index, range.clone(), cancel)? {
+                Some(Integral {
+                    value,
+                    approximate: false,
+                })
+            } else {
+                capture
+                    .summary_integral(index, range, cancel)?
+                    .map(|value| Integral {
+                        value,
+                        approximate: true,
+                    })
+            };
+        }
+        Ok(Some(totals))
+    }
+
+    fn envelope(
+        &self,
+        index: usize,
+        range: Range<u64>,
+        bins: u64,
+        complete_scope: bool,
+        cancel: &AtomicBool,
+    ) -> Result<Envelope, String> {
+        match self {
+            Self::Scope(_) => {
+                let step = (range.end - range.start).div_ceil(bins).max(1);
+                summarize(
+                    self,
+                    index,
+                    range,
+                    step,
+                    complete_scope || step <= PREVIEW_WINDOW,
+                    cancel,
+                )
+            }
+            Self::Power(capture) => capture.envelope(index, range, bins as usize, cancel),
+        }
+    }
+}
+
+/// Retains the file observation across deferred waveform reads.
 pub struct Recording {
     source: FileSource,
     capture: Capture,
@@ -188,7 +304,15 @@ impl Recording {
         cancel: &AtomicBool,
     ) -> Result<Self, String> {
         let (file, source) = check.open(path, expected, cancel)?;
-        let capture = Capture::open(file.try_clone().map_err(|error| error.to_string())?)?;
+        let input = file.try_clone().map_err(|error| error.to_string())?;
+        let capture = if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("jls"))
+        {
+            Capture::Power(jls::Capture::open(input)?)
+        } else {
+            Capture::Scope(scope::Capture::open(input)?)
+        };
         source.check_file(&file)?;
         check.validate(cancel)?;
         Ok(Self {
@@ -211,6 +335,10 @@ impl Recording {
         self.capture.channels()
     }
 
+    pub fn power_recording(&self) -> bool {
+        matches!(self.capture, Capture::Power(_))
+    }
+
     pub fn checked<T>(
         &self,
         cancel: &AtomicBool,
@@ -228,9 +356,7 @@ impl Recording {
                 .iter()
                 .enumerate()
                 .map(|(index, channel)| {
-                    let step = channel.sample_count.div_ceil(PREVIEW_BINS).max(1);
-                    let exact = step <= PREVIEW_WINDOW;
-                    summarize(capture, index, 0..channel.sample_count, step, exact, cancel)
+                    capture.envelope(index, 0..channel.sample_count, PREVIEW_BINS, false, cancel)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Overview {
@@ -241,7 +367,7 @@ impl Recording {
         })
     }
 
-    /// Exact overview, constructed away from the UI in bounded chunks.
+    /// Refined overview from stored summaries or a bounded working set.
     pub fn index(&self, cancel: &AtomicBool) -> Result<Vec<Envelope>, String> {
         self.checked(cancel, |capture| {
             capture
@@ -249,8 +375,28 @@ impl Recording {
                 .iter()
                 .enumerate()
                 .map(|(index, channel)| {
-                    let step = channel.sample_count.div_ceil(INDEX_BINS).max(1);
-                    summarize(capture, index, 0..channel.sample_count, step, true, cancel)
+                    capture.envelope(index, 0..channel.sample_count, INDEX_BINS, true, cancel)
+                })
+                .collect()
+        })
+    }
+
+    /// Download bounded native summaries for a window of a power recording.
+    pub fn power_envelopes(
+        &self,
+        span: Range<f64>,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<Envelope>, String> {
+        self.checked(cancel, |capture| {
+            let Capture::Power(capture) = capture else {
+                return Err("This waveform has no native summary index".into());
+            };
+            capture
+                .channels()
+                .iter()
+                .enumerate()
+                .map(|(index, channel)| {
+                    capture.envelope(index, sample_span(channel, span.clone()), 2048, cancel)
                 })
                 .collect()
         })

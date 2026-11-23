@@ -1,7 +1,7 @@
 use little_clip_core::engineering::{
     analysis::{self, Expression, Spectrum, Value},
     scope::Channel,
-    waveforms::{Peak, Recording, sample_span},
+    waveforms::{Peak, PowerTotals, Recording, sample_span},
 };
 use std::{ops::Range, sync::atomic::AtomicBool};
 
@@ -101,6 +101,7 @@ pub(super) struct Measurements {
     pub spectrum: Option<Spectrum>,
     pub math: Option<MathTrace>,
     pub limited: bool,
+    pub power_totals: Option<PowerTotals>,
 }
 
 pub(super) enum MathTrace {
@@ -162,6 +163,7 @@ pub(super) fn analyze(
             .into_iter()
             .nth(request.active)
             .ok_or("Missing scope channel")?;
+        let power_totals = capture.power_totals(request.span, cancel).ok().flatten();
         Ok(Measurements {
             frequencies,
             raw,
@@ -169,6 +171,7 @@ pub(super) fn analyze(
             spectrum,
             math,
             limited,
+            power_totals,
         })
     })
 }

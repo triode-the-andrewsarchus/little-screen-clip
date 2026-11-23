@@ -142,7 +142,7 @@ impl Viewers {
                 .ok()
                 .map(|suffix| label.join(suffix))
         });
-        let can_rename = !matches!(self.session, Some(ViewerSession::Oscilloscope(_)))
+        let can_rename = !matches!(self.session, Some(ViewerSession::Waveform(_)))
             && self.file_controls_ready()
             && archive_label.is_none()
             && source.is_some()
@@ -244,7 +244,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::Geography(_)
         | ViewerSession::Minecraft(_)
         | ViewerSession::Toolpath(_)
-        | ViewerSession::Oscilloscope(_)
+        | ViewerSession::Waveform(_)
         | ViewerSession::Embroidery(_)
         | ViewerSession::VcvPatch(_)
         | ViewerSession::Database(_)

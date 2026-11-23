@@ -38,8 +38,8 @@ pub(super) struct Viewer {
     index: Option<Vec<Envelope>>,
     index_job: Option<Task<Result<Vec<Envelope>, String>>>,
     index_started: bool,
-    detail: Option<(Range<f64>, Vec<RawChannel>)>,
-    detail_job: Option<(Range<f64>, Task<Result<Vec<RawChannel>, String>>)>,
+    detail: Option<(Range<f64>, PlotData)>,
+    detail_job: Option<(Range<f64>, Task<Result<PlotData, String>>)>,
     measurements: Option<Measurements>,
     measurement_key: Option<AnalysisKey>,
     analysis_job: Option<Task<Result<Measurements, String>>>,
@@ -54,6 +54,20 @@ pub(super) struct Viewer {
     spectrum_span: Option<Range<f64>>,
     pending_snaps: [Option<SnapJob>; 2],
     error: Option<String>,
+}
+
+enum PlotData {
+    Raw(Vec<RawChannel>),
+    Summary(Vec<Envelope>),
+}
+
+impl PlotData {
+    fn raw(&self, index: usize) -> Option<&RawChannel> {
+        match self {
+            Self::Raw(channels) => channels.get(index),
+            Self::Summary(_) => None,
+        }
+    }
 }
 
 struct SnapJob {
@@ -124,14 +138,15 @@ impl Viewer {
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette, copies: &mut Copies) {
         self.poll(ui.ctx());
-        let mut shell = crate::shell::StudioShell::new(
-            "Oscilloscope",
-            crate::icons::Icon::Waves,
-            palette,
-            close,
-        );
+        let (label, icon) = if self.recording.power_recording() {
+            ("Power recording", crate::icons::Icon::Zap)
+        } else {
+            ("Oscilloscope", crate::icons::Icon::Waves)
+        };
+        let mut shell = crate::shell::StudioShell::new(label, icon, palette, close);
         shell.render_header(ui, |_| {});
         self.toolbar(ui, copies);
+        self.power_totals(ui);
         let has_spectrum = self.spectrum;
         let plot_height = if has_spectrum {
             (ui.available_height() * 0.54).max(80.0)
@@ -161,11 +176,15 @@ impl Viewer {
                     .measurements
                     .as_ref()
                     .and_then(|measured| measured.frequencies.get(index).copied().flatten());
-                let text = format!(
-                    "{} · {}",
-                    channel.name,
-                    display_value(frequency.unwrap_or(f64::NAN), "Hz")
-                );
+                let text = if self.recording.power_recording() {
+                    channel.name.clone()
+                } else {
+                    format!(
+                        "{} · {}",
+                        channel.name,
+                        display_value(frequency.unwrap_or(f64::NAN), "Hz")
+                    )
+                };
                 let selected = self.active == index;
                 let label = egui::RichText::new(text);
                 let label = if selected {
@@ -197,15 +216,22 @@ impl Viewer {
                 });
             }
         });
-        ui.horizontal(|ui| {
-            ui.label("Math");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.math)
-                    .hint_text("> 1V or CH1 - CH2")
-                    .char_limit(256)
-                    .desired_width((ui.available_width() - 10.0).min(420.0)),
-            );
-        });
+        if !self.recording.power_recording() || self.overview.channels[self.active].unit == "V" {
+            ui.horizontal(|ui| {
+                ui.label("Math");
+                let hint = if self.recording.power_recording() {
+                    "> 1V"
+                } else {
+                    "> 1V or CH1 - CH2"
+                };
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.math)
+                        .hint_text(hint)
+                        .char_limit(256)
+                        .desired_width((ui.available_width() - 10.0).min(420.0)),
+                );
+            });
+        }
         if let Some(message) = self.math_error.as_ref().or(self.error.as_ref()) {
             ui.colored_label(ui.visuals().error_fg_color, message);
         } else if self.index_job.is_some() {
@@ -297,12 +323,12 @@ impl Viewer {
                     Stroke::new(1.0, ink.gamma_multiply(0.38)),
                 );
             }
-            let raw = self
+            let detail = self
                 .detail
                 .as_ref()
                 .filter(|(cover, _)| contains(cover, &self.span))
-                .and_then(|(_, channels)| channels.get(index));
-            if let Some(raw) = raw {
+                .map(|(_, detail)| detail);
+            if let Some(raw) = detail.and_then(|detail| detail.raw(index)) {
                 let (start, samples) = raw.visible(&self.span);
                 plot::draw_raw(
                     clipped,
@@ -315,6 +341,10 @@ impl Viewer {
                     channel_color,
                 );
             } else {
+                let envelope = match detail {
+                    Some(PlotData::Summary(envelopes)) => &envelopes[index],
+                    _ => envelope,
+                };
                 plot::draw_envelope(
                     clipped,
                     lane,
@@ -439,7 +469,7 @@ impl Viewer {
                     let value = self
                         .detail
                         .as_ref()
-                        .and_then(|(_, channels)| channels[self.active].value_at(time))
+                        .and_then(|(_, detail)| detail.raw(self.active)?.value_at(time))
                         .or_else(|| {
                             if self.measurement_key.as_ref()?.channel == self.active {
                                 self.measurements.as_ref()?.raw.value_at(time)
@@ -475,8 +505,48 @@ impl Viewer {
                     ));
                 }
                 if measured.limited {
-                    ui.weak("Measurements use a 65k-sample window");
+                    ui.weak("Waveform measurements use a 65k-sample window");
                 }
+            }
+        });
+    }
+
+    fn power_totals(&self, ui: &mut Ui) {
+        if !self.recording.power_recording() {
+            return;
+        }
+        let selected = self.selection();
+        let span = selected.as_ref().unwrap_or(&self.span);
+        let totals = self
+            .measurement_key
+            .as_ref()
+            .filter(|key| key.span == *span)
+            .and_then(|_| self.measurements.as_ref()?.power_totals.as_ref());
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(if selected.is_some() {
+                "Selection"
+            } else {
+                "Visible interval"
+            });
+            if let Some(totals) = totals {
+                for (name, unit, integral) in [
+                    ("Charge", "C", &totals.charge),
+                    ("Energy", "J", &totals.energy),
+                ] {
+                    let value = integral.as_ref().map_or_else(
+                        || format!("- {unit}"),
+                        |integral| {
+                            format!(
+                                "{}{}",
+                                if integral.approximate { "≈ " } else { "" },
+                                display_value(integral.value, unit),
+                            )
+                        },
+                    );
+                    ui.label(format!("{name}  {value}"));
+                }
+            } else {
+                ui.weak("Measuring charge and energy…");
             }
         });
     }
@@ -579,7 +649,7 @@ impl Viewer {
             .detail
             .as_ref()
             .filter(|(cover, _)| cover.contains(&time))
-            .map(|(_, channels)| &channels[self.active]);
+            .and_then(|(_, detail)| detail.raw(self.active));
         let snapped = (!free).then(|| raw?.snap(time, radius)).flatten();
         self.cursors[slot] = Some(snapped.unwrap_or(time));
         if !free && finish && snapped.is_none() {
@@ -598,7 +668,7 @@ impl Viewer {
     fn poll(&mut self, ctx: &Context) {
         if !self.index_started {
             self.index_started = true;
-            if self.overview.sampled() {
+            if self.overview.sampled() || self.recording.power_recording() {
                 let recording = self.recording.clone();
                 self.index_job = Some(Task::start(
                     &JOBS,
@@ -656,17 +726,26 @@ impl Viewer {
     }
 
     fn request_detail(&mut self) {
-        if self.detail_job.is_some()
-            || self
-                .detail
-                .as_ref()
-                .is_some_and(|(cover, _)| contains(cover, &self.span))
-        {
+        if self.detail_job.is_some() {
             return;
         }
         let span = self.span.end - self.span.start;
-        let samples = span / self.overview.channels[self.active].interval_seconds;
-        if samples > reads::DETAIL_SAMPLES as f64 {
+        let raw = self
+            .overview
+            .channels
+            .iter()
+            .all(|channel| span / channel.interval_seconds <= reads::DETAIL_SAMPLES as f64);
+        if !raw
+            && (!self.recording.power_recording()
+                || span * 3.0 >= self.domain.end - self.domain.start)
+        {
+            return;
+        }
+        if self.detail.as_ref().is_some_and(|(cover, detail)| {
+            contains(cover, &self.span)
+                && matches!(detail, PlotData::Raw(_)) == raw
+                && cover.end - cover.start <= span * 4.0
+        }) {
             return;
         }
         let cover = (self.span.start - span).max(self.domain.start)
@@ -676,7 +755,13 @@ impl Viewer {
         self.detail_job = Some((
             cover,
             Task::start(&JOBS, Duration::from_secs(10), move |cancel| {
-                reads::detail(&recording, load, cancel)
+                if raw {
+                    reads::detail(&recording, load, cancel).map(PlotData::Raw)
+                } else {
+                    recording
+                        .power_envelopes(load, cancel)
+                        .map(PlotData::Summary)
+                }
             }),
         ));
     }
@@ -687,7 +772,13 @@ impl Viewer {
             span: self.selection().unwrap_or_else(|| self.span.clone()),
             channel: self.active,
             fft: self.spectrum.then_some(self.spectrum_window),
-            expression: self.math.clone(),
+            expression: if self.recording.power_recording()
+                && self.overview.channels[self.active].unit != "V"
+            {
+                String::new()
+            } else {
+                self.math.clone()
+            },
         };
         if self.analysis_key.as_ref() == Some(&key) {
             return;
@@ -713,14 +804,14 @@ impl Viewer {
                 }
             })
             .collect::<Vec<_>>();
-        let math = if self.math.trim().is_empty() {
+        let math = if key.expression.trim().is_empty() {
             self.math_error = None;
             None
         } else if self.overview.channels[self.active].unit != "V" {
             self.math_error = Some("Voltage expressions require an active voltage channel".into());
             None
         } else {
-            match Expression::parse(&self.math, &names, self.active) {
+            match Expression::parse(&key.expression, &names, self.active) {
                 Ok(expression) => {
                     self.math_error = None;
                     Some(expression)

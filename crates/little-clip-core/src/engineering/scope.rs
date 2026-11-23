@@ -191,6 +191,14 @@ impl Capture {
     }
 }
 
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        Err("Scope sample read cancelled.".into())
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,13 +320,5 @@ mod tests {
         assert_eq!(retained.stream_position().unwrap(), 33);
         cancel.store(true, Ordering::Relaxed);
         assert!(capture.read_samples(0, 0..10, &cancel).is_err());
-    }
-}
-
-fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
-    if cancel.load(Ordering::Relaxed) {
-        Err("Scope sample read cancelled.".into())
-    } else {
-        Ok(())
     }
 }

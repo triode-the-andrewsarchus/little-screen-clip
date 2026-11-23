@@ -286,7 +286,10 @@ impl crate::ScreenRenderer {
 fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Kind> {
     let kind = if Format::for_path(path) == Some(Format::Geography) {
         Kind::Geography
-    } else if Format::for_path(path) == Some(Format::Oscilloscope) {
+    } else if matches!(
+        Format::for_path(path),
+        Some(Format::Oscilloscope | Format::PowerRecording)
+    ) {
         Kind::Scope
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery

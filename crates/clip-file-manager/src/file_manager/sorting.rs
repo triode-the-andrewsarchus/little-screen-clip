@@ -82,6 +82,7 @@ pub(super) enum Category {
     Image,
     Brushes,
     Oscilloscope,
+    PowerRecording,
     Video,
     Scene,
     Font,
@@ -132,8 +133,11 @@ fn format_family(entry: &Entry) -> Category {
 }
 
 fn extension_category(entry: &Entry) -> Category {
-    if entry.document_format() == Some(super::document_format::Format::Oscilloscope) {
-        return Category::Oscilloscope;
+    use super::document_format::Format;
+    match entry.document_format() {
+        Some(Format::Oscilloscope) => return Category::Oscilloscope,
+        Some(Format::PowerRecording) => return Category::PowerRecording,
+        _ => {}
     }
     if entry.is_geography() {
         return Category::Geography;
@@ -175,6 +179,7 @@ impl Category {
             Self::Image => "Images",
             Self::Brushes => "Brushes",
             Self::Oscilloscope => "Oscilloscope captures",
+            Self::PowerRecording => "Power recordings",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",

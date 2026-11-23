@@ -420,9 +420,11 @@ impl EntryPreviews {
         palette: &little_clip_core::palette::AppPalette,
         response: &mut egui::Response,
     ) -> (Option<super::DocumentPosition>, bool) {
-        let position = if entry.document_format()
-            == Some(super::document_format::Format::Oscilloscope)
-        {
+        use super::document_format::Format;
+        let position = if matches!(
+            entry.document_format(),
+            Some(Format::Oscilloscope | Format::PowerRecording)
+        ) {
             let id = self.identity(entry);
             self.listing(entry);
             return super::scope_view::strip::show(

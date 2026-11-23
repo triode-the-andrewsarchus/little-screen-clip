@@ -493,23 +493,41 @@ impl ScreenRenderer {
             Color::from_rgba8(132, 227, 166, 255),
             Color::from_rgba8(239, 154, 205, 255),
         ];
-        let lane = plot_height / scope.envelopes.len().max(1) as f32;
-        for (index, envelope) in scope.envelopes.iter().enumerate() {
+        let visible_lanes = scope.envelopes.len().min(colors.len()).max(1);
+        let lane = plot_height / visible_lanes as f32;
+        let plot_left = left + (width * 0.25).clamp(48.0, 80.0);
+        for (index, (channel, envelope)) in scope
+            .channels
+            .iter()
+            .zip(&scope.envelopes)
+            .take(visible_lanes)
+            .enumerate()
+        {
             let bounds = envelope.extrema();
             if !bounds.valid() {
                 continue;
             }
             let mut path = tiny_skia::PathBuilder::new();
             let lane_top = top + index as f32 * lane + 4.0;
+            self.draw_text_clipped(
+                pixmap,
+                &format!("{} {}", channel.name, channel.unit),
+                left + 5.0,
+                lane_top + (lane - 9.0) / 2.0,
+                12.0,
+                colors[index],
+                false,
+                plot_left - 4.0,
+            );
             let y = |value: f32| {
                 let scale = (bounds.max - bounds.min).max(f32::EPSILON);
                 lane_top + (1.0 - (value - bounds.min) / scale) * (lane - 8.0).max(2.0)
             };
-            let step = (right - left - 6.0) / envelope.peaks.len().max(1) as f32;
+            let step = (right - plot_left - 4.0) / envelope.peaks.len().max(1) as f32;
             let mut previous = None;
             for (column, peak) in envelope.peaks.iter().copied().enumerate() {
                 if peak.valid() {
-                    let x = left + 3.0 + (column as f32 + 0.5) * step;
+                    let x = plot_left + (column as f32 + 0.5) * step;
                     let (top, bottom) = (y(peak.max), y(peak.min));
                     path.move_to(x, top);
                     path.line_to(x, bottom.max(top + 0.5));
@@ -522,7 +540,7 @@ impl ScreenRenderer {
             }
             if let Some(path) = path.finish() {
                 let mut paint = Paint::default();
-                paint.set_color(colors[index % colors.len()]);
+                paint.set_color(colors[index]);
                 pixmap.stroke_path(
                     &path,
                     &paint,

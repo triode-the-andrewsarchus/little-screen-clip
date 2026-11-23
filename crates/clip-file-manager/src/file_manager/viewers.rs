@@ -53,7 +53,7 @@ enum Loaded {
         original_path: PathBuf,
     },
     Path,
-    Oscilloscope(Box<super::scope_view::Viewer>),
+    Waveform(Box<super::scope_view::Viewer>),
     Video(super::media::VideoMetadata),
     VideoAudio(video_audio::Prepared),
     External,
@@ -81,7 +81,7 @@ enum ViewerSession {
     Midi(MidiViewerState),
     Model(Model3dViewerState),
     Scene(SplatViewerState),
-    Oscilloscope(Box<super::scope_view::Viewer>),
+    Waveform(Box<super::scope_view::Viewer>),
     Video(video::Video),
 }
 struct Loading {
@@ -389,7 +389,7 @@ impl Viewers {
                 Some(super::DocumentPosition::SampleRegion(instrument, region)),
             ) => state.select(instrument, region),
             (
-                Some(ViewerSession::Oscilloscope(state)),
+                Some(ViewerSession::Waveform(state)),
                 Some(super::DocumentPosition::ScopeSamples { first, end, .. }),
             ) => {
                 state.focus_samples(first, end);
@@ -432,7 +432,7 @@ impl Viewers {
                 | ViewerSession::Minecraft(_)
                 | ViewerSession::Toolpath(_)
                 | ViewerSession::Embroidery(_)
-                | ViewerSession::Oscilloscope(_)
+                | ViewerSession::Waveform(_)
                 | ViewerSession::Sheet(_),
             )
             | None => {}
@@ -839,9 +839,11 @@ fn load(
         Kind::Document(Format::Embroidery) => super::embroidery::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Embroidery),
-        Kind::Document(Format::Oscilloscope) => super::scope_view::Viewer::load(path, cancelled)
-            .map(Box::new)
-            .map(Loaded::Oscilloscope),
+        Kind::Document(Format::Oscilloscope | Format::PowerRecording) => {
+            super::scope_view::Viewer::load(path, cancelled)
+                .map(Box::new)
+                .map(Loaded::Waveform)
+        }
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
@@ -948,9 +950,9 @@ fn session(
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
         Loaded::Multisample(viewer) => ViewerSession::Multisample(*viewer),
         Loaded::Embroidery(viewer) => ViewerSession::Embroidery(viewer),
-        Loaded::Oscilloscope(mut viewer) => {
+        Loaded::Waveform(mut viewer) => {
             viewer.set_check(check);
-            ViewerSession::Oscilloscope(viewer)
+            ViewerSession::Waveform(viewer)
         }
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
@@ -1052,7 +1054,7 @@ fn render(
         ViewerSession::Midi(state) => state.render_ui(ui, palette, close),
         ViewerSession::Model(state) => state.render_ui(ui, palette, close),
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
-        ViewerSession::Oscilloscope(state) => state.ui(ui, close, palette, copies),
+        ViewerSession::Waveform(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Video(state) => state.ui(ui, close, palette, copies),
     }
 }

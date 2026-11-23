@@ -37,7 +37,9 @@ fn scope_frame_benchmark() {
                     // The native viewer queues this read off its UI thread.
                     viewer.detail = Some((
                         viewer.span.clone(),
-                        reads::detail(&viewer.recording, viewer.span.clone(), &cancel).unwrap(),
+                        PlotData::Raw(
+                            reads::detail(&viewer.recording, viewer.span.clone(), &cancel).unwrap(),
+                        ),
                     ));
                 }
                 let now = Instant::now();

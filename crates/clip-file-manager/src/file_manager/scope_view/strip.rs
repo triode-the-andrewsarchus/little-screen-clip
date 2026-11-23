@@ -66,11 +66,26 @@ pub(in crate::file_manager) fn focus_id() -> Id {
     Id::unique("file_scope_strip_focus")
 }
 
+fn entry_is_power(path: &Path) -> bool {
+    use little_clip_core::file_format::Format;
+    Format::for_path(path) == Some(Format::PowerRecording)
+}
+
 pub(in crate::file_manager) fn load(path: &Path, cancel: &AtomicBool) -> Data {
+    let power = entry_is_power(path);
     let mut data = Data::new(
         display_path(path),
-        "Oscilloscope capture".into(),
-        crate::icons::Icon::Waves,
+        if power {
+            "Power recording"
+        } else {
+            "Oscilloscope capture"
+        }
+        .into(),
+        if power {
+            crate::icons::Icon::Zap
+        } else {
+            crate::icons::Icon::Waves
+        },
     );
     let preview = Recording::open(path, ReadCheck::default(), cancel).and_then(|recording| {
         let overview = recording.overview(cancel)?;

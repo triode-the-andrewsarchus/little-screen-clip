@@ -26,6 +26,7 @@ pub enum Format {
     Spreadsheet,
     VcvPatch,
     Oscilloscope,
+    PowerRecording,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -48,6 +49,7 @@ impl Format {
             "gpx" | "geojson" | "rctrk" => Some(Self::Geography),
             "gcode" => Some(Self::Toolpath),
             "wfm" => Some(Self::Oscilloscope),
+            "jls" => Some(Self::PowerRecording),
             ext if crate::embroidery::supports_extension(ext) => Some(Self::Embroidery),
             "sfz" | "sf2" | "nki" | "dspreset" | "dslibrary" | "multisample" | "xrni" => {
                 Some(Self::Multisample)
