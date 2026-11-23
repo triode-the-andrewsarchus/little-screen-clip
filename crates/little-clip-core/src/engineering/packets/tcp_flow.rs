@@ -1,5 +1,9 @@
 use super::{ConversationKey, PacketRow, TcpSegment};
 
+mod ack;
+pub use ack::AckDelay;
+use ack::{Outstanding, Stamp};
+
 const FIN: u16 = 0x01;
 const SYN: u16 = 0x02;
 const RESET: u16 = 0x04;
@@ -26,6 +30,7 @@ pub struct TcpPoint {
     pub sequence: Option<i64>,
     pub sequence_end: Option<i64>,
     pub acknowledged: Option<i64>,
+    pub ack_delay: Option<AckDelay>,
     pub position: SequencePosition,
 }
 
@@ -47,7 +52,7 @@ impl TcpTracker {
         Self {
             key,
             connection: 0,
-            peers: [Direction::default(); 2],
+            peers: std::array::from_fn(|_| Direction::default()),
             closed: false,
             past_syn: false,
         }
@@ -59,26 +64,42 @@ impl TcpTracker {
         let opens = segment.flags & (SYN | ACK) == SYN;
         if opens && self.restarts(sender, segment.sequence) {
             self.connection = self.connection.saturating_add(1);
-            self.peers = [Direction::default(); 2];
+            self.peers = std::array::from_fn(|_| Direction::default());
             self.closed = false;
             self.past_syn = false;
         }
 
+        let stamp = Stamp::from_header(row.header);
+        let reverse = &mut self.peers[1 - sender];
         let acknowledged = (segment.flags & ACK != 0)
-            .then(|| self.peers[1 - sender].relative(segment.acknowledgment))
+            .then(|| reverse.relative(segment.acknowledgment))
             .flatten();
-        let placement = self.peers[sender].observe(segment);
+        let ack_delay = if segment.flags & RESET != 0 {
+            for peer in &mut self.peers {
+                peer.outstanding.invalidate();
+            }
+            None
+        } else {
+            acknowledged.and_then(|end| reverse.outstanding.receive(end, stamp))
+        };
+
+        let peer = &mut self.peers[sender];
+        let placement = peer.observe(segment);
+        if !self.closed && segment.flags & RESET == 0 {
+            peer.track(&placement, stamp);
+        }
         self.past_syn |= segment.flags & SYN == 0;
         self.closed |= segment.flags & RESET != 0 || self.peers.iter().all(|peer| peer.finished);
         Some(TcpPoint {
             row: row.header.row,
-            time_ns: row.header.time.map(|time| time.unix_nanoseconds()),
+            time_ns: stamp.map(|stamp| stamp.time_ns),
             connection: self.connection,
             sender,
             segment,
             sequence: placement.start,
             sequence_end: placement.end,
             acknowledged,
+            ack_delay,
             position: placement.position,
         })
     }
@@ -89,12 +110,13 @@ impl TcpTracker {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Default)]
 struct Direction {
     origin: Option<u32>,
     syn: Option<u32>,
     finished: bool,
     highest_end: Option<i64>,
+    outstanding: Outstanding,
 }
 
 #[derive(Default)]
@@ -144,6 +166,18 @@ impl Direction {
             position,
         }
     }
+
+    fn track(&mut self, placement: &Placement, stamp: Option<Stamp>) {
+        if let Some((start, end)) = placement.start.zip(placement.end) {
+            self.outstanding.send(
+                start..end,
+                stamp,
+                placement.position != SequencePosition::BelowPreviousEnd,
+            );
+        } else {
+            self.outstanding.invalidate();
+        }
+    }
 }
 
 fn length(segment: TcpSegment) -> Option<i64> {
@@ -155,7 +189,7 @@ fn length(segment: TcpSegment) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::engineering::packets::{
-        Endpoint, InterfaceId, PacketHeader, Protocol, ProtocolFields,
+        Endpoint, InterfaceId, PacketHeader, Protocol, ProtocolFields, Resolution, Timestamp,
     };
     use std::net::Ipv4Addr;
 
@@ -174,12 +208,21 @@ mod tests {
             (1, Some(1), Some(1))
         );
         let crossed = tracker
-            .observe(&row(false, u32::MAX - 1, 101, ACK, 10))
+            .observe(&timed(row(false, u32::MAX - 1, 101, ACK, 10), 3, 37_000))
             .unwrap();
         assert_eq!(crossed.sequence_end, Some(11));
         assert_eq!(crossed.position, SequencePosition::AtPreviousEnd);
-        let ack = tracker.observe(&row(true, 101, 8, ACK, 0)).unwrap();
+        let ack = tracker
+            .observe(&timed(row(true, 101, 8, ACK, 0), 4, 46_000))
+            .unwrap();
         assert_eq!(ack.acknowledged, Some(11));
+        assert_eq!(
+            ack.ack_delay,
+            Some(AckDelay {
+                segment_row: 3,
+                nanoseconds: 9_000_000,
+            })
+        );
         let later = tracker.observe(&row(false, 12, 101, ACK, 3)).unwrap();
         assert_eq!(later.position, SequencePosition::AbovePreviousEnd);
         let overlap = tracker.observe(&row(false, 2, 101, ACK | FIN, 8)).unwrap();
@@ -188,6 +231,16 @@ mod tests {
             (Some(5), Some(14))
         );
         assert_eq!(overlap.position, SequencePosition::BelowPreviousEnd);
+    }
+
+    fn timed(mut row: PacketRow, index: u64, microseconds: u64) -> PacketRow {
+        row.header.row = index;
+        row.header.time = Some(Timestamp {
+            ticks: microseconds,
+            resolution: Resolution::Decimal(6),
+            offset_seconds: 0,
+        });
+        row
     }
 
     #[test]

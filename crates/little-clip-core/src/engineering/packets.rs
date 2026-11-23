@@ -14,7 +14,7 @@ mod tcp_flow;
 
 pub use index::{ActivityBin, Index};
 pub use protocol::{Endpoint, Protocol, ProtocolFields, TcpSegment};
-pub use tcp_flow::{SequencePosition, TcpPoint, TcpTracker};
+pub use tcp_flow::{AckDelay, SequencePosition, TcpPoint, TcpTracker};
 
 use source::{Source, cancelled};
 use std::{

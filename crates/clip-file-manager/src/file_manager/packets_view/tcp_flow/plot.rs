@@ -1,4 +1,4 @@
-use super::{TcpPoint, note};
+use super::{Mode, TcpPoint, display_value, note};
 use crate::{file_manager::scope_view::plot as axis, ui_appearance::WorkbenchColors};
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use std::ops::Range;
@@ -11,24 +11,39 @@ struct Plot<'a> {
 }
 
 struct Lane {
-    sender: usize,
+    axis: LaneAxis,
     rect: Rect,
-    bytes: Range<i64>,
+    values: Range<i64>,
+}
+
+#[derive(Clone, Copy)]
+enum LaneAxis {
+    Sequence(usize),
+    Delay,
+}
+
+#[derive(Clone, Copy)]
+enum Glyph {
+    Segment,
+    Ack,
+    Delay,
 }
 
 struct Mark {
     low: i64,
     high: i64,
-    ack: bool,
+    glyph: Glyph,
+    sender: usize,
 }
 
 pub(super) fn draw(
     ui: &mut Ui,
     points: &[TcpPoint],
-    acks: bool,
     selected: Option<u64>,
     origin: Option<i128>,
     colors: WorkbenchColors,
+    mode: Mode,
+    acks: bool,
 ) -> Option<u64> {
     let Some(plot) = Plot::new(points, origin, acks) else {
         ui.weak("No timestamped TCP frames in this connection.");
@@ -43,9 +58,13 @@ pub(super) fn draw(
     clipped.rect_filled(rect, 3.0, colors.recessed);
     let pointer = response.hover_pos().filter(|point| rect.contains(*point));
     let mut near = None::<(&TcpPoint, f32)>;
-    for sender in 0..2 {
-        let row = axis::lane(rect, sender, 2).shrink2(vec2(0.0, 2.5));
-        let lane = Lane::new(row, sender, &plot);
+    let axes: &[LaneAxis] = match mode {
+        Mode::Sequence => &[LaneAxis::Sequence(0), LaneAxis::Sequence(1)],
+        Mode::Delay => &[LaneAxis::Delay],
+    };
+    for (index, measure) in axes.iter().copied().enumerate() {
+        let row = axis::lane(rect, index, axes.len()).shrink2(vec2(0.0, 2.5));
+        let lane = Lane::new(row, measure, &plot);
         lane.axis(&painter, colors);
         if let Some(hit) = lane.paint(&clipped, &plot, pointer)
             && near.is_none_or(|(_, old)| hit.1 < old)
@@ -55,9 +74,18 @@ pub(super) fn draw(
     }
     axis::axes(&painter, rect, &plot.time, colors.text_muted);
     plot.paint_selected(&clipped, rect, selected, colors.focus);
+    if mode == Mode::Delay && !points.iter().any(|point| point.ack_delay.is_some()) {
+        clipped.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            "No unambiguous ACK delays in this range",
+            FontId::proportional(13.0),
+            colors.text_muted,
+        );
+    }
     if let Some((point, _)) = near {
         let picked = response.clicked().then_some(point.row);
-        response.on_hover_text(readout(point));
+        response.on_hover_text(readout(point, mode));
         return picked;
     }
     None
@@ -96,45 +124,51 @@ impl<'a> Plot<'a> {
 }
 
 impl Lane {
-    fn new(rect: Rect, sender: usize, plot: &Plot<'_>) -> Self {
+    fn new(rect: Rect, axis: LaneAxis, plot: &Plot<'_>) -> Self {
         let (min, max) = plot
             .points
             .iter()
             .filter(|point| point.time_ns.is_some())
-            .filter_map(|point| Mark::for_lane(point, sender, plot.acks))
+            .filter_map(|point| Mark::for_lane(point, axis, plot.acks))
             .fold((0, 0), |(low, high), mark| {
                 (low.min(mark.low), high.max(mark.high))
             });
         Self {
-            sender,
+            axis,
             rect,
-            bytes: min..max.max(min + 1),
+            values: min..max.max(min + 1),
         }
     }
 
     fn axis(&self, painter: &Painter, colors: WorkbenchColors) {
-        let color = axis::color(self.sender);
-        let endpoints = ["A → B", "B → A"];
+        let label = match self.axis {
+            LaneAxis::Sequence(sender) => ["A → B", "B → A"][sender],
+            LaneAxis::Delay => "ACK delay",
+        };
         painter.text(
             self.rect.left_center() - vec2(5.0, 0.0),
             Align2::RIGHT_CENTER,
-            endpoints[self.sender],
+            label,
             FontId::proportional(11.0),
             colors.text_primary,
         );
         for (y, align, value) in [
-            (self.rect.top(), Align2::RIGHT_TOP, self.bytes.end),
-            (self.rect.bottom(), Align2::RIGHT_BOTTOM, self.bytes.start),
+            (self.rect.top(), Align2::RIGHT_TOP, self.values.end),
+            (self.rect.bottom(), Align2::RIGHT_BOTTOM, self.values.start),
         ] {
             painter.hline(
                 self.rect.x_range(),
                 y,
-                Stroke::new(0.7, color.gamma_multiply(0.2)),
+                Stroke::new(0.7, colors.text_muted.gamma_multiply(0.2)),
             );
+            let value = match self.axis {
+                LaneAxis::Sequence(_) => format!("{value} B"),
+                LaneAxis::Delay => display_value(value as f64 / 1e9, "s"),
+            };
             painter.text(
                 pos2(self.rect.left() - 5.0, y),
                 align,
-                format!("{value} B"),
+                value,
                 FontId::monospace(10.0),
                 colors.text_muted,
             );
@@ -148,11 +182,10 @@ impl Lane {
         pointer: Option<Pos2>,
     ) -> Option<(&'a TcpPoint, f32)> {
         let mut near = None::<(&TcpPoint, f32)>;
-        let color = axis::color(self.sender);
         let clipped = painter.with_clip_rect(self.rect);
         let mut marks = Mesh::default();
         for point in plot.points {
-            let Some(mark) = Mark::for_lane(point, self.sender, plot.acks) else {
+            let Some(mark) = Mark::for_lane(point, self.axis, plot.acks) else {
                 continue;
             };
             let Some(x) = plot.x_for(self.rect, point) else {
@@ -160,18 +193,15 @@ impl Lane {
             };
             let top = self.y(mark.high);
             let bottom = self.y(mark.low).max(top + 1.0).min(self.rect.bottom());
-            let color = if mark.ack {
-                color.gamma_multiply(0.61)
-            } else {
-                color
-            };
-            if mark.ack {
-                ack_mark(&mut marks, pos2(x, top), color);
-            } else {
-                marks.add_colored_rect(
+            let color = axis::color(mark.sender);
+            match mark.glyph {
+                Glyph::Ack => ack_mark(&mut marks, pos2(x, top), color.gamma_multiply(0.61)),
+                Glyph::Delay => marks
+                    .add_colored_rect(Rect::from_center_size(pos2(x, top), vec2(5.0, 5.0)), color),
+                Glyph::Segment => marks.add_colored_rect(
                     Rect::from_min_max(pos2(x - 1.0, top - 0.5), pos2(x + 1.0, bottom + 0.5)),
                     color,
-                );
+                ),
             }
             if let Some(pointer) = pointer.filter(|point| self.rect.contains(*point)) {
                 let distance = pointer.distance_sq(pos2(x, pointer.y.clamp(top, bottom)));
@@ -185,8 +215,8 @@ impl Lane {
     }
 
     fn y(&self, number: i64) -> f32 {
-        let ratio = (number as f64 - self.bytes.start as f64)
-            / (self.bytes.end as f64 - self.bytes.start as f64).max(1.0);
+        let ratio = (number as f64 - self.values.start as f64)
+            / (self.values.end as f64 - self.values.start as f64).max(1.0);
         self.rect.bottom() - self.rect.height() * ratio as f32
     }
 }
@@ -213,28 +243,52 @@ fn ack_mark(mesh: &mut Mesh, at: Pos2, color: Color32) {
 }
 
 impl Mark {
-    fn for_lane(point: &TcpPoint, sender: usize, acks: bool) -> Option<Self> {
-        if sender == point.sender {
-            let low = point.sequence?;
-            return Some(Self {
-                low,
-                high: point.sequence_end.unwrap_or(low),
-                ack: false,
-            });
+    fn for_lane(point: &TcpPoint, axis: LaneAxis, acks: bool) -> Option<Self> {
+        match axis {
+            LaneAxis::Sequence(sender) if sender == point.sender => {
+                let low = point.sequence?;
+                Some(Self {
+                    low,
+                    high: point.sequence_end.unwrap_or(low),
+                    glyph: Glyph::Segment,
+                    sender,
+                })
+            }
+            LaneAxis::Sequence(sender) if acks => {
+                let ack = point.acknowledged?;
+                Some(Self {
+                    low: ack,
+                    high: ack,
+                    glyph: Glyph::Ack,
+                    sender,
+                })
+            }
+            LaneAxis::Sequence(_) => None,
+            LaneAxis::Delay => {
+                let ns = i64::try_from(point.ack_delay?.nanoseconds).ok()?;
+                Some(Self {
+                    low: ns,
+                    high: ns,
+                    glyph: Glyph::Delay,
+                    sender: 1 - point.sender,
+                })
+            }
         }
-        if !acks {
-            return None;
-        }
-        let ack = point.acknowledged?;
-        Some(Self {
-            low: ack,
-            high: ack,
-            ack: true,
-        })
     }
 }
 
-fn readout(point: &TcpPoint) -> String {
+fn readout(point: &TcpPoint, mode: Mode) -> String {
+    if mode == Mode::Delay
+        && let Some(delay) = point.ack_delay
+    {
+        let direction = ["A → B", "B → A"][1 - point.sender];
+        return format!(
+            "{direction} · {}\nSegment frame {} · ACK frame {}",
+            display_value(delay.nanoseconds as f64 / 1e9, "s"),
+            delay.segment_row + 1,
+            point.row + 1,
+        );
+    }
     let direction = ["A → B", "B → A"][point.sender];
     let segment = point.segment;
     let format = |number: Option<i64>| number.map_or_else(|| "—".into(), |value| value.to_string());
