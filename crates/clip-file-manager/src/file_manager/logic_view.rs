@@ -1,6 +1,7 @@
 //! Offline logic timing and transition inspection.
 
 mod plot;
+mod protocols;
 pub(super) mod strip;
 
 use super::{preview_copy::Copies, preview_job::Task, scope_view::plot as timing};
@@ -44,13 +45,14 @@ pub(super) struct Viewer {
     followed_cursor: Option<f64>,
     request_after: f64,
     show_transitions: bool,
+    protocols: protocols::Panel,
     error: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
 struct WindowKey {
     span: Range<f64>,
-    first: usize,
+    visible: Vec<usize>,
     active: usize,
     show_transitions: bool,
 }
@@ -71,6 +73,7 @@ impl Viewer {
     pub fn load(path: &Path, cancel: &AtomicBool) -> Result<Self, String> {
         let recording = Recording::open(path, cancel)?;
         let overview = recording.overview(cancel)?;
+        let protocols = protocols::Panel::new(&overview.lanes);
         Ok(Self {
             span: overview.span.clone(),
             overview,
@@ -86,6 +89,7 @@ impl Viewer {
             followed_cursor: None,
             request_after: 0.0,
             show_transitions: false,
+            protocols,
             error: None,
         })
     }
@@ -119,14 +123,27 @@ impl Viewer {
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
             ui.weak(message);
         }
+        if self.show_transitions {
+            self.protocols.controls(ui, &self.overview.lanes);
+        }
         let reserved = if self.show_transitions { 238.0 } else { 39.0 };
         let height = (ui.available_height() - reserved).max(75.0);
         self.waveforms(ui, height);
         self.overview(ui);
-        if self.show_transitions {
-            self.transitions(ui);
-        }
         self.request_window(ui.ctx());
+        if self.show_transitions && !self.protocols.edges() {
+            self.protocols
+                .update(ui.ctx(), self.span.clone(), self.refined, &self.recording);
+            if let Some(event) = self.protocols.table(ui, &self.span, self.cursor) {
+                self.cursor = Some(event.time.start);
+                ui.ctx().request_repaint();
+            }
+        } else {
+            self.protocols.close();
+            if self.show_transitions {
+                self.transitions(ui);
+            }
+        }
     }
 
     fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) {
@@ -137,13 +154,15 @@ impl Viewer {
                 self.overview.span.end - self.overview.span.start,
                 "s",
             ));
-            egui::ComboBox::from_id_salt("logic_active_lane")
-                .selected_text(&self.overview.lanes[self.active].name)
-                .show_ui(ui, |ui| {
-                    for (index, lane) in self.overview.lanes.iter().enumerate() {
-                        ui.selectable_value(&mut self.active, index, &lane.name);
-                    }
-                });
+            if !self.show_transitions || self.protocols.edges() {
+                egui::ComboBox::from_id_salt("logic_active_lane")
+                    .selected_text(&self.overview.lanes[self.active].name)
+                    .show_ui(ui, |ui| {
+                        for (index, lane) in self.overview.lanes.iter().enumerate() {
+                            ui.selectable_value(&mut self.active, index, &lane.name);
+                        }
+                    });
+            }
             if ui.button("Fit").clicked() {
                 self.span = self.overview.span.clone();
             }
@@ -160,7 +179,7 @@ impl Viewer {
                 && let Some(range) = self.selected.clone()
             {
                 let recording = self.recording.clone();
-                let index = self.active;
+                let index = self.focused_lane();
                 copies.start(ui.ctx(), move |cancel| {
                     export(&recording, index, range, cancel)
                 });
@@ -174,8 +193,23 @@ impl Viewer {
         });
     }
 
-    fn page(&self) -> usize {
-        self.active / LANES_PER_PAGE * LANES_PER_PAGE
+    fn visible_lanes(&self) -> Vec<usize> {
+        if self.show_transitions
+            && let Some(channels) = self.protocols.channels()
+        {
+            return channels;
+        }
+        let first = self.active / LANES_PER_PAGE * LANES_PER_PAGE;
+        (first..(first + LANES_PER_PAGE).min(self.overview.lanes.len())).collect()
+    }
+
+    fn focused_lane(&self) -> usize {
+        if self.show_transitions
+            && let Some(lane) = self.protocols.data_lane()
+        {
+            return lane;
+        }
+        self.active
     }
 
     fn waveforms(&mut self, ui: &mut Ui, height: f32) {
@@ -198,9 +232,29 @@ impl Viewer {
                 Color32::from_white_alpha(25),
             );
         }
+        let event = self
+            .show_transitions
+            .then(|| self.protocols.cursor_event(&self.span, self.cursor))
+            .flatten();
+        if let Some(event) = event
+            && !event.time.is_empty()
+        {
+            timing::highlight(
+                &clipped,
+                rect,
+                &self.span,
+                event.time.clone(),
+                Color32::from_rgba_unmultiplied(241, 189, 76, 75),
+            );
+        }
         if let Some(cursor) = self.cursor {
             let x = timing::x_at(rect, &self.span, cursor);
-            clipped.vline(x, rect.y_range(), Stroke::new(1.25, Color32::WHITE));
+            let color = if event.is_some() {
+                Color32::GOLD
+            } else {
+                Color32::WHITE
+            };
+            clipped.vline(x, rect.y_range(), Stroke::new(1.25, color));
         }
     }
 
@@ -211,12 +265,17 @@ impl Viewer {
         rect: Rect,
         ink: Color32,
     ) {
-        let first = self.page();
-        let count = (self.overview.lanes.len() - first).min(LANES_PER_PAGE);
-        for offset in 0..count {
-            let index = first + offset;
+        let visible = self.visible_lanes();
+        let selected = self.focused_lane();
+        let frame = self.frame.as_ref().filter(|frame| {
+            frame.key.visible == visible
+                && frame.key.span.start <= self.span.start
+                && frame.key.span.end >= self.span.end
+        });
+        let count = visible.len();
+        for (offset, index) in visible.into_iter().enumerate() {
             let lane = timing::lane(rect, offset, count);
-            let color = if self.active == index {
+            let color = if selected == index {
                 Color32::from_rgb(130, 225, 163)
             } else {
                 ink
@@ -234,16 +293,7 @@ impl Viewer {
                 Stroke::new(0.5, ink.gamma_multiply(0.24)),
             );
             let inner = lane.shrink2(vec2(0.0, lane.height() * 0.2));
-            match self
-                .frame
-                .as_ref()
-                .filter(|frame| {
-                    frame.key.first == first
-                        && frame.key.span.start <= self.span.start
-                        && frame.key.span.end >= self.span.end
-                })
-                .and_then(|frame| frame.lanes.get(offset))
-            {
+            match frame.and_then(|frame| frame.lanes.get(offset)) {
                 Some(Wave::Exact(trace, time)) => {
                     plot::draw_trace(clipped, inner, &self.span, time, trace, color)
                 }
@@ -268,7 +318,7 @@ impl Viewer {
         if let Some(envelope) = self
             .overview
             .lanes_previewed
-            .get(self.active)
+            .get(self.focused_lane())
             .or_else(|| self.overview.lanes_previewed.first())
         {
             plot::draw_envelope(
@@ -305,7 +355,6 @@ impl Viewer {
             ui.weak("Reading transitions…");
             return;
         };
-        let text_height = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
         let selected = self.cursor.and_then(|time| {
             trace
                 .edges
@@ -319,34 +368,33 @@ impl Viewer {
             ));
         }
         let mut destination = None;
-        let mut rows =
-            egui::ScrollArea::vertical().max_height((ui.available_height() - 8.0).max(42.0));
-        if self.followed_cursor != self.cursor {
-            if let Some(row) = selected {
-                let stride = text_height + ui.spacing().item_spacing.y;
-                rows = rows.vertical_scroll_offset((row as f32 * stride - stride * 2.0).max(0.0));
-            }
-            self.followed_cursor = self.cursor;
-        }
-        rows.show_rows(ui, text_height, trace.edges.len(), |ui, rows| {
-            for index in rows {
-                let edge = &trace.edges[index];
-                let label = format!(
-                    "{:>13}       {}",
-                    display_value(edge.time_seconds, "s"),
-                    level_label(edge.level)
-                );
-                if ui
-                    .selectable_label(
-                        selected == Some(index),
-                        egui::RichText::new(label).monospace(),
-                    )
-                    .clicked()
-                {
-                    destination = Some(edge.time_seconds);
+        event_list(
+            ui,
+            "logic-edge-rows",
+            self.cursor,
+            &mut self.followed_cursor,
+            selected,
+            trace.edges.len(),
+            |ui, rows| {
+                for index in rows {
+                    let edge = &trace.edges[index];
+                    let label = format!(
+                        "{:>13}       {}",
+                        display_value(edge.time_seconds, "s"),
+                        level_label(edge.level)
+                    );
+                    if ui
+                        .selectable_label(
+                            selected == Some(index),
+                            egui::RichText::new(label).monospace(),
+                        )
+                        .clicked()
+                    {
+                        destination = Some(edge.time_seconds);
+                    }
                 }
-            }
-        });
+            },
+        );
         if let Some(time) = destination {
             self.cursor = Some(time);
             self.recenter(time);
@@ -404,7 +452,7 @@ impl Viewer {
     fn fit(&self, requested: Range<f64>) -> Range<f64> {
         let domain = &self.overview.span;
         let total = domain.end - domain.start;
-        let resolution = self.overview.lanes[self.active]
+        let resolution = self.overview.lanes[self.focused_lane()]
             .sample_rate
             .map_or(1e-9, f64::recip);
         let width = (requested.end - requested.start).clamp((resolution * 4.0).min(total), total);
@@ -471,9 +519,9 @@ impl Viewer {
     fn request_window(&mut self, ctx: &Context) {
         let key = WindowKey {
             span: self.span.clone(),
-            first: self.page(),
-            active: self.active,
-            show_transitions: self.show_transitions,
+            visible: self.visible_lanes(),
+            active: self.focused_lane(),
+            show_transitions: self.show_transitions && self.protocols.edges(),
         };
         if self.request.as_ref() == Some(&key) || self.read_job.is_some() {
             return;
@@ -493,18 +541,36 @@ impl Viewer {
     }
 }
 
+fn event_list(
+    ui: &mut Ui,
+    id: &'static str,
+    cursor: Option<f64>,
+    followed_cursor: &mut Option<f64>,
+    selected: Option<usize>,
+    count: usize,
+    add: impl FnMut(&mut Ui, Range<usize>),
+) {
+    let text_height = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
+    let mut rows = egui::ScrollArea::vertical()
+        .id_salt(id)
+        .max_height((ui.available_height() - 8.0).max(42.0));
+    if *followed_cursor != cursor {
+        if let Some(row) = selected {
+            let stride = text_height + ui.spacing().item_spacing.y;
+            rows = rows.vertical_scroll_offset((row as f32 * stride - stride * 2.0).max(0.0));
+        }
+        *followed_cursor = cursor;
+    }
+    rows.show_rows(ui, text_height, count, add);
+}
+
 fn read_frame(recording: &Recording, key: WindowKey, cancel: &AtomicBool) -> Result<Frame, String> {
     recording.checked(cancel, |capture| {
         let mut transitions = None;
         let mut lanes = Vec::new();
         let width = key.span.end - key.span.start;
-        for (index, lane) in capture
-            .lanes()
-            .iter()
-            .enumerate()
-            .skip(key.first)
-            .take(LANES_PER_PAGE)
-        {
+        for &index in &key.visible {
+            let lane = &capture.lanes()[index];
             let bounds = capture
                 .time_bounds(index)
                 .unwrap_or_else(|| key.span.clone());

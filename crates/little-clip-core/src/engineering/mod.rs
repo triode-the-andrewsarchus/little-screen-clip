@@ -6,6 +6,7 @@ pub mod flowgraph;
 pub mod iq;
 pub mod jls;
 pub mod logic;
+pub mod logic_decode;
 pub mod logic_preview;
 pub mod packets;
 pub mod pulses;
