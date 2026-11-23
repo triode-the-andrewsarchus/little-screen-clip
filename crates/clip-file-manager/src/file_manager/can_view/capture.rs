@@ -59,11 +59,7 @@ impl Capture {
         path: &Path,
         cancel: &AtomicBool,
     ) -> Result<(PathBuf, dbc::Database), String> {
-        let parent = self
-            .path
-            .parent()
-            .ok_or("CAN capture has no parent directory")?;
-        let path = parent.join(path);
+        let path = self.directory().join(path);
         let (file, revision) = self.check.open(&path, None, cancel)?;
         let mut bytes = Vec::new();
         (&file)
@@ -136,10 +132,20 @@ impl Capture {
         })
     }
 
-    pub fn database_hint(&self) -> String {
-        self.path.file_name().map_or_else(String::new, |name| {
-            little_clip_core::path_address::display_path(&Path::new(name).with_extension("dbc"))
-        })
+    pub fn directory(&self) -> &Path {
+        self.path.parent().unwrap_or_else(|| Path::new("."))
+    }
+
+    pub fn nearby_database(&self, cancel: &AtomicBool) -> Option<PathBuf> {
+        let name = Path::new(self.path.file_name()?);
+        ["dbc", "DBC"]
+            .map(|extension| name.with_extension(extension))
+            .into_iter()
+            .find(|path| {
+                self.check
+                    .open(&self.directory().join(path), None, cancel)
+                    .is_ok()
+            })
     }
 
     pub fn copy(
@@ -204,4 +210,83 @@ fn write_csv(output: &mut impl Write, frames: &[Frame]) -> std::io::Result<()> {
         )?;
     }
     output.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Capture, Signal};
+    use std::{fs, path::Path, sync::atomic::AtomicBool};
+
+    #[test]
+    fn nearby_dbc_fields_keep_independent_units_times_and_source_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let asc = directory.path().join("Power supply.asc");
+        let dbc = directory.path().join("Power supply.dbc");
+        fs::write(
+            &asc,
+            concat!(
+                "date Mon Nov 2 03:22:02 2026\n",
+                "base hex timestamps absolute\n",
+                "0.100 1 123 Tx d 2 0A 00\n",
+                "0.180 1 124 Rx d 2 14 00\n",
+                "0.400 1 123 Tx d 2 30 00\n",
+                "0.680 1 124 Rx d 2 18 00\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            &dbc,
+            concat!(
+                "VERSION \"\"\nNS_ :\nBS_:\nBU_: Node\n",
+                "BO_ 291 Command: 2 Node\n",
+                " SG_ TargetVoltage : 0|16@1+ (0.5,0) [0|100] \"V\" Node\n",
+                "BO_ 292 Response: 2 Node\n",
+                " SG_ OutputCurrent : 0|16@1+ (0.25,0) [0|200] \"A\" Node\n",
+            ),
+        )
+        .unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let (capture, _) = Capture::open(&asc, &cancel).unwrap();
+        let nearby = capture.nearby_database(&cancel).unwrap();
+        assert_eq!(nearby, Path::new("Power supply.dbc"));
+        let (loaded_from, database) = capture.database(&nearby, &cancel).unwrap();
+        assert_eq!(loaded_from, dbc);
+        let index = capture.index(&cancel).unwrap();
+
+        let span = 100_000_000..680_000_001;
+        for (first_row, unit, expected) in [
+            (0, "V", [(0, 100_000_000, 5.0), (2, 400_000_000, 24.0)]),
+            (1, "A", [(1, 180_000_000, 5.0), (3, 680_000_000, 6.0)]),
+        ] {
+            let frames = capture
+                .rows(&index, first_row..first_row + 1, &cancel)
+                .unwrap();
+            let frame = &frames[0];
+            let id = frame.id.unwrap();
+            let target = Signal {
+                channel: frame.channel.clone(),
+                id,
+                field: 0,
+            };
+            assert_eq!(database.message(id).unwrap().signals[0].unit, unit);
+
+            let series = capture
+                .signal_series(&index, &database, &target, span.clone(), &cancel)
+                .unwrap();
+            assert_eq!(series.points.len(), expected.len());
+            assert!(!series.truncated);
+            assert!(!series.reduced);
+            for (point, (row, time, value)) in series.points.iter().zip(expected) {
+                assert_eq!(
+                    (point.row, point.time_ns, point.decoded.unwrap().value),
+                    (row, time, value)
+                );
+                let frames = capture
+                    .rows(&index, point.row..point.row + 1, &cancel)
+                    .unwrap();
+                assert_eq!((frames[0].id, frames[0].timestamp_ns), (Some(id), time));
+            }
+        }
+    }
 }

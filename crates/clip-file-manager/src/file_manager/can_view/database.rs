@@ -9,12 +9,22 @@ use crate::{
     },
     ui_appearance::WorkbenchColors,
 };
-use egui::Ui;
+use egui::{Context, Ui};
 use little_clip_core::engineering::can::{
     Frame, Identifier, Index,
     dbc::{Database, Field, RawValue},
 };
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use little_clip_core::{BackgroundJobs, CommandRequest};
+use std::{
+    ffi::OsString,
+    os::unix::ffi::OsStringExt,
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock, atomic::AtomicBool},
+    time::Duration,
+};
+
+static PICKERS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 1));
+const PICKER_TIMEOUT: Duration = Duration::from_secs(600);
 
 const FIELDS: Columns<4> = Columns {
     id: "CAN signal fields",
@@ -32,6 +42,10 @@ pub(super) struct Panel {
     path: String,
     database: Option<(PathBuf, Arc<Database>)>,
     loading: Option<Job<(PathBuf, Database)>>,
+    picker: Option<Job<Option<PathBuf>>>,
+    nearby_check: Option<Job<Option<PathBuf>>>,
+    nearby_checked: bool,
+    nearby: Option<PathBuf>,
     error: Option<String>,
     selected: Option<(Identifier, usize)>,
     generation: u64,
@@ -40,24 +54,56 @@ pub(super) struct Panel {
 
 impl Panel {
     pub(super) fn pending(&self) -> bool {
-        self.loading.is_some() || self.plot.pending()
+        self.loading.is_some() || self.nearby_check.is_some() || self.plot.pending()
     }
 
     pub(super) fn plot_open(&self) -> bool {
-        self.plot.signal.is_some()
+        self.plot.active()
     }
 
     pub(super) fn attached(&self) -> bool {
         self.database.is_some()
     }
 
-    pub(super) fn toolbar(&mut self, ui: &mut Ui) {
+    pub(super) fn toolbar(&mut self, ui: &mut Ui, capture: &Arc<Capture>) {
+        if !self.nearby_checked {
+            let capture = capture.clone();
+            self.nearby_check = Some(start(
+                &JOBS,
+                ui.ctx(),
+                Duration::from_secs(3),
+                move |cancel| Ok(capture.nearby_database(cancel)),
+            ));
+            self.nearby_checked = true;
+        }
+        let ready = self.loading.is_none() && self.picker.is_none();
+        if !self.attached()
+            && let Some(path) = self.nearby.clone()
+            && ui
+                .add_enabled(
+                    ready,
+                    egui::Button::new(format!("Attach {}", path.display())),
+                )
+                .on_hover_text("Attach the DBC with the same filename as the capture.")
+                .clicked()
+        {
+            self.begin_attach(ui.ctx(), capture, path);
+        }
+        let available = clip_studios::is_zenity_available();
         if ui
-            .button(if self.attached() {
-                "Change DBC"
-            } else {
-                "Load DBC"
-            })
+            .add_enabled(ready && available, egui::Button::new("Browse DBC…"))
+            .on_disabled_hover_text("The file chooser needs Zenity. You can enter a DBC path.")
+            .clicked()
+        {
+            let initial = capture.directory().join("");
+            self.editing = false;
+            self.picker = Some(start(&PICKERS, ui.ctx(), PICKER_TIMEOUT, move |cancel| {
+                pick_database(&initial, cancel)
+            }));
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+        }
+        if ui
+            .add_enabled(ready, egui::Button::new("Enter DBC path"))
             .clicked()
         {
             self.editing = true;
@@ -77,6 +123,7 @@ impl Panel {
                 self.database = None;
                 self.plot = signal_plot::Plot::default();
                 self.loading = None;
+                self.picker = None;
                 self.error = None;
                 self.selected = None;
                 self.generation += 1;
@@ -93,9 +140,6 @@ impl Panel {
     pub(super) fn attachment(&mut self, ui: &mut Ui, capture: &Arc<Capture>) {
         if !self.editing {
             return;
-        }
-        if self.path.is_empty() {
-            self.path = capture.database_hint();
         }
         let width = (ui.available_width() * 0.63).min(470.0);
         ui.horizontal_wrapped(|ui| {
@@ -121,15 +165,7 @@ impl Panel {
             if load {
                 match little_clip_core::path_address::decode_path(self.path.trim()) {
                     Ok(path) if !path.as_os_str().is_empty() => {
-                        let capture = capture.clone();
-                        self.loading = Some(start(
-                            &JOBS,
-                            ui.ctx(),
-                            Duration::from_secs(15),
-                            move |cancel| capture.database(&path, cancel),
-                        ));
-                        self.error = None;
-                        self.editing = false;
+                        self.begin_attach(ui.ctx(), capture, path);
                     }
                     Ok(_) => self.error = Some("Enter a DBC path.".into()),
                     Err(error) => self.error = Some(error),
@@ -142,7 +178,28 @@ impl Panel {
         });
     }
 
-    pub(super) fn poll(&mut self) {
+    fn begin_attach(&mut self, ctx: &Context, capture: &Arc<Capture>, path: PathBuf) {
+        let capture = capture.clone();
+        self.loading = Some(start(&JOBS, ctx, Duration::from_secs(15), move |cancel| {
+            capture.database(&path, cancel)
+        }));
+        self.error = None;
+        self.editing = false;
+    }
+
+    pub(super) fn poll(&mut self, ctx: &Context, capture: &Arc<Capture>) {
+        if let Some(result) = poll(&mut self.nearby_check) {
+            self.nearby = result.ok().flatten();
+        }
+        if let Some(result) = poll(&mut self.picker) {
+            match result {
+                Ok(Some(path)) => self.begin_attach(ctx, capture, path),
+                Ok(None) => {}
+                Err(error) => self.error = Some(error),
+            }
+        } else if self.picker.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
         if let Some(result) = poll(&mut self.loading) {
             match result {
                 Ok((path, database)) => {
@@ -229,20 +286,19 @@ impl Panel {
             .selected
             .filter(|(active, _)| *active == id)
             .map(|(_, field)| field as u64);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.strong(&message.name);
             if plot_action
-                && let Some(field) = selected.and_then(|index| message.signals.get(index as usize))
-                && ui
-                    .add_enabled(!field.bits().is_empty(), egui::Button::new("Plot signal"))
-                    .on_hover_text(format!("Plot {} on {}", field.name, frame.channel))
-                    .clicked()
+                && let Some(index) = selected
+                && let Some(field) = message.signals.get(index as usize)
+                && !field.bits().is_empty()
             {
-                self.plot.set(signal_plot::Signal {
+                let signal = signal_plot::Signal {
                     channel: frame.channel.clone(),
                     id,
-                    field: selected.unwrap_or_default() as usize,
-                });
+                    field: index as usize,
+                };
+                self.plot.field_actions(ui, signal);
             }
         });
         let page = Page {
@@ -284,6 +340,35 @@ impl Panel {
             ui.ctx().request_repaint();
         }
     }
+}
+
+fn pick_database(initial: &Path, cancel: &AtomicBool) -> Result<Option<PathBuf>, String> {
+    let mut filename = OsString::from("--filename=");
+    filename.push(initial);
+    let output = CommandRequest::new("zenity")
+        .args([
+            "--file-selection",
+            "--title=Attach CAN database",
+            "--file-filter=CAN database | *.dbc *.DBC",
+            "--file-filter=All files | *",
+        ])
+        .arg(filename)
+        .timeout(PICKER_TIMEOUT)
+        .max_output_bytes(16 * 1024)
+        .die_with_parent()
+        .run_cancellable(cancel)
+        .map_err(|error| error.to_string())?;
+    if output.status.code() == Some(1) {
+        return Ok(None);
+    }
+    if !output.status.success() || output.stdout_truncated {
+        return Err("The DBC file chooser did not return a complete path.".into());
+    }
+    let mut path = output.stdout;
+    if path.last() == Some(&b'\n') {
+        path.pop();
+    }
+    Ok((!path.is_empty()).then(|| PathBuf::from(OsString::from_vec(path))))
 }
 
 pub(super) fn physical(value: f64, unit: &str) -> String {

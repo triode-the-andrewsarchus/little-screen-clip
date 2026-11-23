@@ -29,8 +29,13 @@ struct Query {
 
 #[derive(Default)]
 pub(super) struct Plot {
-    pub signal: Option<Signal>,
+    primary: Option<Lane>,
+    comparison: Option<Lane>,
     interval: Option<activity::Domain>,
+}
+
+struct Lane {
+    signal: Signal,
     task: Option<(Query, Job<Arc<Series>>)>,
     accepted: Option<(Query, Result<Arc<Series>, String>)>,
 }
@@ -42,17 +47,59 @@ pub(super) struct Viewport<'a> {
     pub origin: i128,
 }
 
+struct Chart<'a> {
+    capture: &'a Arc<Capture>,
+    database: &'a Arc<Database>,
+    index: Option<&'a Arc<Index>>,
+    span: &'a activity::Domain,
+    selected_time: Option<i128>,
+    origin: i128,
+    colors: WorkbenchColors,
+    paired: bool,
+}
+
 impl Plot {
     pub fn pending(&self) -> bool {
-        self.task.is_some()
+        [&self.primary, &self.comparison]
+            .into_iter()
+            .flatten()
+            .any(|lane| lane.task.is_some())
     }
 
-    pub fn set(&mut self, signal: Signal) {
-        if self.signal.as_ref() != Some(&signal) {
+    pub fn active(&self) -> bool {
+        self.primary.is_some()
+    }
+
+    pub fn field_actions(&mut self, ui: &mut Ui, signal: Signal) {
+        let primary = self
+            .primary
+            .as_ref()
+            .is_some_and(|lane| lane.signal == signal);
+        let comparison = self
+            .comparison
+            .as_ref()
+            .is_some_and(|lane| lane.signal == signal);
+        if ui
+            .add_enabled(!primary, egui::Button::new("Plot signal").small())
+            .on_hover_text("Start a plot for this decoded field.")
+            .clicked()
+        {
             *self = Self {
-                signal: Some(signal),
+                primary: Some(Lane::new(signal.clone())),
                 ..Self::default()
             };
+            return;
+        }
+        if self.active()
+            && ui
+                .add_enabled(
+                    !primary && !comparison,
+                    egui::Button::new("Compare signal").small(),
+                )
+                .on_hover_text("Show this decoded field on the same time axis.")
+                .clicked()
+        {
+            self.comparison = Some(Lane::new(signal));
         }
     }
 
@@ -66,96 +113,46 @@ impl Plot {
         colors: WorkbenchColors,
         copies: &mut Copies,
     ) -> Option<u64> {
-        let signal = self.signal.clone()?;
-        let message = database.message(signal.id)?;
-        let field = message.signals.get(signal.field)?;
-        if let Some(ready) = keyed_poll(&mut self.task) {
-            self.accepted = Some(ready);
+        if !self.active() {
+            return None;
         }
-        let keep = self.toolbar(ui, &signal, &field.name, viewport.selection);
-        if !keep {
+        if !self.toolbar(ui, viewport.selection) {
             *self = Self::default();
             return None;
         }
-        let span = self.interval.as_ref().unwrap_or(viewport.span).clone();
-        let key = Query { signal, span };
-        if let Some(index) = index {
-            self.request(ui, &key, capture, database, index);
-        }
-        let result = self
-            .accepted
-            .as_ref()
-            .filter(|(ready, _)| ready == &key)
-            .map(|(_, result)| result);
-        let (area, response) =
-            ui.allocate_exact_size(vec2(ui.available_width(), 110.0), Sense::click());
-        let rect = Rect::from_min_max(area.min + vec2(76.0, 3.0), area.max - vec2(4.0, 17.0));
-        let painter = ui.painter_at(area);
-        painter.rect_filled(rect, 3.0, colors.recessed);
-        match result {
-            Some(Ok(series)) => {
-                let hovered = response
-                    .hover_pos()
-                    .filter(|pos| rect.contains(*pos))
-                    .and_then(|pos| {
-                        nearest_point(&series.points, activity::at(rect, &key.span, pos.x))
-                    });
-                paint_series(
-                    &painter,
-                    rect,
-                    &key.span,
-                    series,
-                    &field.unit,
-                    viewport.origin,
-                    colors,
-                );
-                if let Some(time) = viewport.selected_time {
-                    activity::marker(&painter, rect, &key.span, time, colors);
-                }
-                let hover = hovered.map(|point| {
-                    activity::marker(&painter, rect, &key.span, point.time_ns, colors);
-                    tooltip(point, &field.unit, viewport.origin)
-                });
-                let clicked = response
-                    .clicked()
-                    .then(|| hovered.map(|point| point.row))
-                    .flatten();
-                if let Some(text) = hover {
-                    response.on_hover_text(text);
-                }
-                series_actions(ui, series, &field.unit, copies);
-                clicked
-            }
-            Some(Err(error)) => {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-                None
-            }
-            None => {
-                ui.weak(if index.is_some() {
-                    "Reading decoded values…"
-                } else {
-                    "Waiting for the CAN index…"
-                });
-                None
-            }
-        }
+        let chart = Chart {
+            capture,
+            database,
+            index,
+            span: self.interval.as_ref().unwrap_or(viewport.span),
+            selected_time: viewport.selected_time,
+            origin: viewport.origin,
+            colors,
+            paired: self.comparison.is_some(),
+        };
+        let row = self.primary.as_mut()?.show(ui, &chart, copies);
+        let comparison_row = self
+            .comparison
+            .as_mut()
+            .and_then(|lane| lane.show(ui, &chart, copies));
+        let (axis, _) = ui.allocate_exact_size(vec2(ui.available_width(), 12.0), Sense::hover());
+        paint_time_axis(
+            &ui.painter_at(axis),
+            data_rect(axis),
+            chart.span,
+            chart.origin,
+            colors,
+        );
+        row.or(comparison_row)
     }
 
-    fn toolbar(
-        &mut self,
-        ui: &mut Ui,
-        signal: &Signal,
-        field_name: &str,
-        selection: Option<activity::Domain>,
-    ) -> bool {
+    fn toolbar(&mut self, ui: &mut Ui, selection: Option<activity::Domain>) -> bool {
         ui.horizontal_wrapped(|ui| {
-            ui.strong(field_name);
-            ui.weak(format!("{} · {}", signal.channel, signal.id));
             let capable = selection
                 .as_ref()
                 .is_some_and(|span| self.interval.as_ref() != Some(span));
             if ui
-                .add_enabled(capable, egui::Button::new("Use selected time"))
+                .add_enabled(capable, egui::Button::new("Use selected time").small())
                 .clicked()
             {
                 self.interval = selection;
@@ -163,15 +160,115 @@ impl Plot {
             if ui
                 .add_enabled(
                     self.interval.is_some(),
-                    egui::Button::new("Follow timeline"),
+                    egui::Button::new("Follow timeline").small(),
                 )
                 .clicked()
             {
                 self.interval = None;
             }
+            if self.comparison.is_some() && ui.small_button("Remove comparison").clicked() {
+                self.comparison = None;
+            }
             !ui.small_button("Close plot").clicked()
         })
         .inner
+    }
+}
+
+impl Lane {
+    fn new(signal: Signal) -> Self {
+        Self {
+            signal,
+            task: None,
+            accepted: None,
+        }
+    }
+
+    fn show(&mut self, ui: &mut Ui, chart: &Chart<'_>, copies: &mut Copies) -> Option<u64> {
+        let field = chart
+            .database
+            .message(self.signal.id)?
+            .signals
+            .get(self.signal.field)?;
+        if let Some(ready) = keyed_poll(&mut self.task) {
+            self.accepted = Some(ready);
+        }
+        let key = Query {
+            signal: self.signal.clone(),
+            span: chart.span.clone(),
+        };
+        if let Some(index) = chart.index {
+            self.request(ui, &key, chart.capture, chart.database, index);
+        }
+        let result = self
+            .accepted
+            .as_ref()
+            .filter(|(ready, _)| ready == &key)
+            .map(|(_, result)| result);
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(if field.unit.is_empty() {
+                field.name.clone()
+            } else {
+                format!("{} ({})", field.name, field.unit)
+            });
+            ui.weak(format!("{} · {}", self.signal.channel, self.signal.id));
+            match result {
+                Some(Ok(series)) => series_actions(ui, series, &field.unit, copies),
+                Some(Err(error)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                None => {
+                    ui.weak(if chart.index.is_some() {
+                        "Reading decoded values…"
+                    } else {
+                        "Waiting for the CAN index…"
+                    });
+                }
+            }
+        });
+        let height = if chart.paired { 45.0 } else { 72.0 };
+        let (area, response) =
+            ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+        let rect = data_rect(area).shrink2(vec2(0.0, 2.0));
+        let painter = ui.painter_at(area);
+        painter.rect_filled(rect, 3.0, chart.colors.recessed);
+        for tick in 1..4 {
+            let x = rect.left() + rect.width() * tick as f32 / 4.0;
+            painter.vline(
+                x,
+                rect.y_range(),
+                Stroke::new(0.5, chart.colors.text_muted.gamma_multiply(0.35)),
+            );
+        }
+        let Some(Ok(series)) = result else {
+            return None;
+        };
+        paint_series(
+            &painter,
+            rect,
+            chart.span,
+            series,
+            &field.unit,
+            chart.colors,
+        );
+        if let Some(time) = chart.selected_time {
+            activity::marker(&painter, rect, chart.span, time, chart.colors);
+        }
+        let hover = response.hover_pos().filter(|pos| rect.contains(*pos));
+        let click = response
+            .interact_pointer_pos()
+            .filter(|pos| rect.contains(*pos));
+        let point_at =
+            |pos: egui::Pos2| nearest_point(&series.points, activity::at(rect, chart.span, pos.x));
+        let clicked = response
+            .clicked()
+            .then(|| click.and_then(point_at))
+            .flatten();
+        if let Some(point) = hover.and_then(point_at) {
+            activity::marker(&painter, rect, chart.span, point.time_ns, chart.colors);
+            response.on_hover_text(tooltip(point, &field.unit, chart.origin));
+        }
+        clicked.map(|point| point.row)
     }
 
     fn request(
@@ -208,6 +305,37 @@ impl Plot {
     }
 }
 
+fn data_rect(area: Rect) -> Rect {
+    Rect::from_min_max(area.min + vec2(76.0, 0.0), area.max - vec2(4.0, 0.0))
+}
+
+fn paint_time_axis(
+    painter: &Painter,
+    rect: Rect,
+    span: &activity::Domain,
+    origin: i128,
+    colors: WorkbenchColors,
+) {
+    let divisions: i128 = if rect.width() >= 460.0 { 4 } else { 1 };
+    let width = span.end.saturating_sub(1) - span.start;
+    for tick in 0..=divisions {
+        let time = span.start + width * tick / divisions;
+        let x = rect.left() + rect.width() * tick as f32 / divisions as f32;
+        let align = match tick {
+            0 => Align2::LEFT_TOP,
+            tick if tick == divisions => Align2::RIGHT_TOP,
+            _ => Align2::CENTER_TOP,
+        };
+        painter.text(
+            pos2(x, rect.top()),
+            align,
+            activity::time_label(time - origin),
+            FontId::monospace(10.0),
+            colors.text_muted,
+        );
+    }
+}
+
 fn nearest_point(points: &[Point], time: i128) -> Option<Point> {
     let next = points.partition_point(|point| point.time_ns < time);
     let before = next.checked_sub(1).and_then(|index| points.get(index));
@@ -238,7 +366,6 @@ fn paint_series(
     span: &activity::Domain,
     series: &Series,
     unit: &str,
-    origin: i128,
     colors: WorkbenchColors,
 ) {
     let values = series
@@ -271,18 +398,6 @@ fn paint_series(
             pos2(rect.left() - 4.0, y),
             Align2::RIGHT_CENTER,
             database::physical(range.mul_add(tick, floor) * scale, unit),
-            font.clone(),
-            colors.text_muted,
-        );
-    }
-    for (time, x, align) in [
-        (span.start, rect.left(), Align2::LEFT_TOP),
-        (span.end.saturating_sub(1), rect.right(), Align2::RIGHT_TOP),
-    ] {
-        painter.text(
-            pos2(x, rect.bottom() + 2.0),
-            align,
-            activity::time_label(time - origin),
             font.clone(),
             colors.text_muted,
         );
@@ -334,30 +449,28 @@ fn paint_points(
 }
 
 fn series_actions(ui: &mut Ui, series: &Arc<Series>, unit: &str, copies: &mut Copies) {
-    ui.horizontal_wrapped(|ui| {
-        ui.weak(format!(
-            "{} decoded · {} frames scanned",
-            series.observations, series.frames_read
-        ));
-        if series.reduced {
-            ui.weak("Showing time-binned extrema · Zoom for individual values");
-        }
-        if series.truncated {
-            ui.weak("Scan limit reached · Zoom into a time range");
-        }
-        let exact = !series.truncated && !series.reduced && series.observations > 0;
-        if ui
-            .add_enabled(
-                exact && !copies.busy(),
-                egui::Button::new("Copy signal CSV"),
-            )
-            .clicked()
-        {
-            let series = series.clone();
-            let unit = unit.to_owned();
-            copies.start(ui.ctx(), move |_| copy_values(&series, &unit));
-        }
-    });
+    ui.weak(format!(
+        "{} decoded · {} frames scanned",
+        series.observations, series.frames_read
+    ));
+    if series.reduced {
+        ui.weak("Showing time-binned extrema · Zoom for individual values");
+    }
+    if series.truncated {
+        ui.weak("Scan limit reached · Zoom into a time range");
+    }
+    let exact = !series.truncated && !series.reduced && series.observations > 0;
+    if ui
+        .add_enabled(
+            exact && !copies.busy(),
+            egui::Button::new("Copy signal CSV").small(),
+        )
+        .clicked()
+    {
+        let series = series.clone();
+        let unit = unit.to_owned();
+        copies.start(ui.ctx(), move |_| copy_values(&series, &unit));
+    }
 }
 
 fn copy_values(series: &Series, unit: &str) -> Result<String, String> {

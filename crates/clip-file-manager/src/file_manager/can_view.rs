@@ -116,7 +116,7 @@ impl Viewer {
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette, copies: &mut Copies) {
         self.poll();
-        self.database.poll();
+        self.database.poll(ui.ctx(), &self.capture);
         let colors = WorkbenchColors::from_palette(palette);
         let mut shell = crate::shell::StudioShell::new(
             "CAN capture",
@@ -141,7 +141,11 @@ impl Viewer {
                     .inspect(ui, frame, origin, ui.available_height(), colors, false);
             }
         } else {
-            self.frame_workspace(ui, colors, copies);
+            ui.scope(|ui| {
+                ui.spacing_mut().interact_size.y = 24.0;
+                ui.spacing_mut().button_padding.y = 2.0;
+                self.frame_workspace(ui, colors, copies);
+            });
         }
         self.request_index(ui.ctx());
         if self.index_job.is_some()
@@ -312,7 +316,8 @@ impl Viewer {
                     };
                     ui.weak(label);
                 }
-                self.database.toolbar(ui);
+                ui.separator();
+                self.database.toolbar(ui, &self.capture);
                 (submitted || top.is_some() || clicked, clear)
             })
             .inner;
@@ -330,7 +335,7 @@ impl Viewer {
         let full = activity::domain(self.summary());
         let mut visible = self.viewport.clone().unwrap_or_else(|| full.clone());
         let height = if self.database.plot_open() {
-            42.0
+            34.0
         } else {
             92.0
         };
