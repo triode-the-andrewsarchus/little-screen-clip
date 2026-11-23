@@ -57,10 +57,23 @@ pub fn spectrum_with_window(
     sample_rate_hz: f64,
     window: SpectrumWindow,
 ) -> Option<Spectrum> {
+    spectrum_with_fft_size(
+        samples,
+        sample_rate_hz,
+        window,
+        samples.len().next_power_of_two(),
+    )
+}
+
+pub(super) fn spectrum_with_fft_size(
+    samples: &[f32],
+    sample_rate_hz: f64,
+    window: SpectrumWindow,
+    size: usize,
+) -> Option<Spectrum> {
     if !valid_input(samples, sample_rate_hz, 2) {
         return None;
     }
-    let size = samples.len().next_power_of_two();
     let bin_hz = sample_rate_hz / size as f64;
     let scale = max_absolute(samples).max(f64::from(f32::MIN_POSITIVE));
     let mut plan = RealFftPlanner::<f32>::new();

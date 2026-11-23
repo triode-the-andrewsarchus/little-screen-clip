@@ -1,5 +1,6 @@
 mod compute;
 mod decoders;
+mod frequency;
 
 use super::{inputs::Input, take_query_result, timeline};
 use crate::file_manager::{logic_view, preview_job::Task, scope_view::plot};
@@ -15,6 +16,7 @@ use std::{ops::Range, sync::Arc, time::Duration};
 pub(super) struct Derived {
     editor: bool,
     decoders: decoders::Decoders,
+    frequency: frequency::Frequency,
     draft: String,
     draft_error: Option<String>,
     rate: Option<f64>,
@@ -150,6 +152,7 @@ impl Derived {
         self.pending = None;
         self.request_after = 0.0;
         self.decoders = decoders::Decoders::default();
+        self.frequency = frequency::Frequency::default();
     }
 
     pub(super) fn update(&mut self, ctx: &Context, inputs: &[Input], span: &Range<f64>) {
@@ -236,13 +239,35 @@ impl Derived {
             return None;
         }
         let frame = match result {
-            Ok(frame) => frame,
+            Ok(frame) => frame.clone(),
             Err(error) => {
                 ui.colored_label(ui.visuals().error_fg_color, error);
                 return None;
             }
         };
-        self.decoders.controls(ui, frame, span);
+        self.frequency.controls(ui, &frame);
+        let pointed = if self.frequency.only() {
+            None
+        } else {
+            self.decoders.controls(ui, &frame, span);
+            self.time_plot(ui, &frame, span, domain, probe, reference)
+        };
+        if let Some(interval) = self.frequency.content(ui, &frame) {
+            *span = timeline::fit(domain, interval, frame.step);
+            ui.ctx().request_repaint();
+        }
+        pointed
+    }
+
+    fn time_plot(
+        &mut self,
+        ui: &mut Ui,
+        frame: &Frame,
+        span: &mut Range<f64>,
+        domain: &Range<f64>,
+        probe: Option<f64>,
+        reference: Option<f64>,
+    ) -> Option<f64> {
         let annotations = if self.decoders.active() { 24.0 } else { 3.0 };
         let height = (frame.lanes.len() as f32 * 48.0).max(100.0) + annotations;
         let (area, response) = ui.allocate_exact_size(
@@ -349,18 +374,18 @@ impl Lane {
         match self {
             Self::Analog {
                 channel,
-                values,
+                raw,
                 envelope,
                 bounds,
             } => {
-                if values.len() <= 4096 {
+                if raw.samples.len() <= 4096 {
                     plot::draw_raw(
                         painter,
                         row,
                         visible,
                         channel.start_seconds,
                         channel.interval_seconds,
-                        values,
+                        &raw.samples,
                         *bounds,
                         color,
                     );
@@ -382,17 +407,9 @@ impl Lane {
 
     fn value(&self, time: f64) -> Option<String> {
         match self {
-            Self::Analog {
-                channel, values, ..
-            } => {
-                let index = ((time - channel.start_seconds) / channel.interval_seconds).round();
-                if index < 0.0 {
-                    return None;
-                }
-                values
-                    .get(index as usize)
-                    .map(|&value| display_value(f64::from(value), &channel.unit))
-            }
+            Self::Analog { channel, raw, .. } => raw
+                .value_at(time)
+                .map(|value| display_value(f64::from(value), &channel.unit)),
             Self::Digital {
                 trace, envelope, ..
             } => {

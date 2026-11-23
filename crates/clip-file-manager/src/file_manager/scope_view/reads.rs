@@ -12,7 +12,7 @@ pub(super) const DETAIL_SAMPLES: u64 = 4096;
 const ANALYSIS_SAMPLES: u64 = 65_536;
 const MATH_SAMPLES: u64 = 262_144;
 
-pub(super) struct RawChannel {
+pub(in crate::file_manager) struct RawChannel {
     pub first: u64,
     pub start: f64,
     pub step: f64,

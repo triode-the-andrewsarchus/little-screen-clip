@@ -1,5 +1,6 @@
 //! Offline logic timing and transition inspection.
 
+mod frequency;
 pub(super) mod plot;
 pub(super) mod protocols;
 pub(super) mod strip;
@@ -51,6 +52,7 @@ pub(super) struct Viewer {
     request_after: f64,
     show_transitions: bool,
     protocols: protocols::Panel,
+    frequency: frequency::Frequency,
     error: Option<String>,
 }
 
@@ -95,6 +97,7 @@ impl Viewer {
             request_after: 0.0,
             show_transitions: false,
             protocols,
+            frequency: frequency::Frequency::default(),
             error: None,
         })
     }
@@ -151,6 +154,11 @@ impl Viewer {
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
             ui.weak(message);
         }
+        if self.frequency.visible {
+            self.protocols.close();
+            self.frequency(ui, link);
+            return None;
+        }
         if self.show_transitions {
             self.protocols.controls(ui, &self.overview.lanes);
         }
@@ -183,7 +191,7 @@ impl Viewer {
                 self.overview.span.end - self.overview.span.start,
                 "s",
             ));
-            if !self.show_transitions || self.protocols.edges() {
+            if self.frequency.visible || !self.show_transitions || self.protocols.edges() {
                 egui::ComboBox::from_id_salt("logic_active_lane")
                     .selected_text(&self.overview.lanes[self.active].name)
                     .show_ui(ui, |ui| {
@@ -195,6 +203,7 @@ impl Viewer {
             if ui.button("Fit").clicked() {
                 self.span = self.overview.span.clone();
             }
+            ui.toggle_value(&mut self.frequency.visible, "Spectrum");
             ui.toggle_value(&mut self.show_transitions, "Transitions");
             if self.protocols.add_menu(ui, &self.overview.lanes) {
                 self.show_transitions = true;

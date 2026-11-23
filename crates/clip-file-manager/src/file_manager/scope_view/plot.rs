@@ -47,7 +47,7 @@ pub(in crate::file_manager) fn axes(
     labelled_x_axis(painter, rect, span, "s", foreground);
 }
 
-pub(super) fn labelled_x_axis(
+pub(in crate::file_manager) fn labelled_x_axis(
     painter: &Painter,
     rect: Rect,
     span: &Range<f64>,
@@ -181,7 +181,7 @@ pub(in crate::file_manager) fn draw_raw(
     }
 }
 
-pub(super) fn y_at(rect: Rect, bounds: Peak, value: f32) -> f32 {
+pub(in crate::file_manager) fn y_at(rect: Rect, bounds: Peak, value: f32) -> f32 {
     let scale = (bounds.max - bounds.min).max(f32::MIN_POSITIVE);
     if bounds.min == bounds.max {
         rect.center().y

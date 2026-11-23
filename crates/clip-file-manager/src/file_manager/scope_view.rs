@@ -7,11 +7,11 @@ mod hover;
 mod logic_export;
 mod math;
 pub(super) mod plot;
-mod reads;
+pub(super) mod reads;
 mod snap;
-mod spectrum_input;
 pub(super) mod strip;
 
+use super::signal_view::spectra as spectrum_input;
 use super::{
     preview_copy::Copies,
     preview_job::Task,

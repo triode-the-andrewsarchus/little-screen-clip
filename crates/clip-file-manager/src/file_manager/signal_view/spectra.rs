@@ -1,19 +1,23 @@
-use super::{JOBS, Task, reads::RawChannel};
-use crate::file_manager::signal_view::take_query_result;
+use super::{inputs::Samples, take_query_result};
+use crate::file_manager::{preview_job::Task, scope_view::reads::RawChannel};
 use egui::Context;
+use little_clip_core::BackgroundJobs;
 use little_clip_core::engineering::{
     analysis::{SpectralSurvey, SpectrumWindow, spectral_survey},
+    logic_preview,
     scope::Channel,
     waveforms::{Recording, sample_span},
 };
 use std::{
     ops::Range,
-    sync::{Arc, atomic::AtomicBool},
+    sync::{Arc, LazyLock, atomic::AtomicBool},
     time::Duration,
 };
 
+static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(2, 4));
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) enum Region {
+pub(in crate::file_manager) enum Region {
     #[default]
     Current,
     Visible,
@@ -21,7 +25,7 @@ pub(super) enum Region {
 }
 
 impl Region {
-    pub(super) fn label(self) -> &'static str {
+    pub(in crate::file_manager) fn label(self) -> &'static str {
         match self {
             Self::Current => "Selection or visible",
             Self::Visible => "Visible interval",
@@ -31,7 +35,7 @@ impl Region {
 }
 
 #[derive(Clone, Copy, Default, PartialEq)]
-pub(super) enum LaneKind {
+pub(in crate::file_manager) enum LaneKind {
     #[default]
     Recorded,
     Calculated,
@@ -39,7 +43,7 @@ pub(super) enum LaneKind {
 }
 
 impl LaneKind {
-    pub(super) fn label(self) -> &'static str {
+    pub(in crate::file_manager) fn label(self) -> &'static str {
         match self {
             Self::Recorded => "Recorded",
             Self::Calculated => "Math",
@@ -50,8 +54,15 @@ impl LaneKind {
 
 #[derive(Clone)]
 enum Source {
-    Recording { file: Arc<Recording>, index: usize },
+    Recording {
+        file: Arc<Recording>,
+        index: usize,
+    },
     Derived(Arc<RawChannel>),
+    Logic {
+        file: Arc<logic_preview::Recording>,
+        index: usize,
+    },
 }
 
 impl PartialEq for Source {
@@ -61,19 +72,22 @@ impl PartialEq for Source {
                 Arc::ptr_eq(a, b) && x == y
             }
             (Self::Derived(a), Self::Derived(b)) => Arc::ptr_eq(a, b),
+            (Self::Logic { file: a, index: x }, Self::Logic { file: b, index: y }) => {
+                Arc::ptr_eq(a, b) && x == y
+            }
             _ => false,
         }
     }
 }
 
 #[derive(Clone, PartialEq)]
-pub(super) struct Input {
+pub(in crate::file_manager) struct Input {
     source: Source,
     channel: Channel,
 }
 
 impl Input {
-    pub(super) fn recorded(file: Arc<Recording>, index: usize) -> Self {
+    pub(in crate::file_manager) fn recorded(file: Arc<Recording>, index: usize) -> Self {
         let channel = file.channels()[index].clone();
         Self {
             source: Source::Recording { file, index },
@@ -81,7 +95,11 @@ impl Input {
         }
     }
 
-    pub(super) fn derived(name: String, unit: String, raw: Arc<RawChannel>) -> Self {
+    pub(in crate::file_manager) fn derived(
+        name: String,
+        unit: String,
+        raw: Arc<RawChannel>,
+    ) -> Self {
         let channel = Channel {
             name,
             unit,
@@ -95,7 +113,27 @@ impl Input {
         }
     }
 
-    pub(super) fn channel(&self) -> &Channel {
+    pub(in crate::file_manager) fn logic(
+        file: Arc<logic_preview::Recording>,
+        index: usize,
+        name: &str,
+        time: Range<f64>,
+        rate: f64,
+    ) -> Self {
+        let sample_count = ((time.end - time.start) * rate).ceil() as u64;
+        Self {
+            source: Source::Logic { file, index },
+            channel: Channel {
+                name: name.to_owned(),
+                unit: String::new(),
+                sample_count,
+                start_seconds: time.start,
+                interval_seconds: rate.recip(),
+            },
+        }
+    }
+
+    pub(in crate::file_manager) fn channel(&self) -> &Channel {
         &self.channel
     }
 
@@ -118,6 +156,27 @@ impl Input {
                     capture.read_samples(*index, rows, cancel)
                 })
             }),
+            Source::Logic { file, index } => file.checked(cancel, |capture| {
+                spectral_survey(rows, rate, window, |rows| {
+                    let start = self.channel.time_at(rows.start);
+                    let end = self.channel.time_at(rows.end);
+                    let native = start..end;
+                    let trace = capture.read_edges(*index, native.clone(), 1 << 18, cancel)?;
+                    let samples = Samples::Digital {
+                        trace,
+                        native,
+                        offset: 0.0,
+                    };
+                    Ok(rows
+                        .map(|row| match samples.at(self.channel.time_at(row)) {
+                            Some(little_clip_core::engineering::analysis::Value::Predicate(
+                                level,
+                            )) => f32::from(u8::from(level)),
+                            _ => f32::NAN,
+                        })
+                        .collect())
+                })
+            }),
             Source::Derived(raw) => spectral_survey(rows, rate, window, |rows| {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err("Spectrum was cancelled".into());
@@ -136,7 +195,7 @@ struct Query {
 }
 
 #[derive(Default)]
-pub(super) struct Spectra {
+pub(in crate::file_manager) struct Spectra {
     pub kind: LaneKind,
     pub region: Region,
     pub only: bool,
@@ -147,7 +206,7 @@ pub(super) struct Spectra {
 }
 
 impl Spectra {
-    pub(super) fn update(
+    pub(in crate::file_manager) fn update(
         &mut self,
         ctx: &Context,
         input: Option<Input>,
@@ -196,12 +255,14 @@ impl Spectra {
         }
     }
 
-    pub(super) fn suspend(&mut self) {
+    pub(in crate::file_manager) fn suspend(&mut self) {
         self.task = None;
         self.requested = None;
     }
 
-    pub(super) fn ready(&self) -> Option<(&Input, Result<Option<&SpectralSurvey>, &str>)> {
+    pub(in crate::file_manager) fn ready(
+        &self,
+    ) -> Option<(&Input, Result<Option<&SpectralSurvey>, &str>)> {
         let (query, result) = self.result.as_ref()?;
         if self.requested.as_ref() != Some(query) {
             return None;
@@ -212,7 +273,7 @@ impl Spectra {
         ))
     }
 
-    pub(super) fn busy(&self) -> bool {
+    pub(in crate::file_manager) fn busy(&self) -> bool {
         self.task.is_some()
     }
 }

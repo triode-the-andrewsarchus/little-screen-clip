@@ -1,6 +1,6 @@
 //! Bounded peak spectra with a time-domain origin for every displayed bin.
 
-use super::{MAX_ANALYSIS_SAMPLES, Spectrum, SpectrumWindow, spectrum_with_window};
+use super::{MAX_ANALYSIS_SAMPLES, Spectrum, SpectrumWindow, spectrum::spectrum_with_fft_size};
 use std::ops::Range;
 
 const MAX_WINDOWS: u64 = 12;
@@ -9,10 +9,7 @@ const MAX_WINDOWS: u64 = 12;
 pub struct SpectralSurvey {
     /// Largest observed amplitude in each bin, in the input's unit.
     pub spectrum: Spectrum,
-    /// First sample of the window supplying each displayed amplitude.
-    pub peak_starts: Vec<u64>,
-    /// Number of consecutive samples in each FFT.
-    pub window_samples: u64,
+    peak_intervals: Vec<Range<u64>>,
     /// Number of usable FFT windows.
     pub windows: u64,
     /// Number of distinct samples covered by usable windows.
@@ -24,8 +21,7 @@ pub struct SpectralSurvey {
 impl SpectralSurvey {
     /// Returns the half-open sample range supplying one frequency bin's peak.
     pub fn peak_interval(&self, bin: usize) -> Option<Range<u64>> {
-        let start = *self.peak_starts.get(bin)?;
-        Some(start..start + self.window_samples)
+        self.peak_intervals.get(bin).cloned()
     }
 }
 
@@ -33,8 +29,9 @@ impl SpectralSurvey {
 ///
 /// A short interval uses a single transform. Long intervals use a peak
 /// amplitude survey over equally distributed contiguous windows. Each bin
-/// remembers where its peak was found. Windows with gaps are skipped, and
-/// coverage counts only distinct samples from valid windows.
+/// remembers where its peak was found. For an interval with gaps, the longest
+/// contiguous finite segment is transformed on the same frequency grid.
+/// Coverage counts only distinct samples used by those transforms.
 ///
 /// # Errors
 /// Propagates errors from the supplied sample reader.
@@ -65,18 +62,26 @@ pub fn spectral_survey<E>(
         if samples.len() as u64 != width {
             continue;
         }
-        let Some(next) = spectrum_with_window(&samples, sample_rate, window) else {
+        let finite = longest_run(&samples);
+        let Some(next) = spectrum_with_fft_size(
+            &samples[finite.clone()],
+            sample_rate,
+            window,
+            (width as usize).next_power_of_two(),
+        ) else {
             continue;
         };
-        let covered = end - previous_end.max(start);
-        previous_end = end;
+        let observed = start + finite.start as u64..start + finite.end as u64;
+        let covered = observed
+            .end
+            .saturating_sub(previous_end.max(observed.start));
+        previous_end = previous_end.max(observed.end);
         match &mut survey {
-            Some(survey) => survey.merge(start, covered, next),
+            Some(survey) => survey.merge(observed, covered, next),
             None => {
                 survey = Some(SpectralSurvey {
-                    peak_starts: vec![start; next.peak_amplitude.len()],
+                    peak_intervals: vec![observed; next.peak_amplitude.len()],
                     spectrum: next,
-                    window_samples: width,
                     windows: 1,
                     covered_samples: covered,
                     requested_samples: requested,
@@ -88,22 +93,39 @@ pub fn spectral_survey<E>(
 }
 
 impl SpectralSurvey {
-    fn merge(&mut self, start: u64, covered: u64, next: Spectrum) {
+    fn merge(&mut self, observed: Range<u64>, covered: u64, next: Spectrum) {
         for ((peak, origin), candidate) in self
             .spectrum
             .peak_amplitude
             .iter_mut()
-            .zip(&mut self.peak_starts)
+            .zip(&mut self.peak_intervals)
             .zip(next.peak_amplitude)
         {
             if candidate > *peak {
                 *peak = candidate;
-                *origin = start;
+                *origin = observed.clone();
             }
         }
         self.windows += 1;
         self.covered_samples += covered;
     }
+}
+
+fn longest_run(samples: &[f32]) -> Range<usize> {
+    let mut best = 0..0;
+    let mut start = 0;
+    for end in samples
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| (!value.is_finite()).then_some(index))
+        .chain(std::iter::once(samples.len()))
+    {
+        if end - start > best.len() {
+            best = start..end;
+        }
+        start = end + 1;
+    }
+    best
 }
 
 #[cfg(test)]
@@ -135,6 +157,27 @@ mod tests {
         assert_eq!(survey.peak_interval(70), Some(block * 2..block * 3));
         assert!((survey.spectrum.peak_amplitude[70] - 2.0).abs() < 1e-6);
         assert_eq!(survey.covered_samples, block * 3);
+    }
+
+    #[test]
+    fn gaps_do_not_erase_an_observed_tone_or_extend_its_time_range() {
+        let survey = spectral_survey(0..128, 64.0, SpectrumWindow::Rectangular, |rows| {
+            Ok::<_, Infallible>(
+                rows.map(|row| {
+                    if (32..96).contains(&row) {
+                        (TAU * row as f64 * 6.0 / 64.0).sin() as f32
+                    } else {
+                        f32::NAN
+                    }
+                })
+                .collect(),
+            )
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(survey.peak_interval(12), Some(32..96));
+        assert_eq!(survey.covered_samples, 64);
+        assert!((survey.spectrum.peak_amplitude[12] - 1.0).abs() < 1e-6);
     }
 
     #[test]

@@ -1,7 +1,9 @@
 //! Mixed-signal analysis on a shared timeline with native source clocks.
 
 mod derived;
+pub(super) mod frequency_plot;
 mod inputs;
+pub(super) mod spectra;
 pub(super) mod timeline;
 
 use super::{

@@ -1,4 +1,8 @@
-use super::super::inputs::{Input, Samples};
+use super::super::{
+    inputs::{Input, Samples},
+    spectra,
+};
+use crate::file_manager::scope_view::reads::RawChannel;
 use little_clip_core::engineering::{
     analysis::{SignalGraph, SignalType, Value},
     logic::{self, Bin, Edge, Level, Trace},
@@ -7,7 +11,10 @@ use little_clip_core::engineering::{
 };
 use std::{
     ops::Range,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 const MAX_ROWS: f64 = 131_072.0;
@@ -23,12 +30,13 @@ pub(super) struct Frame {
 pub(super) enum Lane {
     Analog {
         channel: Channel,
-        values: Vec<f32>,
+        raw: Arc<RawChannel>,
         envelope: waveforms::Envelope,
         bounds: Peak,
     },
     Digital {
         name: String,
+        raw: Arc<RawChannel>,
         trace: Trace,
         envelope: logic::Envelope,
     },
@@ -39,6 +47,17 @@ impl Lane {
         match self {
             Self::Analog { channel, .. } => &channel.name,
             Self::Digital { name, .. } => name,
+        }
+    }
+
+    pub(super) fn spectrum_input(&self) -> spectra::Input {
+        match self {
+            Self::Analog { channel, raw, .. } => {
+                spectra::Input::derived(channel.name.clone(), channel.unit.clone(), raw.clone())
+            }
+            Self::Digital { name, raw, .. } => {
+                spectra::Input::derived(name.clone(), String::new(), raw.clone())
+            }
         }
     }
 }
@@ -81,7 +100,7 @@ pub(super) fn calculate(
                 step,
                 values,
             ),
-            SignalType::Digital => digital(lane.name.clone(), &range, step, &values),
+            SignalType::Digital => digital(lane.name.clone(), &range, step, values),
         })
         .collect();
     let digital = graph
@@ -174,14 +193,19 @@ fn analog(name: String, unit: String, span: &Range<f64>, step: f64, values: Vec<
     };
     let bounds = envelope.extrema();
     Lane::Analog {
+        raw: Arc::new(RawChannel {
+            first: 0,
+            start: span.start,
+            step: channel.interval_seconds,
+            samples: values,
+        }),
         channel,
-        values,
         envelope,
         bounds,
     }
 }
 
-fn digital(name: String, span: &Range<f64>, step: f64, values: &[f32]) -> Lane {
+fn digital(name: String, span: &Range<f64>, step: f64, values: Vec<f32>) -> Lane {
     let value = |index| level(values[index]);
     let mut edges = Vec::new();
     let mut previous = value(0);
@@ -227,6 +251,12 @@ fn digital(name: String, span: &Range<f64>, step: f64, values: &[f32]) -> Lane {
     };
     Lane::Digital {
         name,
+        raw: Arc::new(RawChannel {
+            first: 0,
+            start: span.start,
+            step,
+            samples: values,
+        }),
         trace,
         envelope,
     }
@@ -254,9 +284,12 @@ mod tests {
 
     #[test]
     fn derived_digital_gaps_keep_their_exact_transition_times() {
-        let Lane::Digital { trace, .. } =
-            digital("gate".into(), &(0.0..1.0), 0.25, &[0.0, 1.0, f32::NAN, 1.0])
-        else {
+        let Lane::Digital { trace, .. } = digital(
+            "gate".into(),
+            &(0.0..1.0),
+            0.25,
+            vec![0.0, 1.0, f32::NAN, 1.0],
+        ) else {
             unreachable!()
         };
         assert_eq!(trace.initial, Some(Level::Low));
