@@ -114,9 +114,9 @@ In the two-transfer fixture, assigning SDA to the clock triggered the duplicate-
 
 ## 12. Make packet filters visible in the capture
 
-- [ ] Surface protocol choices and the criteria currently applied to the packet table. Preserve editing of the Wireshark-style filter expression and report whether an edit has been applied.
-- [ ] Let a result reveal its source packet and related conversation while retaining the current query and selected time range.
-- [ ] Verify adding a criterion from the packet inspector, tightening it from the overview, and recovering the prior set and selection. Check narrow windows and a bounded scan.
+- [x] Surface protocol choices and the criteria currently applied to the packet table. Preserve editing of the Wireshark-style filter expression and report whether an edit has been applied.
+- [x] Let a result reveal its source packet and related conversation while retaining the current query and selected time range.
+- [x] Verify adding a criterion from the packet inspector, tightening it from the overview, and recovering the prior set and selection. Check narrow windows and a bounded scan.
 
 The packet viewer already links its diagram, field tree, and bytes. Use those links as entry points to the query, and put the applied protocol and time restrictions next to the count they affect.
 
@@ -124,13 +124,30 @@ Start with a capture that contains DNS and several TCP conversations. Choose a p
 
 The match set owns the exact query that produced it. A pending or failed query leaves the previous match set and its labels intact. A protocol click uses the currently requested or applied expression and endpoint, leaving unsubmitted text in the editor. The first acceptance pass should cover a draft that differs from the visible table, a successful protocol update, and recovery from a failed expression. Follow with the field and time round trips, including a source packet outside the match set and a capture large enough to hit the bounded scan.
 
+The fixture had three TCP and nine DNS packets. Choosing DNS while an expression was in draft kept all nine DNS matches until Apply. A failed expression retained the previous three matches and Packet 2. A time brush narrowed those three to one, and removing the time filter restored all three. Clicking a captured IPv4 byte exposed its Source field. Using that field in the filter narrowed the same expression to two matches, with Packet 2 still selected when opening its conversation. At 800 × 620 the protocol controls fit on one line above the diagram and list. A one-million-packet check stopped at 64,000 matches and reported 255,998 source packets searched.
+
 ## 13. Keep visibility and decoder setup beside their traces
 
 Astra reviewed the paired Rigol comparison and a thresholded I²C scope capture on commit `577a037c`. The comparison exposes reordering and domain changes on each trace, but finding the same channel again in the Traces menu is required for visibility. Hiding the active trace also leaves the shared inspection tools pointing at it. The scope's threshold popup covers the two digitized lanes and part of the decoded acknowledgement.
 
-- [ ] Give every comparison trace a Show or Hide button in its own header. A hidden plot leaves its source, channel and position visible. Reordering and domain changes use distinct controls. The active inspection target moves to the next visible trace when hidden, and the shared tools are unavailable when all traces are hidden.
-- [ ] Use the shared inline protocol buttons on the scope. Place threshold editing by the corresponding digital lane. Show the fixed or adaptive cutoffs, middle-band interpretation and inversion while the user can see the decoded results. Retain the applied rule when a draft has crossed cutoffs and explain the error next to the fields.
-- [ ] Walk a two-recording comparison from drag and FFT through Hide, Show, save and reopen. Test hiding and restoring the whole stack. In a scope capture, add I²C, adjust and repair a threshold while watching the annotations, and follow a decoded event back to the analog data. Check both workflows at standard and narrow widths.
+- [x] Give every comparison trace a Show or Hide button in its own header. A hidden plot leaves its source, channel and position visible. Reordering and domain changes use distinct controls. The active inspection target moves to the next visible trace when hidden, and the shared tools are unavailable when all traces are hidden.
+- [x] Use the shared inline protocol buttons on the scope. Place threshold editing by the corresponding digital lane. Show the fixed or adaptive cutoffs, middle-band interpretation and inversion while the user can see the decoded results. Retain the applied rule when a draft has crossed cutoffs and explain the error next to the fields.
+- [x] Walk a two-recording comparison from drag and FFT through Hide, Show, save and reopen. Test hiding and restoring the whole stack. In a scope capture, add I²C, adjust and repair a threshold while watching the annotations, and follow a decoded event back to the analog data.
+- [x] Check comparison visibility, decoder placement and the inline threshold editor at 800 × 620.
+
+The paired Rigol test hid the entire stack, restored one CH1 plot, switched it to FFT, moved it, saved the analysis and reopened it. The recipe retained the order, the one visible channel and its domain. In the I²C check the scale changed to fixed cutoffs, then low was set to 3.00 V with high still at 2.00 V. The editor reported the problem while the two decoded acknowledgements stayed visible. Raising high to 3.10 V recovered the rule. Double-clicking the address opened its pulses, and Back to decoded window restored the full transfer. At 800 × 620, Hide moved the active trace to the next visible recording, Show restored the original plot, and all five decoder actions fit on one line above the working threshold editor.
+
+## 14. Connect decoded events to the recorded voltages
+
+- [x] Selecting a decoder annotation marks the event's interval on the digital lanes assigned to that decoder and on their originating voltage traces. The event's name and duration sit beside the decoder controls. Double-clicking an annotation zooms to its pulses and offers a return to the previous time range.
+- [x] Use a two-signal I²C capture plus an unrelated analog channel. Confirm that the address highlights clock and data, stays out of FFT lanes, and clears when switching to Edges.
+- [ ] Review the standalone logic and scope workflows after this change. Use the same timing and decode controls when possible, then migrate the scope's legacy math-to-logic popup to the inline equation and decoder workflow. Keep the range-to-VCD action alongside the available predicate.
+
+The decoder already retains its original result window while following a pulse. Use its event extent and wiring to paint the source interval. This allows a user to distinguish a decoded address from the following acknowledgement, inspect the matching edge positions, and get back to the transfer overview. The analog A/B selection still measures its own interval, and switching a trace to FFT keeps its frequency coordinates.
+
+In the three-channel capture, the address 0x42 ran from 33 to 113 µs and shaded that 80 µs interval on both digital lanes and both originating voltage traces. The unrelated 1.65 V channel kept its own raw probe readout without shading. Switching the clock voltage to FFT kept its spectrum clear while the data waveform still marked the address. Double-clicking the address zoomed to its edges, and Back restored the 238 µs view with the address still highlighted and the controls in place. Switching to Edges cleared the highlight. The decoder selection test also covers two events with coincident timestamps.
+
+For the quick scope predicate, put the action that adds a digital equation beside the predicate itself. Give the equation the currently selected channel's stable binding when the user writes a comparison such as `> 1V` or references `x`. Keep the waveform and predicate visible while the derived lane appears. The existing decoder picker should accept the new lane alongside thresholded inputs and other digital equations. Check mixed bitwise expressions, reopening the saved analysis and exporting the predicate's original range as VCD.
 
 ## Review after each addition
 
