@@ -122,6 +122,10 @@ impl Viewer {
         &mut self.span
     }
 
+    pub(super) fn cursor(&self) -> Option<f64> {
+        self.cursor
+    }
+
     pub(super) fn min_height(&self) -> f32 {
         if self.show_transitions { 380.0 } else { 205.0 }
     }
@@ -270,6 +274,9 @@ impl Viewer {
         timing::axes(&painter, rect, &axis, ink);
         let clipped = painter.with_clip_rect(rect);
         self.draw_channels(&painter, &clipped, rect, ink);
+        if let Some(link) = link {
+            link.paint_reference(&clipped, rect, &self.span);
+        }
         if let Some(selected) = &self.selected {
             timing::highlight(
                 &clipped,

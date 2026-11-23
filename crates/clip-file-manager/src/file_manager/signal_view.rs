@@ -26,6 +26,7 @@ pub(super) struct Viewer {
     domain: Range<f64>,
     span: Range<f64>,
     probe: Option<f64>,
+    reference: Option<Reference>,
     add_path: String,
     add_open: bool,
     add_focus: bool,
@@ -37,6 +38,18 @@ struct Source {
     path: PathBuf,
     offset: f64,
     capture: Capture,
+}
+
+struct Reference {
+    path: PathBuf,
+    native_time: f64,
+}
+
+enum SourceAction {
+    Pin(f64),
+    Align(f64),
+    ClearReference,
+    Remove,
 }
 
 enum Capture {
@@ -79,6 +92,7 @@ impl Viewer {
             span: domain.clone(),
             domain,
             probe: None,
+            reference: None,
             add_path: String::new(),
             add_open: false,
             add_focus: false,
@@ -264,7 +278,8 @@ impl Viewer {
         }
         self.domain = domain;
         let mut next_probe = None;
-        let mut remove = None;
+        let mut action = None;
+        let reference_time = self.reference_time();
         let may_remove = self.sources.len() > 1;
         let height = (ui.available_height() / self.sources.len() as f32 - 50.0).max(205.0);
         egui::ScrollArea::vertical()
@@ -273,8 +288,14 @@ impl Viewer {
                 for (index, source) in self.sources.iter_mut().enumerate() {
                     let id = ui.make_persistent_id(&source.path);
                     ui.push_id(id, |ui| {
-                        if source.controls(ui, may_remove) {
-                            remove = Some(index);
+                        let is_reference = self
+                            .reference
+                            .as_ref()
+                            .is_some_and(|pin| pin.path == source.path);
+                        if let Some(request) =
+                            source.controls(ui, may_remove, reference_time, is_reference)
+                        {
+                            action = Some((index, request));
                         }
                         let previous = translate(&self.span, -source.offset);
                         *source.capture.span() = previous.clone();
@@ -282,6 +303,7 @@ impl Viewer {
                             domain: translate(&self.domain, -source.offset),
                             offset: source.offset,
                             probe: self.probe.map(|probe| probe - source.offset),
+                            reference: reference_time.map(|time| time - source.offset),
                         };
                         let height = height.max(source.capture.min_height());
                         ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
@@ -304,11 +326,47 @@ impl Viewer {
             self.probe = next_probe;
             ui.ctx().request_repaint();
         }
-        if let Some(index) = remove {
-            self.sources.remove(index);
-            if let [source] = &mut self.sources[..] {
-                let previous = translate(&self.span, -source.offset);
-                *source.capture.span() = timeline::fit(&source.capture.domain(), previous, 0.0);
+        if let Some((index, request)) = action {
+            self.apply_source_action(index, request);
+            ui.ctx().request_repaint();
+        }
+    }
+
+    fn reference_time(&self) -> Option<f64> {
+        let pin = self.reference.as_ref()?;
+        let source = self.sources.iter().find(|source| source.path == pin.path)?;
+        Some(pin.native_time + source.offset)
+    }
+
+    fn apply_source_action(&mut self, index: usize, action: SourceAction) {
+        match action {
+            SourceAction::Pin(native_time) => {
+                self.reference = Some(Reference {
+                    path: self.sources[index].path.clone(),
+                    native_time,
+                });
+            }
+            SourceAction::Align(offset) => {
+                if !self.sources[index].set_offset(offset) {
+                    self.error =
+                        Some("The reference is outside this source's time precision.".into());
+                }
+            }
+            SourceAction::ClearReference => self.reference = None,
+            SourceAction::Remove => {
+                let removed = self.sources.remove(index);
+                if self
+                    .reference
+                    .as_ref()
+                    .is_some_and(|pin| pin.path == removed.path)
+                {
+                    self.reference = None;
+                }
+                if let [source] = &mut self.sources[..] {
+                    let previous = translate(&self.span, -source.offset);
+                    *source.capture.span() = timeline::fit(&source.capture.domain(), previous, 0.0);
+                    self.probe = None;
+                }
             }
         }
     }
@@ -346,7 +404,13 @@ impl Source {
         })
     }
 
-    fn controls(&mut self, ui: &mut Ui, may_remove: bool) -> bool {
+    fn controls(
+        &mut self,
+        ui: &mut Ui,
+        may_remove: bool,
+        reference: Option<f64>,
+        is_reference: bool,
+    ) -> Option<SourceAction> {
         ui.horizontal(|ui| {
             let name = self
                 .path
@@ -355,28 +419,75 @@ impl Source {
                 .to_string_lossy();
             ui.strong(name.as_ref())
                 .on_hover_text(self.path.to_string_lossy());
-            let previous = self.offset;
+            let mut proposed = self.offset;
             let domain = self.capture.domain();
             let interval = ((domain.end - domain.start) * 0.001).clamp(1e-12, 0.1);
             ui.label("Offset");
-            ui.add(
-                egui::DragValue::new(&mut self.offset)
-                    .speed(interval)
-                    .range(-86_400.0..=86_400.0)
-                    .max_decimals(12)
-                    .suffix(" s"),
-            )
-            .on_hover_text("Positive offsets move this source later on the shared timeline.");
-            if translate(&domain, self.offset).is_empty() {
-                self.offset = previous;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut proposed)
+                        .speed(interval)
+                        .max_decimals(12)
+                        .suffix(" s"),
+                )
+                .on_hover_text("Positive offsets move this source later on the shared timeline.")
+                .changed()
+            {
+                self.set_offset(proposed);
             }
-            may_remove
+            let align = ui
+                .menu_button(if is_reference { "Reference" } else { "Align" }, |ui| {
+                    let cursor = self.capture.cursor();
+                    for (text, action) in [
+                        ("Pin cursor as reference", cursor.map(SourceAction::Pin)),
+                        (
+                            "Align cursor to reference",
+                            reference
+                                .zip(cursor)
+                                .filter(|_| !is_reference)
+                                .map(|(time, cursor)| SourceAction::Align(time - cursor)),
+                        ),
+                        (
+                            "Reset offset",
+                            (self.offset != 0.0).then_some(SourceAction::Align(0.0)),
+                        ),
+                        (
+                            "Clear reference",
+                            is_reference.then_some(SourceAction::ClearReference),
+                        ),
+                    ] {
+                        if ui
+                            .add_enabled(action.is_some(), egui::Button::new(text))
+                            .clicked()
+                        {
+                            ui.close();
+                            return action;
+                        }
+                    }
+                    None
+                })
+                .inner
+                .flatten();
+            if may_remove
                 && ui
                     .small_button("Remove")
                     .on_hover_text("Remove source from this session")
                     .clicked()
+            {
+                return Some(SourceAction::Remove);
+            }
+            align
         })
         .inner
+    }
+
+    fn set_offset(&mut self, offset: f64) -> bool {
+        let extent = translate(&self.capture.domain(), offset);
+        if extent.is_empty() || !extent.start.is_finite() || !extent.end.is_finite() {
+            return false;
+        }
+        self.offset = offset;
+        true
     }
 }
 
@@ -392,6 +503,13 @@ impl Capture {
         match self {
             Self::Analog(view) => view.domain(),
             Self::Digital(view) => view.domain(),
+        }
+    }
+
+    fn cursor(&self) -> Option<f64> {
+        match self {
+            Self::Analog(view) => view.cursor(),
+            Self::Digital(view) => view.cursor(),
         }
     }
 

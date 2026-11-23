@@ -177,6 +177,10 @@ impl Viewer {
         &mut self.span
     }
 
+    pub(super) fn cursor(&self) -> Option<f64> {
+        self.cursors[0].or(self.cursors[1])
+    }
+
     pub(super) fn min_height(&self) -> f32 {
         if self.spectrum { 410.0 } else { 205.0 }
     }
@@ -389,6 +393,9 @@ impl Viewer {
         self.draw_math(&painter, &clipped, rect, ink);
         self.draw_filters(&painter, &clipped, rect, ink);
         self.paint_marks(ui, &clipped, rect);
+        if let Some(link) = link {
+            link.paint_reference(&clipped, rect, &self.span);
+        }
         for (label, time) in ["A", "B"]
             .into_iter()
             .zip(self.cursors)
