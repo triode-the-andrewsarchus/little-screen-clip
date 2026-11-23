@@ -1,6 +1,7 @@
 //! Offline CAN bus captures and sparse frame indexes.
 
 mod blf;
+pub mod dbc;
 mod index;
 #[cfg(test)]
 mod tests;
