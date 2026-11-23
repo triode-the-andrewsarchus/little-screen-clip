@@ -80,6 +80,7 @@ pub(super) struct Viewer {
     applying: Option<ReadJob<Loaded>>,
     loaded: Option<Loaded>,
     view: Range<u64>,
+    peak_view_before: Option<Range<u64>>,
     selection: Option<Range<u64>>,
     cursor: Option<u64>,
     frequency: Option<f32>,
@@ -117,6 +118,7 @@ impl Viewer {
             applying: None,
             loaded: None,
             view: 0..0,
+            peak_view_before: None,
             selection: None,
             cursor: None,
             frequency: None,
@@ -145,10 +147,9 @@ impl Viewer {
         if range.is_empty() {
             return;
         }
-        let padding = ((range.end - range.start) / 12).max(1);
+        self.peak_view_before = None;
         self.cursor = Some(midpoint(&range));
-        self.view =
-            range.start.saturating_sub(padding)..range.end.saturating_add(padding).min(count);
+        self.view = padded_view(&range, count);
         self.selection = Some(range);
     }
 
@@ -218,6 +219,7 @@ impl Viewer {
     fn install(&mut self, loaded: Loaded) {
         let count = loaded.power.samples.end;
         self.view = 0..count;
+        self.peak_view_before = None;
         self.selection = None;
         self.peak_hold = false;
         self.frequency = None;
@@ -368,6 +370,22 @@ impl Viewer {
         left..left.saturating_add(width).min(count)
     }
 
+    fn focus_peak(&mut self, ui: &Ui, window: &Range<u64>) {
+        self.peak_view_before
+            .get_or_insert_with(|| self.view.clone());
+        self.view = padded_view(window, self.count());
+        self.delay(ui);
+        ui.ctx().request_repaint();
+    }
+
+    fn restore_peak_view(&mut self, ui: &Ui) {
+        if let Some(view) = self.peak_view_before.take() {
+            self.view = view;
+            self.delay(ui);
+            ui.ctx().request_repaint();
+        }
+    }
+
     fn copy(&self, ui: &Ui, copies: &mut Copies) {
         let (Some(recording), Some(range)) = (self.recording(), self.selection.clone()) else {
             return;
@@ -399,6 +417,11 @@ impl Viewer {
     fn delay(&mut self, ui: &Ui) {
         self.request_after = ui.input(|input| input.time) + 0.055;
     }
+}
+
+fn padded_view(window: &Range<u64>, count: u64) -> Range<u64> {
+    let padding = ((window.end - window.start) / 12).max(1);
+    window.start.saturating_sub(padding)..window.end.saturating_add(padding).min(count)
 }
 
 fn start_job<T: Send + 'static>(

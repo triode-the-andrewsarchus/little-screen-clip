@@ -39,8 +39,7 @@ pub(super) fn point(frame: &Waterfall, rect: Rect, position: Pos2) -> Point<'_> 
     let row = ((time * frame.rows.len() as f32) as usize).min(frame.rows.len() - 1);
     let spectrum = &frame.rows[row];
     let frequency_fraction = ((position.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-    let bin = ((frequency_fraction * spectrum.bins_dbfs.len() as f32) as usize)
-        .min(spectrum.bins_dbfs.len() - 1);
+    let bin = super::plot::bin_at_fraction(frequency_fraction, spectrum.bins_dbfs.len());
     Point {
         spectrum,
         bin,

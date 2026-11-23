@@ -7,7 +7,7 @@ use crate::file_manager::preview_copy;
 use egui::{
     Align2, Color32, FontId, PointerButton, Pos2, Rect, Response, Sense, Stroke, Ui, pos2, vec2,
 };
-use little_clip_core::engineering::{iq::Spectrum, waveforms::display_value};
+use little_clip_core::engineering::waveforms::display_value;
 use std::ops::Range;
 
 const MEASURED: Color32 = Color32::from_rgb(247, 150, 203);
@@ -26,16 +26,10 @@ impl Viewer {
             }
             ui.weak(plot::sample_label(count, rate));
             if ui.button("Fit recording").clicked() {
+                self.peak_view_before = None;
                 self.view = 0..count;
                 self.delay(ui);
             }
-            egui::ComboBox::from_id_salt("iq-window")
-                .selected_text(format!("FFT {}", self.fft))
-                .show_ui(ui, |ui| {
-                    for size in super::FFT_SIZES {
-                        ui.selectable_value(&mut self.fft, size, format!("FFT {size}"));
-                    }
-                });
             if let Some(selection) = self.selection.as_ref() {
                 let count = selection.end - selection.start;
                 ui.label(format!("Selected {}", plot::sample_label(count, rate)));
@@ -50,11 +44,9 @@ impl Viewer {
                     self.copy(ui, copies);
                 }
                 if ui.small_button("Clear selection").clicked() {
+                    self.restore_peak_view(ui);
                     self.selection = None;
                 }
-            }
-            if let Some(cursor) = self.cursor {
-                ui.weak(format!("Cursor {}", plot::sample_label(cursor, rate)));
             }
         });
     }
@@ -133,6 +125,7 @@ impl Viewer {
         if let Some(range) = target {
             self.focus_samples(range.start, range.end);
         } else if let Some(range) = drag_range(ui, &response, &span) {
+            self.peak_view_before = None;
             self.selection = Some(range.clone());
             if response.drag_stopped() {
                 self.focus_samples(range.start, range.end);
@@ -145,6 +138,7 @@ impl Viewer {
             let width = (self.view.end - self.view.start)
                 .min((count / 4).max(2))
                 .min(count);
+            self.peak_view_before = None;
             self.view = window_around(count, cursor, width);
             self.selection = None;
             self.cursor = Some(cursor);
@@ -225,7 +219,7 @@ impl Viewer {
         let height = (ui.available_height() - 10.0).max(120.0);
         let width = ui.available_width();
         let side_by_side = width >= 530.0;
-        let waterfall_width = width * 0.67;
+        let waterfall_width = width * if width < 900.0 { 0.60 } else { 0.67 };
         let sizes = if side_by_side {
             [
                 vec2(waterfall_width, height),
@@ -257,9 +251,27 @@ impl Viewer {
     }
 
     fn waterfall_panel(&mut self, ui: &mut Ui, width: f32, height: f32) {
-        ui.strong("Waterfall");
-        let (outer, _) =
-            ui.allocate_exact_size(vec2(width, (height - 34.0).max(65.0)), Sense::hover());
+        let heading = ui.horizontal_wrapped(|ui| {
+            ui.strong("Waterfall");
+            if let Some(Ok(measurement)) = self.current_spectrum()
+                && let Some((_, origin)) = peak_source(measurement, self.frequency)
+            {
+                ui.weak(format!(
+                    "Peak window · {}",
+                    sample_span(origin, self.rate()),
+                ));
+            } else if let Some(cursor) = self.cursor {
+                ui.weak(format!(
+                    "Cursor {}",
+                    plot::sample_label(cursor, self.rate())
+                ));
+            }
+        });
+        let caption = heading.response.rect.height();
+        let (outer, _) = ui.allocate_exact_size(
+            vec2(width, (height - caption - 14.0).max(65.0)),
+            Sense::hover(),
+        );
         let inset = if width >= 260.0 { 64.0 } else { 0.0 };
         let rect = Rect::from_min_max(outer.min + vec2(inset, 0.0), outer.max - vec2(0.0, 18.0));
         let response = ui.interact(
@@ -302,7 +314,7 @@ impl Viewer {
                 response.clone().on_hover_text(format!(
                     "{} · {} · {dbfs:.1} dBFS",
                     plot::sample_label(cursor, self.rate()),
-                    plot::frequency_label(point.spectrum, point.bin),
+                    plot::frequency_label(point.spectrum, point.bin, true),
                 ));
             }
             waterfall_labels(&paint, rect, frame, ink);
@@ -331,9 +343,7 @@ impl Viewer {
                 clipped.hline(rect.x_range(), y, Stroke::new(1.0, accent));
             }
         }
-        if let Some(Ok(measurement)) = self.current_spectrum() {
-            paint_measured_windows(&clipped, rect, &self.view, measurement);
-        }
+        self.paint_spectrum_evidence(&clipped, rect);
         if let Some(cursor) = self.cursor.filter(|cursor| self.view.contains(cursor)) {
             clipped.hline(
                 rect.x_range(),
@@ -341,17 +351,36 @@ impl Viewer {
                 Stroke::new(1.0, Color32::WHITE),
             );
         }
-        if let Some(frequency) = self.frequency {
-            clipped.vline(
+        if inset_has_labels(outer, rect) {
+            waterfall_time_labels(&paint, rect, &self.view, self.rate(), ink);
+        }
+        pointed
+    }
+
+    fn paint_spectrum_evidence(&self, painter: &egui::Painter, rect: Rect) {
+        if let Some(Ok(measurement)) = self.current_spectrum() {
+            paint_measured_windows(painter, rect, &self.view, measurement);
+            if let Some((bin, window)) = peak_source(measurement, self.frequency) {
+                paint_peak_window(
+                    painter,
+                    rect,
+                    &self.view,
+                    window,
+                    plot::bin_fraction(bin, measurement.frame.bins_dbfs.len()),
+                );
+            }
+        }
+        // A held peak's frequency marker belongs to its source window, including
+        // when the visible waterfall spans other tuning centers.
+        if !self.peak_hold
+            && let Some(frequency) = self.frequency
+        {
+            painter.vline(
                 egui::lerp(rect.x_range(), frequency),
                 rect.y_range(),
                 Stroke::new(1.0, Color32::GOLD),
             );
         }
-        if inset_has_labels(outer, rect) {
-            waterfall_time_labels(&paint, rect, &self.view, self.rate(), ink);
-        }
-        pointed
     }
 
     fn waterfall_input(
@@ -368,6 +397,7 @@ impl Viewer {
                 waterfall::time_fraction(rect, point)
             });
         if let Some(range) = sample_range(&span, range) {
+            self.peak_view_before = None;
             self.cursor = Some(midpoint(&range));
             self.selection = Some(range);
             self.delay(ui);
@@ -381,6 +411,7 @@ impl Viewer {
             });
             self.cursor = Some(cursor.min(self.count() - 1));
             self.frequency = Some(fraction);
+            self.peak_view_before = None;
             self.selection = None;
             self.delay(ui);
         }
@@ -403,21 +434,28 @@ impl Viewer {
 
     fn spectrum_panel(&mut self, ui: &mut Ui, width: f32, height: f32) {
         let first_y = ui.next_widget_position().y;
-        self.spectrum_controls(ui);
+        ui.scope(|ui| {
+            let spacing = ui.spacing_mut();
+            spacing.interact_size = vec2(0.0, 22.0);
+            spacing.button_padding = vec2(4.0, 2.0);
+            spacing.item_spacing = vec2(5.0, 4.0);
+            self.spectrum_controls(ui);
+            self.peak_controls(ui);
+            match self.current_spectrum() {
+                Some(Ok(measurement)) => show_measurement(ui, measurement),
+                Some(Err(error)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                None => {
+                    ui.weak(if self.count() < 2 {
+                        "Needs at least two samples"
+                    } else {
+                        "Reading spectrum…"
+                    });
+                }
+            }
+        });
         let measurement = self.current_spectrum();
-        match measurement {
-            Some(Ok(measurement)) => show_measurement(ui, measurement),
-            Some(Err(error)) => {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-            None => {
-                ui.weak(if self.count() < 2 {
-                    "Needs at least two samples"
-                } else {
-                    "Reading spectrum…"
-                });
-            }
-        }
         let controls_height = ui.next_widget_position().y - first_y;
         let (outer, _) = ui.allocate_exact_size(
             vec2(width, (height - controls_height).max(58.0)),
@@ -432,35 +470,95 @@ impl Viewer {
         };
         let frame = &measurement.frame;
         let density = self.show_density && frame.noise_bandwidth_hz.is_some();
+        let bins = &frame.bins_dbfs;
+        let marker = self.frequency.or_else(|| {
+            let bin = measurement.coverage.as_ref()?.strongest()?;
+            Some(plot::bin_fraction(bin, bins.len()))
+        });
+        let pointed = response
+            .hover_pos()
+            .and_then(|position| plot::displayed_bin(rect, bins, x_fraction(rect, position)));
+        let hover = pointed.zip(response.hover_pos()).map(|(bin, mut point)| {
+            point.x = egui::lerp(
+                rect.x_range(),
+                plot::plotted_bin_fraction(rect, bin, bins.len()),
+            );
+            point
+        });
         plot::spectrum(
             &paint,
             rect,
             frame,
-            self.frequency,
-            response.hover_pos(),
+            marker,
+            hover,
             ui.visuals().weak_text_color(),
             density,
         );
-        if let Some(position) = response.hover_pos() {
-            let fraction = x_fraction(rect, position);
-            let bin =
-                ((fraction * frame.bins_dbfs.len() as f32) as usize).min(frame.bins_dbfs.len() - 1);
+        if let Some(bin) = pointed {
             let (level, unit) = if density {
-                (frame.density_dbfs_at(bin).unwrap_or(f32::NAN), "dBFS/Hz")
+                (frame.density_dbfs_at(bin), "dBFS/Hz")
             } else {
-                (frame.bins_dbfs[bin], "dBFS")
+                (Some(bins[bin]), "dBFS")
             };
-            if level.is_finite() {
+            if let Some(level) = level {
                 response.clone().on_hover_text(format!(
                     "{} · {level:.1} {unit}",
-                    plot::frequency_label(frame, bin),
+                    plot::frequency_label(frame, bin, true),
                 ));
             }
         }
-        if response.clicked()
-            && let Some(point) = response.interact_pointer_pos()
-        {
-            self.frequency = Some(x_fraction(rect, point));
+        let clicked = response
+            .interact_pointer_pos()
+            .filter(|_| response.clicked())
+            .and_then(|point| plot::displayed_bin(rect, bins, x_fraction(rect, point)));
+        if let Some(bin) = clicked {
+            let fraction = plot::bin_fraction(bin, bins.len());
+            // With a source already open, selecting another bin follows it
+            // without replacing the viewport that Back will restore.
+            let focus = (self.peak_view_before.is_some() || response.double_clicked())
+                .then(|| measurement.coverage.as_ref()?.source(bin).cloned())
+                .flatten();
+            self.frequency = Some(fraction);
+            if let Some(window) = focus {
+                self.focus_peak(ui, &window);
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+
+    fn peak_controls(&mut self, ui: &mut Ui) {
+        let inspecting = self.peak_view_before.is_some();
+        let origin = self
+            .current_spectrum()
+            .and_then(Result::ok)
+            .and_then(|measurement| {
+                let (bin, window) = peak_source(measurement, self.frequency)?;
+                Some((&measurement.frame, bin, window.clone()))
+            });
+        let Some((frame, bin, window)) = origin else {
+            return;
+        };
+        let prefix = if self.frequency.is_some() {
+            "Marked"
+        } else {
+            "Strongest"
+        };
+        ui.strong(format!(
+            "{prefix} · {} · {:.1} dBFS",
+            plot::frequency_label(frame, bin, true),
+            frame.bins_dbfs[bin],
+        ));
+        let action = if inspecting {
+            "Back to waterfall view"
+        } else {
+            "Show peak window"
+        };
+        if ui.small_button(action).clicked() {
+            if inspecting {
+                self.restore_peak_view(ui);
+            } else {
+                self.focus_peak(ui, &window);
+            }
         }
     }
 
@@ -473,10 +571,27 @@ impl Viewer {
             "Window spectrum"
         });
         ui.horizontal_wrapped(|ui| {
+            ui.label("FFT");
+            for size in super::FFT_SIZES {
+                if ui
+                    .add(
+                        egui::Button::new(size.to_string())
+                            .selected(self.fft == size)
+                            .small(),
+                    )
+                    .clicked()
+                    && self.fft != size
+                {
+                    self.restore_peak_view(ui);
+                    self.fft = size;
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     has_selection,
-                    egui::Button::new("Peak hold over selection").selected(self.peak_hold),
+                    egui::Button::new("Peak hold over selection").selected(self.peak_hold).small(),
                 )
                 .on_disabled_hover_text("Brush a range of at least two samples")
                 .on_hover_text(format!(
@@ -485,6 +600,9 @@ impl Viewer {
                 .clicked()
             {
                 self.peak_hold = !self.peak_hold;
+                if !self.peak_hold {
+                    self.restore_peak_view(ui);
+                }
             }
             if self.rate().is_some() && !self.peak_hold {
                 ui.toggle_value(&mut self.show_density, "dBFS/Hz")
@@ -492,6 +610,41 @@ impl Viewer {
             }
         });
     }
+}
+
+fn peak_source(measurement: &Measurement, marker: Option<f32>) -> Option<(usize, &Range<u64>)> {
+    let coverage = measurement.coverage.as_ref()?;
+    let bin = match marker {
+        Some(fraction) => plot::bin_at_fraction(fraction, measurement.frame.bins_dbfs.len()),
+        None => coverage.strongest()?,
+    };
+    Some((bin, coverage.source(bin)?))
+}
+
+fn paint_peak_window(
+    painter: &egui::Painter,
+    rect: Rect,
+    view: &Range<u64>,
+    window: &Range<u64>,
+    frequency: f32,
+) {
+    let start = window.start.max(view.start);
+    let end = window.end.min(view.end);
+    if start >= end {
+        return;
+    }
+    let top = waterfall_y(rect, view, start);
+    let bottom = waterfall_y(rect, view, end);
+    let band = Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), bottom));
+    painter.rect_filled(band, 0.0, Color32::GOLD.gamma_multiply(0.12));
+    for y in [top, bottom] {
+        painter.hline(rect.x_range(), y, Stroke::new(1.0, Color32::GOLD));
+    }
+    painter.vline(
+        egui::lerp(rect.x_range(), frequency),
+        top..=bottom,
+        Stroke::new(1.3, Color32::GOLD),
+    );
 }
 
 fn show_measurement(ui: &mut Ui, measurement: &Measurement) {
@@ -503,23 +656,23 @@ fn show_measurement(ui: &mut Ui, measurement: &Measurement) {
     };
     if let Some(coverage) = &measurement.coverage {
         let description = if coverage.sampled() {
-            "Sampled coverage"
+            "Sampled"
         } else {
-            "Complete window coverage"
+            "Complete"
         };
-        ui.weak(format!(
-            "Selection · {}",
-            sample_span(&coverage.selection, frame.sample_rate_hz),
-        ));
         ui.colored_label(
             ink,
             format!(
-                "{description} · {} FFT windows · {}/{} samples",
+                "{description} · {} FFTs · {}/{} samples",
                 coverage.windows.len(),
                 coverage.observed_samples,
                 coverage.selection.end - coverage.selection.start,
             ),
-        );
+        )
+        .on_hover_text(format!(
+            "Selection · {}",
+            sample_span(&coverage.selection, frame.sample_rate_hz)
+        ));
     } else {
         ui.colored_label(
             ink,
@@ -714,26 +867,13 @@ fn waterfall_time_labels(
 }
 
 fn waterfall_labels(paint: &egui::Painter, rect: Rect, frame: &WaterfallFrame, ink: Color32) {
-    let row = &frame.data.rows[0];
-    for (fraction, align) in [
-        (0.0, Align2::LEFT_TOP),
-        (0.5, Align2::CENTER_TOP),
-        (1.0, Align2::RIGHT_TOP),
-    ] {
-        let bin = ((row.bins_dbfs.len() - 1) as f32 * fraction).round() as usize;
-        let label = if frame.has_absolute_axis {
-            plot::frequency_label(row, bin)
-        } else {
-            relative_label(row, bin)
-        };
-        paint.text(
-            pos2(egui::lerp(rect.x_range(), fraction), rect.bottom() + 2.0),
-            align,
-            label,
-            FontId::monospace(10.0),
-            ink,
-        );
-    }
+    plot::frequency_ticks(
+        paint,
+        rect,
+        &frame.data.rows[0],
+        frame.has_absolute_axis,
+        ink,
+    );
     let label = format!(
         "{:.0} to {:.0} dBFS",
         frame.color_span.0, frame.color_span.1
@@ -745,16 +885,6 @@ fn waterfall_labels(paint: &egui::Painter, rect: Rect, frame: &WaterfallFrame, i
         FontId::monospace(10.0),
         Color32::from_white_alpha(172),
     );
-}
-
-fn relative_label(row: &Spectrum, bin: usize) -> String {
-    row.relative_hz_at(bin).map_or_else(
-        || {
-            let value = bin as f64 / row.bins_dbfs.len() as f64 - 0.5;
-            format!("{value:+.3} cy/smp")
-        },
-        |frequency| display_value(frequency, "Hz"),
-    )
 }
 
 fn inset_has_labels(outer: Rect, rect: Rect) -> bool {

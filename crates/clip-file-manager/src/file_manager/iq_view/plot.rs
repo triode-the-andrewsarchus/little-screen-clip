@@ -1,8 +1,9 @@
 //! Shared power, spectrum, and sample-coordinate drawing for I/Q views.
+use super::spectrum::strongest_bin;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, pos2};
 use little_clip_core::engineering::{
     iq::{PowerOverview, Spectrum},
-    waveforms::display_value,
+    waveforms::{display_axis_value, display_value},
 };
 use std::ops::Range;
 
@@ -176,23 +177,13 @@ pub(super) fn spectrum(
         );
     }
     let paint = painter.with_clip_rect(rect);
-    let size = frame.bins_dbfs.len().max(1);
-    let points = rect.width().ceil().clamp(1.0, size as f32) as usize;
-    let plot = (0..points)
-        .filter_map(|index| {
-            let left = index * size / points;
-            let right = (index + 1) * size / points;
-            let power = frame.bins_dbfs[left..right]
-                .iter()
-                .filter(|value| value.is_finite())
-                .fold(None, |peak: Option<f32>, &value| {
-                    Some(peak.map_or(value, |peak| peak.max(value)))
-                })?;
-            let x = egui::lerp(
-                rect.x_range(),
-                index as f32 / points.saturating_sub(1).max(1) as f32,
-            );
-            Some(pos2(x, y_at(rect, &scale, power + shift)))
+    let bins = &frame.bins_dbfs;
+    let columns = column_count(rect, bins.len());
+    let plot = (0..columns)
+        .filter_map(|column| {
+            let bin = column_peak(bins, columns, column)?;
+            let x = egui::lerp(rect.x_range(), bin_fraction(column, columns));
+            Some(pos2(x, y_at(rect, &scale, bins[bin] + shift)))
         })
         .collect::<Vec<_>>();
     if plot.len() > 1 {
@@ -200,7 +191,10 @@ pub(super) fn spectrum(
     }
     if let Some(cursor) = frequency_cursor {
         paint.vline(
-            egui::lerp(rect.x_range(), cursor),
+            egui::lerp(
+                rect.x_range(),
+                plotted_bin_fraction(rect, bin_at_fraction(cursor, bins.len()), bins.len()),
+            ),
             rect.y_range(),
             Stroke::new(1.0, Color32::GOLD),
         );
@@ -208,20 +202,7 @@ pub(super) fn spectrum(
     if let Some(hover) = crossed {
         paint.vline(hover.x, rect.y_range(), Stroke::new(0.6, ink));
     }
-    for (fraction, align) in [
-        (0.0, Align2::LEFT_TOP),
-        (0.5, Align2::CENTER_TOP),
-        (1.0, Align2::RIGHT_TOP),
-    ] {
-        let bin = ((frame.bins_dbfs.len() - 1) as f32 * fraction).round() as usize;
-        painter.text(
-            pos2(egui::lerp(rect.x_range(), fraction), rect.bottom() + 2.0),
-            align,
-            frequency_label(frame, bin),
-            FONT,
-            ink,
-        );
-    }
+    frequency_ticks(painter, rect, frame, true, ink);
     painter.text(
         rect.left_top() + egui::vec2(3.0, 3.0),
         Align2::LEFT_TOP,
@@ -231,15 +212,123 @@ pub(super) fn spectrum(
     );
 }
 
-pub(super) fn frequency_label(spectrum: &Spectrum, bin: usize) -> String {
-    spectrum
-        .frequency_hz_at(bin)
-        .or_else(|| spectrum.relative_hz_at(bin))
-        .map_or_else(
-            || {
-                let normalized = bin as f64 / spectrum.bins_dbfs.len().max(1) as f64 - 0.5;
-                format!("{normalized:+.3} cy/smp")
-            },
-            |hz| display_value(hz, "Hz"),
-        )
+fn column_count(rect: Rect, bins: usize) -> usize {
+    bins.min(rect.width().floor().max(1.0) as usize)
+}
+
+fn column_peak(bins: &[f32], columns: usize, column: usize) -> Option<usize> {
+    let first = column * bins.len() / columns;
+    let end = (column + 1) * bins.len() / columns;
+    strongest_bin(bins, first..end)
+}
+
+pub(super) fn bin_at_fraction(fraction: f32, bins: usize) -> usize {
+    ((fraction * bins as f32) as usize).min(bins.saturating_sub(1))
+}
+
+pub(super) fn bin_fraction(bin: usize, bins: usize) -> f32 {
+    (bin as f32 + 0.5) / bins.max(1) as f32
+}
+
+pub(super) fn displayed_bin(rect: Rect, bins: &[f32], fraction: f32) -> Option<usize> {
+    let columns = column_count(rect, bins.len());
+    if columns == 0 {
+        return None;
+    }
+    column_peak(bins, columns, bin_at_fraction(fraction, columns))
+}
+
+pub(super) fn plotted_bin_fraction(rect: Rect, bin: usize, count: usize) -> f32 {
+    let columns = column_count(rect, count);
+    if columns == 0 {
+        return 0.0;
+    }
+    // Locate the displayed column that owns this FFT bin.
+    let column = ((bin + 1) * columns - 1) / count;
+    bin_fraction(column, columns)
+}
+
+pub(super) fn frequency_ticks(
+    painter: &Painter,
+    rect: Rect,
+    frame: &Spectrum,
+    absolute: bool,
+    ink: Color32,
+) {
+    for (fraction, align) in [
+        (0.0, Align2::LEFT_TOP),
+        (0.5, Align2::CENTER_TOP),
+        (1.0, Align2::RIGHT_TOP),
+    ] {
+        if fraction == 0.5 && rect.width() < 255.0 {
+            continue;
+        }
+        let bin = bin_at_fraction(fraction, frame.bins_dbfs.len());
+        painter.text(
+            pos2(egui::lerp(rect.x_range(), fraction), rect.bottom() + 2.0),
+            align,
+            frequency_label(frame, bin, absolute),
+            FONT,
+            ink,
+        );
+    }
+}
+
+pub(super) fn frequency_label(spectrum: &Spectrum, bin: usize, absolute: bool) -> String {
+    let size = spectrum.bins_dbfs.len().max(1) as f64;
+    let hz = absolute
+        .then(|| spectrum.frequency_hz_at(bin))
+        .flatten()
+        .or_else(|| spectrum.relative_hz_at(bin));
+    match (hz, spectrum.sample_rate_hz) {
+        (Some(hz), Some(rate)) => display_axis_value(hz, rate / size, "Hz"),
+        _ => {
+            let normalized = bin as f64 / size - 0.5;
+            format!("{normalized:+.5} cy/smp")
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_selects_the_peak_rendered_in_each_decimated_column() {
+        let bins = [-12.0, -6.0, -90.0, -72.0, -40.0, -28.0, -34.0];
+        let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(3.0, 40.0));
+        for bin in 0..bins.len() {
+            let expected = if bin < 2 {
+                1
+            } else if bin < 4 {
+                3
+            } else {
+                5
+            };
+            assert_eq!(
+                displayed_bin(rect, &bins, plotted_bin_fraction(rect, bin, bins.len())),
+                Some(expected)
+            );
+        }
+        assert_eq!(displayed_bin(rect, &bins, 1.0), Some(5));
+    }
+
+    #[test]
+    fn absolute_labels_distinguish_adjacent_bins_at_a_large_center_frequency() {
+        let frame = Spectrum {
+            samples: 0..512,
+            sample_rate_hz: Some(32_768.0),
+            center_hz: Some(915_000_000.0),
+            crosses_tuning: false,
+            finite_samples: 512,
+            noise_bandwidth_hz: None,
+            bins_dbfs: vec![0.0; 512],
+        };
+        assert_eq!(frequency_label(&frame, 320, true), "915.0041 MHz");
+        assert_ne!(
+            frequency_label(&frame, 320, true),
+            frequency_label(&frame, 321, true)
+        );
+        assert_eq!(frequency_label(&frame, 320, false), "4.096 kHz");
+    }
 }

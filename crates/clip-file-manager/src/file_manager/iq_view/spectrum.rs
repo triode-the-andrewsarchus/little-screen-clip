@@ -21,6 +21,8 @@ pub(super) struct Coverage {
     pub(super) windows: Vec<Range<u64>>,
     pub(super) observed_samples: u64,
     pub(super) has_invalid_samples: bool,
+    source_rows: Vec<Option<usize>>,
+    strongest: Option<usize>,
 }
 
 impl Request {
@@ -53,21 +55,38 @@ impl Request {
 
 impl Measurement {
     fn peak_hold(data: Waterfall, center: Option<f64>) -> Result<Self, String> {
-        let mut coverage = Coverage {
-            selection: data.samples,
-            windows: Vec::with_capacity(data.rows.len()),
-            observed_samples: 0,
-            has_invalid_samples: false,
-        };
+        let count = data.rows.len();
         let mut rows = data.rows.into_iter();
         let mut frame = rows.next().ok_or("Peak hold has no FFT windows.")?;
+        let mut coverage = Coverage {
+            selection: data.samples,
+            windows: Vec::with_capacity(count),
+            observed_samples: 0,
+            has_invalid_samples: false,
+            source_rows: frame
+                .bins_dbfs
+                .iter()
+                .map(|level| level.is_finite().then_some(0))
+                .collect(),
+            strongest: None,
+        };
         coverage.add(&frame);
         for row in rows {
+            let row_index = coverage.windows.len();
             coverage.add(&row);
-            for (peak, level) in frame.bins_dbfs.iter_mut().zip(row.bins_dbfs) {
-                *peak = peak.max(level);
+            for ((peak, source), level) in frame
+                .bins_dbfs
+                .iter_mut()
+                .zip(&mut coverage.source_rows)
+                .zip(row.bins_dbfs)
+            {
+                if level.is_finite() && (source.is_none() || level > *peak) {
+                    *peak = level;
+                    *source = Some(row_index);
+                }
             }
         }
+        coverage.strongest = strongest_bin(&frame.bins_dbfs, 0..frame.bins_dbfs.len());
         // The aggregate is calibrated coherent amplitude. Its windows may have different
         // noise bandwidths when samples are invalid, so there is no single density offset.
         frame.center_hz = center;
@@ -88,6 +107,14 @@ impl Measurement {
     }
 }
 
+// Prefer the first bin when levels are tied. The same rule serves the
+// measurement summary and the peak shown in a decimated display column.
+pub(super) fn strongest_bin(bins: &[f32], range: Range<usize>) -> Option<usize> {
+    range
+        .filter(|&bin| bins[bin].is_finite())
+        .reduce(|best, bin| if bins[bin] > bins[best] { bin } else { best })
+}
+
 impl Coverage {
     fn add(&mut self, row: &Spectrum) {
         let samples = &row.samples;
@@ -98,6 +125,15 @@ impl Coverage {
         self.observed_samples += samples.end.saturating_sub(samples.start.max(covered_end));
         self.has_invalid_samples |= row.finite_samples < samples.end - samples.start;
         self.windows.push(samples.clone());
+    }
+
+    pub(super) fn source(&self, bin: usize) -> Option<&Range<u64>> {
+        self.windows
+            .get(self.source_rows.get(bin).copied().flatten()?)
+    }
+
+    pub(super) fn strongest(&self) -> Option<usize> {
+        self.strongest
     }
 
     pub(super) fn sampled(&self) -> bool {
@@ -132,9 +168,16 @@ mod tests {
     fn peak_hold_detects_a_transient_outside_the_center_window() {
         let mut file = tempfile::tempfile().unwrap();
         let burst = 256..512;
+        let second = 3328..3584;
         for sample in 0..4096 {
-            let angle = TAU * (sample % 8) as f32 / 8.0;
-            let amplitude = if burst.contains(&sample) { 0.5 } else { 0.0 };
+            let (angle, amplitude) = if second.contains(&sample) {
+                (-TAU * (sample % 4) as f32 / 4.0, 0.25)
+            } else {
+                (
+                    TAU * (sample % 8) as f32 / 8.0,
+                    if burst.contains(&sample) { 0.5 } else { 0.0 },
+                )
+            };
             file.write_all(&(amplitude * angle.cos()).to_le_bytes())
                 .unwrap();
             file.write_all(&(amplitude * angle.sin()).to_le_bytes())
@@ -170,6 +213,41 @@ mod tests {
         assert!(centered.frame.bins_dbfs[bin] < -120.0);
         assert!((peak_hold.frame.bins_dbfs[bin] + 6.0206).abs() < 0.001);
         assert_eq!(peak_hold.frame.frequency_hz_at(bin), Some(915_004_096.0));
+        assert_eq!(coverage.strongest(), Some(bin));
+        assert_eq!(coverage.source(bin), Some(&burst));
+        assert_eq!(coverage.source(64), Some(&second));
+        assert_eq!(peak_hold.frame.frequency_hz_at(64), Some(914_991_808.0));
+    }
+
+    #[test]
+    fn peak_hold_keeps_the_first_tied_source_and_ignores_invalid_bins() {
+        let row = |start, bins_dbfs: [f32; 3]| Spectrum {
+            samples: start..start + 8,
+            bins_dbfs: bins_dbfs.into(),
+            sample_rate_hz: None,
+            center_hz: None,
+            crosses_tuning: false,
+            finite_samples: 4,
+            noise_bandwidth_hz: None,
+        };
+        let measurement = Measurement::peak_hold(
+            Waterfall {
+                samples: 0..24,
+                rows: vec![
+                    row(0, [f32::NAN, -10.0, f32::NAN]),
+                    row(8, [-4.0, -10.0, f32::NAN]),
+                    row(16, [-4.0, f32::NAN, f32::NAN]),
+                ],
+                sampled: false,
+            },
+            None,
+        )
+        .unwrap();
+        let coverage = measurement.coverage.unwrap();
+        assert_eq!(coverage.source(0), Some(&(8..16)));
+        assert_eq!(coverage.source(1), Some(&(0..8)));
+        assert_eq!(coverage.source(2), None);
+        assert_eq!(coverage.strongest(), Some(0));
     }
 
     #[test]

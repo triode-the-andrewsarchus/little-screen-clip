@@ -164,6 +164,14 @@ Scope, standalone logic, and equation decoders share the annotation strip intera
 
 The desktop checks selected I²C address 0x42 from the plot in a Rigol capture, a VCD capture, and a recipe with two clock-aligned recordings. Double-clicking expanded the address pulses and Back restored the full time view with the same event selected. The VCD also passed at 800 × 620. The scope checked a gap between annotations, and the recipe retained its independent 187–212 µs shared range and its links to the recorded input channels. The geometry test covers coincident boundaries, clipped intervals, and a selected event fully covered at the original zoom.
 
+## 17. Locate the recorded window behind an I/Q peak
+
+Peak hold keeps the strongest observed value at each FFT bin and the contributing sample window. The spectrum initially marks the strongest observed bin and accepts another mark directly from the plotted line. The waterfall shows the exact sample and time bounds above it, with a gold band at the source and a frequency marker confined to that window. Show peak window zooms to the source. Marking another peak while inspecting follows its source, and Back to waterfall view restores the original viewport. The brush, peak-hold result, and complete or sampled coverage readout stay available through the visit.
+
+The FFT sizes are direct controls beside the spectrum. A compressed plot column selects the bin that supplies its visible peak. The two frequency axes retain enough digits to distinguish adjacent bins around a large RF center. Peak hold still requires one tuning center across the selected region.
+
+At 1280 × 800 and 800 × 620, the desktop walkthrough followed a +4.096 kHz burst to samples 512–1023 and a −8.192 kHz burst to samples 3072–3583. The second bin read −12.0 dBFS. Back restored the wider waterfall with the second window marked and all 4096 brushed samples still in the peak hold. In the narrow check, a retune immediately after the selection left the wide waterfall on a relative axis and the measured spectrum on the original 915 MHz tuning. Unit tests also cover a retune missed by sampled windows, invalid FFT bins, and tied levels.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.
