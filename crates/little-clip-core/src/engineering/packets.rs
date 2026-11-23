@@ -1,11 +1,13 @@
 //! File-backed classic PCAP and PCAPNG inspection for recorded network packets.
 
+mod conversations;
 mod details;
 mod export;
 mod index;
 mod legacy;
 mod ng;
 mod protocol;
+pub use conversations::{Conversation, ConversationKey, Conversations, Direction};
 pub use details::{Field, Layer};
 mod source;
 

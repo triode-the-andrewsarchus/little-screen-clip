@@ -2,6 +2,7 @@
 
 mod activity;
 mod capture;
+mod conversations;
 mod display_filter;
 mod inspect;
 pub(super) mod strip;
@@ -17,11 +18,14 @@ use super::{
     preview_copy::{self, Copies},
 };
 use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
-use capture::{Capture, Filter, Filtered};
+use capture::{Capture, ConversationScope, Filter, Filtered};
+use conversations::{Action as ConversationAction, Selection as ConversationSelection};
 use egui::{Context, Id, Layout, PointerButton, Sense, Ui, vec2};
 use little_clip_core::{
     BackgroundJobs,
-    engineering::packets::{ActivityBin, Compression, Index, Packet, PacketRow, Protocol, Summary},
+    engineering::packets::{
+        ActivityBin, Compression, ConversationKey, Index, Packet, PacketRow, Protocol, Summary,
+    },
     palette::AppPalette,
 };
 use std::{
@@ -59,6 +63,8 @@ pub(super) struct Viewer {
     filter: Option<Filter>,
     filtered: Option<Filtered>,
     filter_job: Option<Job<Filtered>>,
+    conversation_panel: conversations::Panel,
+    conversation: Option<ConversationSelection>,
     error: Option<String>,
 }
 
@@ -94,6 +100,8 @@ impl Viewer {
             filter: None,
             filtered: None,
             filter_job: None,
+            conversation_panel: conversations::Panel::default(),
+            conversation: None,
             error: None,
         })
     }
@@ -121,6 +129,7 @@ impl Viewer {
         shell.render_header(ui, |_| {});
         self.controls(ui, copies);
         self.timeline(ui, colors);
+        self.conversations(ui, colors, copies);
         self.navigation(ui);
         self.browser(ui, colors);
         self.request_index(ui.ctx());
@@ -164,6 +173,16 @@ impl Viewer {
                 ui.monospace(format!("Packets {}–{}", range.start + 1, range.end));
             }
             self.copy_action(ui, copies);
+            if ui
+                .selectable_label(self.conversation_panel.open, "Conversations")
+                .clicked()
+            {
+                if self.conversation_panel.open {
+                    self.conversation_panel.close();
+                } else {
+                    self.conversation_panel.open = true;
+                }
+            }
         });
         self.filter_controls(ui);
         if let Some(error) = self.error.as_deref() {
@@ -253,18 +272,85 @@ impl Viewer {
                 self.filter_protocol = None;
                 self.endpoint.clear();
                 self.display_filter.clear();
+                self.conversation = None;
+                self.conversation_panel.highlight(None);
                 self.clear_filter();
             }
             ui.checkbox(&mut self.protocol_colors, "Protocol colors");
             if self.filter_job.is_some() {
                 ui.weak("Filtering…");
             } else if let Some(result) = &self.filtered {
-                ui.weak(format!("{} matches", result.rows.len()));
-                if result.scanned < self.source_rows() {
-                    ui.weak(format!("First {} packets searched", result.scanned));
+                let matches = egui::RichText::new(format!("{} matches", result.rows.len())).weak();
+                ui.add(egui::Label::new(matches).extend());
+                if result.scanned < result.scope_size {
+                    ui.weak(format!("{} of {} source packets searched", result.scanned, result.scope_size));
                 }
             }
         });
+    }
+
+    fn conversations(&mut self, ui: &mut Ui, colors: WorkbenchColors, copies: &mut Copies) {
+        if let Some(selection) = &self.conversation {
+            let key = selection.key;
+            let clear = ui
+                .horizontal_wrapped(|ui| {
+                    ui.strong(key.protocol().label());
+                    ui.monospace(format!("{} ↔ {}", key.peers[0], key.peers[1]));
+                    if let Some(vlan) = key.vlan {
+                        ui.weak(format!("VLAN {vlan}"));
+                    }
+                    if selection.scope.time.is_some() {
+                        ui.weak("Selected time range");
+                    }
+                    ui.small_button("Remove conversation filter").clicked()
+                })
+                .inner;
+            if clear {
+                self.use_conversation(ui.ctx(), None);
+            }
+        }
+        if !self.conversation_panel.open {
+            return;
+        }
+        let has_range = self.range.is_some();
+        let action =
+            self.conversation_panel
+                .show(ui, self.index.is_some(), has_range, colors, copies);
+        match action {
+            Some(ConversationAction::WholeCapture) => self.read_conversations(ui.ctx(), false),
+            Some(ConversationAction::SelectedRange) => self.read_conversations(ui.ctx(), true),
+            Some(ConversationAction::Inspect(selection)) => {
+                self.use_conversation(ui.ctx(), Some(selection));
+            }
+            None if self.conversation_panel.empty() => self.read_conversations(ui.ctx(), false),
+            None => {}
+        }
+    }
+
+    fn read_conversations(&mut self, ctx: &Context, selection: bool) {
+        let Some(index) = &self.index else { return };
+        let rows = if selection {
+            let Some(rows) = self.range.clone() else {
+                return;
+            };
+            rows.start.min(index.points())..rows.end.min(index.points())
+        } else {
+            0..index.points()
+        };
+        let time = if selection { self.brushed } else { None };
+        let scope = ConversationScope::new(rows, time);
+        self.conversation_panel
+            .request(ctx, &self.capture, index, scope);
+    }
+
+    fn use_conversation(&mut self, ctx: &Context, mut selection: Option<ConversationSelection>) {
+        self.conversation_panel
+            .highlight(selection.as_ref().map(|active| active.key));
+        if let Some(active) = &mut selection {
+            active.bounds = self.conversation_panel.bounds(active).or(active.bounds);
+        }
+        self.conversation = selection;
+        self.apply_filter(ctx);
     }
 
     fn timeline(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
@@ -297,6 +383,13 @@ impl Viewer {
         {
             picked = Some((bin.first_row, None));
             self.brushed = None;
+        }
+        if let Some(band) = self
+            .conversation
+            .as_ref()
+            .and_then(|selection| selection.bounds)
+        {
+            activity::highlight(&painter, rect, domain, band, colors);
         }
         if let Some(band) = self.selection_time() {
             activity::highlight(&painter, rect, domain, band, colors);
@@ -402,11 +495,40 @@ impl Viewer {
         self.request_rows(ui.ctx(), output.visible);
     }
 
+    fn inspect_conversation(&mut self, ui: &mut Ui, row: u64) {
+        let Some(index) = &self.index else { return };
+        let Some(packet) = self
+            .packet
+            .as_ref()
+            .filter(|packet| packet.header.row == row)
+        else {
+            return;
+        };
+        let Some((key, _)) = ConversationKey::identify(packet.protocol()) else {
+            return;
+        };
+        if ui.small_button("Show conversation").clicked() {
+            let scope = ConversationScope::around(index.points(), row);
+            self.conversation_panel.open = true;
+            self.conversation_panel
+                .request(ui.ctx(), &self.capture, index, scope.clone());
+            self.use_conversation(
+                ui.ctx(),
+                Some(ConversationSelection {
+                    key,
+                    scope,
+                    bounds: None,
+                }),
+            );
+        }
+    }
+
     fn inspector(&mut self, ui: &mut Ui) {
         let Some(row) = self.selected else {
             ui.weak("Select a packet to inspect its captured bytes");
             return;
         };
+        self.inspect_conversation(ui, row);
         if let Some(packet) = self
             .packet
             .as_ref()
@@ -559,7 +681,12 @@ impl Viewer {
         let Some(index) = self.index.clone() else {
             return;
         };
-        let filter = Filter::new(self.filter_protocol, &self.endpoint, &self.display_filter);
+        let conversation = self
+            .conversation
+            .as_ref()
+            .map(|active| (active.key, active.scope.clone()));
+        let filter = Filter::new(self.filter_protocol, &self.endpoint, &self.display_filter)
+            .with_conversation(conversation);
         if !filter.active() {
             self.clear_filter();
             return;
@@ -648,18 +775,23 @@ impl Viewer {
                 }
             }
         }
+        self.conversation_panel.poll(self.conversation.as_mut());
         if let Some(filtered) = poll(&mut self.filter_job) {
             match filtered {
                 Ok(filtered) => {
+                    let selected = self
+                        .selected
+                        .filter(|ordinal| {
+                            filtered
+                                .rows
+                                .binary_search_by_key(ordinal, |row| row.header.row)
+                                .is_ok()
+                        })
+                        .or_else(|| filtered.rows.first().map(|row| row.header.row));
                     self.filtered = Some(filtered);
                     self.generation += 1;
                     self.set_page(0);
-                    if let Some(ordinal) = self
-                        .filtered
-                        .as_ref()
-                        .and_then(|filtered| filtered.rows.first())
-                        .map(|row| row.header.row)
-                    {
+                    if let Some(ordinal) = selected {
                         self.focus_packet(ordinal);
                     } else {
                         self.selected = None;
@@ -678,5 +810,6 @@ impl Viewer {
             || self.windows.pending()
             || self.packet_job.is_some()
             || self.filter_job.is_some()
+            || self.conversation_panel.pending()
     }
 }

@@ -1,7 +1,8 @@
 use super::display_filter::{self, DisplayFilter};
 use crate::file_source::{FileSource, ReadCheck};
 use little_clip_core::engineering::packets::{
-    self, Format, Index, Packet, PacketRow, Protocol, Reader, Summary,
+    self, Conversation, ConversationKey, Conversations, Format, Index, Packet, PacketRow, Protocol,
+    Reader, Summary,
 };
 use std::{
     fs::File,
@@ -16,6 +17,8 @@ use std::{
 const SCAN_LIMIT: u64 = 4_000_000;
 const MATCH_LIMIT: usize = 64_000;
 const SCAN_PAGE: u64 = 512;
+const CONVERSATION_SCAN_LIMIT: u64 = 1_000_000;
+const CONVERSATION_LIMIT: usize = 32_768;
 
 pub(super) struct Capture {
     path: PathBuf,
@@ -125,29 +128,48 @@ impl Capture {
         filter: &Filter,
         cancel: &AtomicBool,
     ) -> Result<Filtered, String> {
-        let end = index.points().min(SCAN_LIMIT);
-        let display = self.prepare_display(&filter.display, end, cancel)?;
+        let rows = filter.rows(index.points());
+        let display = self.prepare_display(&filter.display, rows.end, cancel)?;
         self.read(cancel, |reader| {
             let mut result = Filtered {
                 rows: Vec::new(),
                 scanned: 0,
+                scope_size: filter.scope_size(index.points()),
             };
-            while result.scanned < end {
-                let next = (result.scanned + SCAN_PAGE).min(end);
-                let page = reader.read_window(index, result.scanned..next, cancel)?;
-                for row in page {
-                    result.scanned = row.header.row + 1;
-                    if filter.matches(&row) && display.matches(&row) {
-                        result.rows.push(row);
-                        if result.rows.len() == MATCH_LIMIT {
-                            return Ok(result);
-                        }
-                    }
+            result.scanned = visit_rows(reader, index, rows, cancel, |row| {
+                if filter.matches(&row) && display.matches(&row) {
+                    result.rows.push(row);
                 }
-            }
+                result.rows.len() < MATCH_LIMIT
+            })?;
             Ok(result)
         })
     }
+
+    pub fn conversations(
+        &self,
+        index: &Index,
+        scope: &ConversationScope,
+        cancel: &AtomicBool,
+    ) -> Result<ConversationSummary, String> {
+        self.read(cancel, |reader| {
+            let mut groups = Conversations::new(CONVERSATION_LIMIT);
+            let scanned = visit_rows(reader, index, scope.rows.clone(), cancel, |row| {
+                if scope.contains(&row) {
+                    groups.observe(&row);
+                }
+                true
+            })?;
+            Ok(ConversationSummary {
+                scope: scope.clone(),
+                scanned,
+                omitted: groups.omitted_packets,
+                unclassified: groups.unclassified_packets,
+                groups: groups.ranked(),
+            })
+        })
+    }
+
     fn prepare_display(
         &self,
         input: &str,
@@ -159,6 +181,11 @@ impl Capture {
         }
         if let Some(filter) = DisplayFilter::compile(input) {
             return Ok(DisplayMatches::Native(filter));
+        }
+        if limit > SCAN_LIMIT {
+            return Err(format!(
+                "This expression needs TShark, which searches the first {SCAN_LIMIT} packets"
+            ));
         }
         self.tshark_frames(input, limit, cancel)
             .map(DisplayMatches::Frames)
@@ -205,6 +232,27 @@ impl Capture {
     }
 }
 
+fn visit_rows(
+    reader: &mut Reader<BufReader<&File>>,
+    index: &Index,
+    mut rows: Range<u64>,
+    cancel: &AtomicBool,
+    mut visit: impl FnMut(PacketRow) -> bool,
+) -> Result<u64, packets::Error> {
+    let first = rows.start;
+    while rows.start < rows.end {
+        let end = (rows.start + SCAN_PAGE).min(rows.end);
+        for row in reader.read_window(index, rows.start..end, cancel)? {
+            let scanned = row.header.row - first + 1;
+            if !visit(row) {
+                return Ok(scanned);
+            }
+        }
+        rows.start = end;
+    }
+    Ok(rows.end - first)
+}
+
 fn frame_numbers(output: &[u8], limit: u64) -> Result<Vec<u32>, String> {
     let text = std::str::from_utf8(output).map_err(message)?;
     let mut rows = Vec::new();
@@ -226,6 +274,7 @@ pub(super) struct Filter {
     pub protocol: Option<Protocol>,
     endpoint: EndpointFilter,
     display: String,
+    conversation: Option<(ConversationKey, ConversationScope)>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -252,14 +301,44 @@ impl Filter {
             protocol,
             endpoint,
             display: display.trim().to_owned(),
+            conversation: None,
         }
     }
 
+    pub fn with_conversation(
+        mut self,
+        conversation: Option<(ConversationKey, ConversationScope)>,
+    ) -> Self {
+        self.conversation = conversation;
+        self
+    }
+
     pub fn active(&self) -> bool {
-        self.protocol.is_some() || self.endpoint != EndpointFilter::Any || !self.display.is_empty()
+        self.protocol.is_some()
+            || self.endpoint != EndpointFilter::Any
+            || !self.display.is_empty()
+            || self.conversation.is_some()
+    }
+
+    fn rows(&self, total: u64) -> Range<u64> {
+        self.conversation
+            .as_ref()
+            .map_or(0..total.min(SCAN_LIMIT), |(_, scope)| scope.rows.clone())
+    }
+
+    fn scope_size(&self, total: u64) -> u64 {
+        self.conversation
+            .as_ref()
+            .map_or(total, |(_, scope)| scope.total)
     }
 
     fn matches(&self, row: &PacketRow) -> bool {
+        if let Some((key, scope)) = &self.conversation
+            && (!scope.contains(row)
+                || !ConversationKey::identify(row.protocol).is_some_and(|(found, _)| found == *key))
+        {
+            return false;
+        }
         use packets::Endpoint;
         let data = row.protocol;
         if self
@@ -305,6 +384,45 @@ impl DisplayMatches {
 pub(super) struct Filtered {
     pub rows: Vec<PacketRow>,
     pub scanned: u64,
+    pub scope_size: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ConversationScope {
+    pub rows: Range<u64>,
+    pub total: u64,
+    pub time: Option<[i128; 2]>,
+}
+
+impl ConversationScope {
+    pub fn new(rows: Range<u64>, time: Option<[i128; 2]>) -> Self {
+        Self {
+            total: rows.end - rows.start,
+            rows: rows.start..(rows.start.saturating_add(CONVERSATION_SCAN_LIMIT)).min(rows.end),
+            time,
+        }
+    }
+
+    pub fn around(total: u64, row: u64) -> Self {
+        let start = row / CONVERSATION_SCAN_LIMIT * CONVERSATION_SCAN_LIMIT;
+        Self::new(start..total, None)
+    }
+
+    fn contains(&self, row: &PacketRow) -> bool {
+        self.time.is_none_or(|[low, high]| {
+            row.header
+                .time
+                .is_some_and(|time| (low..=high).contains(&time.unix_nanoseconds()))
+        })
+    }
+}
+
+pub(super) struct ConversationSummary {
+    pub scope: ConversationScope,
+    pub groups: Vec<Conversation>,
+    pub scanned: u64,
+    pub omitted: u64,
+    pub unclassified: u64,
 }
 
 pub(super) fn name(format: Format) -> &'static str {

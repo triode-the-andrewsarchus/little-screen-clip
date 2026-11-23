@@ -77,7 +77,7 @@ fn row_contents(
     );
 }
 
-fn protocol_color(protocol: Protocol) -> Color32 {
+pub(super) fn protocol_color(protocol: Protocol) -> Color32 {
     let [r, g, b] = match protocol {
         Protocol::Tcp => [125, 117, 245],
         Protocol::Udp => [69, 160, 247],
