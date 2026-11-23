@@ -16,6 +16,7 @@ use std::{
 const DECODE_EDGES: usize = 8192;
 
 mod i2s;
+mod samples;
 use i2s::I2sInputs;
 
 pub(in crate::file_manager) trait TraceInput: Send + Sync {
@@ -275,6 +276,7 @@ struct Decoder {
     mode: Mode,
     spi: SpiInputs,
     i2s: I2sInputs,
+    show_samples: bool,
     clock: usize,
     data: usize,
     uart: usize,
@@ -295,6 +297,7 @@ impl Decoder {
         Self {
             mode,
             i2s: I2sInputs::new(lanes),
+            show_samples: true,
             spi: SpiInputs {
                 clock: named_lane(lanes, &["SCK", "CLK", "SCLK", "SPI_CLK"]).unwrap_or(0),
                 select: named_lane(lanes, &["CS", "CS_N", "SS", "SS_N", "CE"]),
@@ -472,41 +475,37 @@ impl Decoder {
         }
         // Move the scroll-follow state out while the decoded result is borrowed.
         let mut followed = self.follow;
+        let mut show_samples = self.show_samples;
         let mut destination = None;
         match self.current(span) {
             Some(Ok(output)) => {
-                if !output.events.is_empty() && ui.button("Copy decoded").clicked() {
-                    use std::fmt::Write;
-                    let mut text = String::from("Start (s)\tEnd (s)\tEvent\n");
-                    for event in &output.events {
-                        let _ = writeln!(
-                            text,
-                            "{}\t{}\t{}",
-                            event.time.start,
-                            event.time.end,
-                            event_label(event.kind)
-                        );
-                    }
-                    ui.ctx().copy_text(text);
-                }
+                let events = &output.events;
+                decoded_controls(ui, events, self.mode, &mut show_samples);
                 coverage(ui, output, span);
-                let selected = active_event(&output.events, cursor);
+                let picked = if self.mode == Mode::I2s && show_samples && !events.is_empty() {
+                    samples::plot(ui, span, cursor, events)
+                } else {
+                    None
+                };
+                let cursor = picked.map(|index| events[index].time.start).or(cursor);
+                let selected = picked.or_else(|| active_event(events, cursor));
                 destination = event_list(
                     ui,
                     ("logic-protocol-rows", "Decoded event"),
                     cursor,
                     &mut followed,
                     selected,
-                    output.events.len(),
+                    events.len(),
                     |index| {
-                        let event = &output.events[index];
+                        let event = &events[index];
                         (
                             display_value(event.time.start, "s"),
                             event_label(event.kind),
                         )
                     },
                 )
-                .map(|index| output.events[index].clone());
+                .or(picked)
+                .map(|index| events[index].clone());
             }
             Some(Err(error)) => {
                 ui.colored_label(ui.visuals().error_fg_color, error);
@@ -516,8 +515,37 @@ impl Decoder {
             }
         }
         self.follow = followed;
+        self.show_samples = show_samples;
         destination
     }
+}
+
+fn decoded_controls(ui: &mut Ui, events: &[Event], mode: Mode, show_samples: &mut bool) {
+    if events.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Copy decoded").clicked() {
+            use std::fmt::Write;
+            let mut text = String::from("Start (s)\tEnd (s)\tEvent\n");
+            for event in events {
+                let _ = writeln!(
+                    text,
+                    "{}\t{}\t{}",
+                    event.time.start,
+                    event.time.end,
+                    event_label(event.kind)
+                );
+            }
+            ui.ctx().copy_text(text);
+        }
+        if mode == Mode::I2s {
+            if ui.button("Copy sample TSV").clicked() {
+                ui.ctx().copy_text(samples::tsv(events));
+            }
+            ui.toggle_value(show_samples, "Sample plot");
+        }
+    });
 }
 
 fn decode(capture: &dyn TraceInput, request: &Key, cancel: &AtomicBool) -> Result<Decoded, String> {

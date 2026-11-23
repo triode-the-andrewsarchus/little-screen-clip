@@ -48,10 +48,26 @@ impl Decoders {
         !self.panel.edges()
     }
 
-    pub(super) fn paint(&self, ui: &Ui, painter: &Painter, rect: Rect, span: &Range<f64>) {
+    pub(super) fn paint(
+        &self,
+        ui: &Ui,
+        painter: &Painter,
+        band: Rect,
+        plot_rect: Rect,
+        span: &Range<f64>,
+    ) {
+        if let Some(event) = self.panel.cursor_event(span, self.cursor) {
+            crate::file_manager::scope_view::plot::highlight(
+                painter,
+                plot_rect,
+                span,
+                event.time.clone(),
+                ui.visuals().selection.bg_fill.gamma_multiply(0.24),
+            );
+        }
         plot::annotations(
             painter,
-            rect,
+            band,
             span,
             self.panel.events(span),
             ui.visuals().selection.bg_fill,

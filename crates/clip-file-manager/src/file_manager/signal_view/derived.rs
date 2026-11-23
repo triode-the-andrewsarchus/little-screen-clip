@@ -316,7 +316,7 @@ impl Derived {
         );
         if self.decoders.active() {
             let band = Rect::from_min_max(pos2(rect.left(), area.top()), rect.right_top());
-            self.decoders.paint(ui, ui.painter(), band, span);
+            self.decoders.paint(ui, ui.painter(), band, rect, span);
             self.decoders.table(ui, span, pointed);
         }
         pointed.or(self.decoders.cursor())
