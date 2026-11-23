@@ -821,11 +821,13 @@ fn load_file_session(
     position: Option<super::DocumentPosition>,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
-    use super::DocumentPosition::{self, RawIq, VideoAudioRange, VideoAudioTrack};
+    use super::DocumentPosition::{self, IqSamples, RawIq, VideoAudioRange, VideoAudioTrack};
     let revision = position.and_then(DocumentPosition::source_revision);
-    if let Some(revision) = revision {
-        super::filesystem::check_revision(source, revision)?;
-    }
+    let pair_revision = match position {
+        Some(IqSamples { pair_revision, .. }) => pair_revision,
+        _ => None,
+    };
+    check_navigation_revision(source, revision, pair_revision, cancelled)?;
     let identity = FileSource::capture(source);
     let loaded = match position {
         Some(VideoAudioTrack) => {
@@ -853,12 +855,27 @@ fn load_file_session(
             return Err("Archive changed during opening".into());
         }
         identity.check()?;
-        if let Some(revision) = revision {
-            super::filesystem::check_revision(source, revision)?;
-        }
+        check_navigation_revision(source, revision, pair_revision, cancelled)?;
         Some(identity)
     };
     Ok((loaded, identity))
+}
+
+fn check_navigation_revision(
+    source: &Path,
+    revision: Option<u64>,
+    pair_revision: Option<u64>,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    if let Some(revision) = revision {
+        super::filesystem::check_revision(source, revision)?;
+    }
+    if let Some(expected) = pair_revision
+        && little_clip_core::engineering::iq::pair_revision(source, cancelled)? != expected
+    {
+        return Err("SigMF pair changed after the preview was prepared".into());
+    }
+    Ok(())
 }
 
 fn load(

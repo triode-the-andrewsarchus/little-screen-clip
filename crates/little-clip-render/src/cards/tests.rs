@@ -628,3 +628,136 @@ fn embroidery_cards_render_embedded_thread_colors_and_follow_replacements() {
     std::fs::rename(replacement, path).unwrap();
     assert!(renderer.file_preview(&item).is_none());
 }
+
+#[test]
+fn sigmf_card_updates_when_its_dataset_changes() {
+    use crate::file_preview::Preview;
+
+    let folder = tempfile::tempdir().unwrap();
+    let metadata = folder.path().join("signal.sigmf-meta");
+    let data = folder.path().join("signal.sigmf-data");
+    std::fs::write(
+        &metadata,
+        r#"{"global":{"core:version":"1.2.0","core:datatype":"ci8","core:sample_rate":1000},"captures":[],"annotations":[]}"#,
+    ).unwrap();
+    std::fs::write(&data, [0; 16]).unwrap();
+    let mut item = ClipItem::from_text("placeholder");
+    item.payload = ClipPayload::Text(metadata.to_string_lossy().into_owned());
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    let before = renderer.file_preview(&item).unwrap();
+    assert!(matches!(&*before, Preview::Iq(iq) if iq.power.samples.end == 8));
+    std::fs::write(&data, [0; 32]).unwrap();
+    let after = renderer.file_preview(&item).unwrap();
+    assert!(matches!(&*after, Preview::Iq(iq) if iq.power.samples.end == 16));
+}
+
+#[test]
+#[ignore = "requires the sourced and generated Engineering fixtures"]
+fn engineering_fixture_cards() {
+    use crate::file_preview::Preview;
+    use std::{path::PathBuf, time::Instant};
+
+    let directory = PathBuf::from(
+        std::env::var_os("LITTLE_CLIP_ENGINEERING_FIXTURES")
+            .expect("Engineering fixture directory"),
+    );
+    let cases = [
+        ("Oscilloscope captures/DS1054Z-C.wfm", "waveform"),
+        ("Oscilloscope captures/DS1054Z-A.csv", "waveform"),
+        (
+            "Oscilloscope captures/Siglent SDS1000X-E V1 sample.bin",
+            "waveform",
+        ),
+        ("Power recordings/Auto_Sample.jls", "waveform"),
+        ("Power recordings/Standby and load pulses.jls", "waveform"),
+        ("Logic captures/Sigrok Amulet LCD boot UART.sr", "logic"),
+        ("Logic captures/DSView protocol demo.dsl", "logic"),
+        ("Logic captures/Saleae long UART capture.sal", "logic"),
+        ("Logic captures/ChronoVu SPI flash.vcd", "logic"),
+        (
+            "Logic captures/Synthetic Saleae narrow pulse and gap.bin",
+            "logic",
+        ),
+        (
+            "Infrared and Sub-GHz captures/Flipper universal projector.ir",
+            "pulses",
+        ),
+        (
+            "Infrared and Sub-GHz captures/Generated pulse timing.sub",
+            "pulses",
+        ),
+        ("RF measurements/LiteVNA 2.4 GHz antenna.s1p", "touchstone"),
+        ("RF measurements/Generated three-port.ts", "touchstone"),
+        ("Packet captures/Generated four UDP bursts.cap", "packets"),
+        (
+            "Packet captures/Generated multi-interface capture.pcapng.lz4",
+            "packets",
+        ),
+        ("CAN logs/Vector trace window export.trace", "can"),
+        ("CAN logs/PEAK PCAN frames.trc", "can"),
+        ("NFC and RFID data/NFC/Flipper NTAG215 sample.nfc", "tags"),
+        ("NFC and RFID data/NFC/Generated Classic memory.eml", "tags"),
+        (
+            "NFC and RFID data/NFC/Proxmark Ultralight lab capture.trace",
+            "tags",
+        ),
+        (
+            "NFC and RFID data/RFID/Proxmark Q5 lab waveform.pm3",
+            "tags",
+        ),
+        ("1-Wire data/Generated DS1992 memory.ibtn", "tags"),
+        ("Radio programming/IC-R8600 memories.icf", "radio"),
+        (
+            "Radio programming/Charlottesville CHIRP channels.chirp",
+            "radio",
+        ),
+        (
+            "Signal flowgraphs/Noise power (GNU Radio 3.7 XML).grc",
+            "flowgraph",
+        ),
+        (
+            "Signal flowgraphs/Noise power (GNU Radio YAML).grc",
+            "flowgraph",
+        ),
+        ("SDR recordings/Synthetic retuned sweep.sigmf-meta", "iq"),
+        (
+            "SDR recordings/RTL-SDR Burnhard thermometer.sigmf-data",
+            "iq",
+        ),
+    ];
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    for (relative, expected) in cases {
+        let path = directory.join(relative);
+        let mut item = ClipItem::from_text("placeholder");
+        item.payload = ClipPayload::Text(path.to_string_lossy().into_owned());
+        item.title = path.file_name().unwrap().to_string_lossy().into_owned();
+        let start = Instant::now();
+        let preview = renderer
+            .file_preview(&item)
+            .unwrap_or_else(|| panic!("No engineering preview for {relative}"));
+        let elapsed = start.elapsed();
+        let kind = match &*preview {
+            Preview::Scope(_) => "waveform",
+            Preview::Logic(_) => "logic",
+            Preview::Pulses(_) => "pulses",
+            Preview::Touchstone(_) => "touchstone",
+            Preview::Packets(_) => "packets",
+            Preview::Can(_) => "can",
+            Preview::Tags(_) => "tags",
+            Preview::Radio(_) => "radio",
+            Preview::Flowgraph(_) => "flowgraph",
+            Preview::Iq(_) => "iq",
+            _ => "other",
+        };
+        assert_eq!(kind, expected, "{relative}");
+        let mut state = SlotManager::default();
+        state.push_left(item);
+        let start = Instant::now();
+        let (pixmap, _) = renderer.render_pixmap_with_previews(&state).unwrap();
+        assert!(pixmap.pixels().iter().any(|pixel| pixel.alpha() > 0));
+        println!(
+            "{relative}: prepare {elapsed:?}, render {:?}",
+            start.elapsed()
+        );
+    }
+}

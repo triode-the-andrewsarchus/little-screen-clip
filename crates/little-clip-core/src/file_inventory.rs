@@ -12,6 +12,13 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+/// Runtime-only resolved content and any separately observed companion.
+#[derive(Clone, Copy, Debug)]
+pub struct FormatHint {
+    format: file_format::Format,
+    sigmf_pair_revision: Option<u64>,
+}
+
 /// One enumeration snapshot, including metadata failures and source revision.
 ///
 /// Display labels remain in the existing persisted representation. `identity`
@@ -31,7 +38,7 @@ pub struct Entry {
     pub typescript: bool,
     /// Positive engineering signature, populated for ordinary browser listings.
     #[serde(skip)]
-    pub recognized_format: Option<file_format::Format>,
+    pub recognized_format: Option<FormatHint>,
     pub symlink: bool,
     pub hidden: bool,
     pub size: String,
@@ -61,10 +68,15 @@ impl Entry {
         self.regular_file
             .then(|| {
                 self.recognized_format
+                    .map(|hint| hint.format)
                     .or_else(|| file_format::Format::for_path(&self.path))
             })
             .flatten()
     }
+    pub fn sigmf_pair_revision(&self) -> Option<u64> {
+        self.recognized_format?.sigmf_pair_revision
+    }
+
     pub fn is_subtitles(&self) -> bool {
         self.regular_file && crate::subtitles::is_subtitle_path(&self.path)
     }
@@ -226,8 +238,7 @@ fn collect_directory(
             Ok(child) => {
                 let mut entry = read_entry(child, held.is_none());
                 if held.is_none() && entry.regular_file {
-                    entry.recognized_format =
-                        file_format::recognize_engineering(&entry.path, cancelled);
+                    entry.recognized_format = format_hint(&entry.path, cancelled);
                 }
                 if let Some(held) = held {
                     entry.path =
@@ -247,6 +258,9 @@ fn collect_directory(
     for entry in &entries {
         entry.path.hash(&mut hasher);
         entry.revision.hash(&mut hasher);
+        if let Some(pair) = entry.sigmf_pair_revision() {
+            pair.hash(&mut hasher);
+        }
         if let Some(world) = entry.minecraft_world {
             world.hash(&mut hasher);
         }
@@ -277,6 +291,22 @@ fn collect_directory(
         skipped,
         object,
         mount,
+    })
+}
+
+fn format_hint(path: &Path, cancelled: &AtomicBool) -> Option<FormatHint> {
+    use crate::file_format::Format;
+
+    if Format::for_path(path) == Some(Format::IqCapture) {
+        return Some(FormatHint {
+            format: Format::IqCapture,
+            sigmf_pair_revision: crate::engineering::iq::pair_revision(path, cancelled).ok(),
+        });
+    }
+    let format = file_format::recognize_engineering(path, cancelled)?;
+    Some(FormatHint {
+        format,
+        sigmf_pair_revision: None,
     })
 }
 
@@ -418,4 +448,41 @@ pub(crate) fn current_revision(path: &Path) -> Result<u64, String> {
     ))
     .hash(&mut version);
     Ok(version.finish())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changing_sigmf_dataset_changes_listing_pair_but_not_metadata_revision() {
+        let folder = tempfile::tempdir().unwrap();
+        let metadata = folder.path().join("radio.sigmf-meta");
+        let data = folder.path().join("radio.sigmf-data");
+        std::fs::write(
+            &metadata,
+            r#"{"global":{"core:version":"1.2.0","core:datatype":"ci8","core:sample_rate":1000},"captures":[],"annotations":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(&data, [0; 16]).unwrap();
+        let cancel = AtomicBool::new(false);
+        let before = read_directory(folder.path(), &cancel).unwrap();
+        std::fs::write(&data, [0; 32]).unwrap();
+        let after = read_directory(folder.path(), &cancel).unwrap();
+        let a = before
+            .entries
+            .iter()
+            .find(|entry| entry.path == metadata)
+            .unwrap();
+        let b = after
+            .entries
+            .iter()
+            .find(|entry| entry.path == metadata)
+            .unwrap();
+        assert_eq!(a.revision, b.revision);
+        assert!(a.sigmf_pair_revision().is_some());
+        assert!(b.sigmf_pair_revision().is_some());
+        assert_ne!(a.sigmf_pair_revision(), b.sigmf_pair_revision());
+        assert_ne!(before.signature, after.signature);
+    }
 }

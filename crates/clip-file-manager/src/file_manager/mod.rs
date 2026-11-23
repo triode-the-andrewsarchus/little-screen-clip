@@ -149,6 +149,7 @@ pub(super) enum DocumentPosition {
         first: u64,
         end: u64,
         revision: u64,
+        pair_revision: Option<u64>,
     },
     RawIq {
         revision: u64,

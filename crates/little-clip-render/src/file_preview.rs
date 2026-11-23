@@ -32,6 +32,7 @@ pub(crate) struct Iq {
     pub rate: Option<f64>,
     pub center: Option<f64>,
     pub duration: Option<f64>,
+    peer: Option<FileSource>,
 }
 
 pub(crate) enum Preview {
@@ -159,7 +160,13 @@ impl crate::ScreenRenderer {
                     && entry.extension.as_deref() == extension
             }) {
                 let entry = cache.files.remove(index).expect("cache entry exists");
-                if entry.preview.is_some() || entry.prepared.elapsed() < RETRY_AFTER {
+                let peer_changed = matches!(
+                    entry.preview.as_deref(),
+                    Some(Preview::Iq(iq)) if iq.peer.as_ref().is_some_and(|peer| peer.check().is_err())
+                );
+                if !peer_changed
+                    && (entry.preview.is_some() || entry.prepared.elapsed() < RETRY_AFTER)
+                {
                     let preview = entry.preview.clone();
                     cache.files.push_back(entry);
                     return preview;

@@ -106,6 +106,8 @@ fn admits_either_pair_member_and_revalidates_both_revisions() {
     let b = Recording::open_sigmf(&data, None, ReadCheck::default(), &cancel).unwrap();
     assert_eq!(a.revision_key(), b.revision_key());
     assert_ne!(a.source(), b.source());
+    assert_eq!(a.companion_source(), Some(b.source()));
+    assert_eq!(b.companion_source(), Some(a.source()));
     assert_eq!(a.capture().sample_count(), 3);
     assert_eq!(a.capture().duration_seconds(), None);
     std::fs::write(&metadata, br#"{"global":{"core:dataset":"../outside.iq"}}"#).unwrap();
@@ -117,6 +119,53 @@ fn admits_either_pair_member_and_revalidates_both_revisions() {
         b.checked(&cancel, |capture| capture.read_samples(0..1, &cancel))
             .is_err()
     );
+}
+
+#[test]
+fn pair_cache_revision_tracks_both_members_and_rejects_the_wrong_dataset() {
+    let directory = tempfile::tempdir().unwrap();
+    let metadata = directory.path().join("recording.sigmf-meta");
+    let data = directory.path().join("recording.sigmf-data");
+    let custom = directory.path().join("recording.iq");
+    let replacement = directory.path().join("replacement.iq");
+    let cancel = AtomicBool::new(false);
+    std::fs::write(
+        &metadata,
+        br#"{"global":{"core:version":"1.0.0","core:datatype":"ci8"},"captures":[],"annotations":[]}"#,
+    ).unwrap();
+    std::fs::write(&data, [0; 4]).unwrap();
+    let original = pair_revision(&metadata, &cancel).unwrap();
+    assert_eq!(pair_revision(&data, &cancel).unwrap(), original);
+    std::fs::write(&replacement, [0; 4]).unwrap();
+    std::fs::rename(&replacement, &data).unwrap();
+    let revised_data = pair_revision(&data, &cancel).unwrap();
+    assert_ne!(original, revised_data);
+    std::fs::write(
+        &metadata,
+        br#"{"global":{"core:version":"1.0.0","core:datatype":"ci8","core:sample_rate":1000},"captures":[],"annotations":[]}"#,
+    ).unwrap();
+    assert_ne!(pair_revision(&data, &cancel).unwrap(), revised_data);
+    std::fs::write(
+        &metadata,
+        br#"{"global":{"core:version":"1.0.0","core:datatype":"ci8","core:dataset":"recording.iq"},"captures":[],"annotations":[]}"#,
+    ).unwrap();
+    assert!(pair_revision(&data, &cancel).is_err());
+    assert!(pair_revision(&metadata, &cancel).is_err());
+    std::fs::rename(&data, &custom).unwrap();
+    assert_ne!(pair_revision(&metadata, &cancel).unwrap(), revised_data);
+    let sigmf = Recording::open_sigmf(&metadata, None, ReadCheck::default(), &cancel).unwrap();
+    let raw = Recording::open_raw(
+        &custom,
+        interpret(Encoding::Ci8),
+        None,
+        ReadCheck::default(),
+        &cancel,
+    )
+    .unwrap();
+    assert_eq!(sigmf.companion_source(), Some(raw.source()));
+    assert_eq!(raw.companion_source(), None);
+    cancel.store(true, Ordering::Relaxed);
+    assert!(pair_revision(&metadata, &cancel).is_err());
 }
 
 #[test]

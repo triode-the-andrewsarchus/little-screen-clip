@@ -10,6 +10,7 @@ use crate::file_source::{FileSource, ReadCheck};
 use rustfft::num_complex::Complex32;
 use std::{
     fs::File,
+    hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
@@ -301,6 +302,17 @@ impl Recording {
         &self.data
     }
 
+    /// Returns the other retained SigMF member, if this is a paired recording.
+    pub fn companion_source(&self) -> Option<&FileSource> {
+        self.metadata.as_ref().map(|(_, source)| {
+            if self.selected_metadata {
+                &self.data
+            } else {
+                source
+            }
+        })
+    }
+
     pub fn set_read_check(&mut self, check: ReadCheck) {
         self.check = check;
     }
@@ -375,6 +387,23 @@ fn has_extension(path: &Path, extension: &str) -> bool {
 /// Filename hint for the two SigMF recording members.
 pub fn is_sigmf_path(path: &Path) -> bool {
     has_extension(path, "sigmf-meta") || has_extension(path, "sigmf-data")
+}
+
+/// Returns a cache revision covering both named members of a SigMF pair.
+///
+/// Uses the guarded recording open, which reads bounded metadata and checks
+/// the dataset's layout from file metadata without reading any samples.
+/// Both selected members yield the same revision when the pair is unchanged.
+///
+/// # Errors
+/// Returns an error for cancellation or when either member cannot be opened
+/// and validated under the SigMF pairing rules.
+pub fn pair_revision(path: &Path, cancel: &AtomicBool) -> Result<u64, String> {
+    check_cancel(cancel)?;
+    let recording = Recording::open_sigmf(path, None, ReadCheck::default(), cancel)?;
+    let mut hasher = DefaultHasher::new();
+    recording.revision_key().hash(&mut hasher);
+    Ok(hasher.finish())
 }
 
 fn validate_rate(rate: Option<f64>) -> Result<(), String> {

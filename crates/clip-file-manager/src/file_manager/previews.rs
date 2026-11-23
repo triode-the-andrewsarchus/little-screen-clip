@@ -20,10 +20,14 @@ pub(super) fn strip_slots(count: usize, capacity: usize) -> Vec<Option<usize>> {
         .chain((count - last + 1..=count).map(Some))
         .collect()
 }
-type EntryRevision = (u64, Option<u64>);
+type EntryRevision = (u64, Option<u64>, Option<u64>);
 
 fn entry_revision(entry: &Entry) -> EntryRevision {
-    (entry.revision, entry.minecraft_world)
+    (
+        entry.revision,
+        entry.minecraft_world,
+        entry.sigmf_pair_revision(),
+    )
 }
 
 type RasterCacheKey = (u32, u32, Vec<[u8; 3]>);

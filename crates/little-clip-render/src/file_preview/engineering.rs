@@ -72,6 +72,7 @@ fn load_iq(path: &Path, cancel: &AtomicBool) -> Option<Iq> {
                 rate: capture.metadata().sample_rate_hz,
                 center: capture.tuning_at(0).and_then(|tuning| tuning.center_hz),
                 duration: capture.duration_seconds(),
+                peer: recording.companion_source().cloned(),
             })
         })
         .ok()

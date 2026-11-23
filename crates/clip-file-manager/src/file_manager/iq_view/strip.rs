@@ -151,6 +151,7 @@ pub(in crate::file_manager) fn show(
             first: range.start,
             end: range.end,
             revision: entry.revision,
+            pair_revision: entry.sigmf_pair_revision(),
         });
     (position, engaged)
 }
