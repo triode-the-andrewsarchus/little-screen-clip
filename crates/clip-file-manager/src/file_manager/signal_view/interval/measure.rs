@@ -1,4 +1,4 @@
-use super::overlap;
+use super::{overlap, power};
 use crate::file_manager::{
     logic_view::protocols::DECODE_EDGES,
     scope_view::reads::{ANALYSIS_SAMPLES, centered_rows, sample_extrema},
@@ -86,10 +86,18 @@ pub(super) struct Duty {
 }
 
 impl Input {
-    pub fn read(self, requested: Range<f64>, cancel: &AtomicBool) -> Result<Measurement, String> {
+    pub fn read(
+        self,
+        requested: Range<f64>,
+        scope: power::Scope,
+        cancel: &AtomicBool,
+    ) -> Result<Measurement, String> {
         match self {
             Self::Samples(recording, index) => recording.checked(cancel, |capture| {
-                let power = capture.power_totals(requested.clone(), cancel)?;
+                let power = match scope {
+                    power::Scope::Each => capture.power_totals(requested.clone(), cancel)?,
+                    power::Scope::Common(windows) => capture.power_totals_for(windows, cancel)?,
+                };
                 let waveform = samples(capture, index, requested, cancel)?;
                 Ok(Measurement { waveform, power })
             }),
@@ -235,7 +243,7 @@ mod tests {
         };
         let report = input
             .clone()
-            .read(0.0005..0.008, &cancel)
+            .read(0.0005..0.008, power::Scope::Each, &cancel)
             .unwrap()
             .waveform
             .unwrap();
@@ -253,6 +261,12 @@ mod tests {
         assert!((high.percent - 75.0).abs() < 1e-10);
         assert!((low.cycle.start - 0.001).abs() < 1e-12);
         assert!((high.cycle.start - 0.002).abs() < 1e-12);
-        assert!(input.read(0.009..0.01, &cancel).unwrap().waveform.is_none());
+        assert!(
+            input
+                .read(0.009..0.01, power::Scope::Each, &cancel)
+                .unwrap()
+                .waveform
+                .is_none()
+        );
     }
 }

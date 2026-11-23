@@ -230,6 +230,13 @@ pub enum Capture {
     Audio(crate::audio::sampled_wave::SampledWave),
 }
 
+/// Independent time intervals for the current and recorded power signals.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PowerWindows {
+    pub current: Option<Range<f64>>,
+    pub power: Option<Range<f64>>,
+}
+
 #[derive(Default)]
 pub struct PowerTotals {
     pub charge: Option<Integral>,
@@ -244,6 +251,13 @@ pub struct Integral {
     pub partial: bool,
     /// Native time interval covered by the integrated sample cells.
     pub time: Range<f64>,
+}
+
+fn power_channel<'a>(channels: &'a [Channel], unit: &str) -> Option<(usize, &'a Channel)> {
+    channels
+        .iter()
+        .enumerate()
+        .find(|(_, channel)| channel.unit == unit)
 }
 
 impl Capture {
@@ -281,20 +295,36 @@ impl Capture {
         span: Range<f64>,
         cancel: &AtomicBool,
     ) -> Result<Option<PowerTotals>, String> {
+        self.power_totals_for(
+            PowerWindows {
+                current: Some(span.clone()),
+                power: Some(span),
+            },
+            cancel,
+        )
+    }
+
+    /// Measures charge and energy only in the requested intervals.
+    /// An absent interval skips the corresponding integration.
+    pub fn power_totals_for(
+        &self,
+        windows: PowerWindows,
+        cancel: &AtomicBool,
+    ) -> Result<Option<PowerTotals>, String> {
         let Self::Power(capture) = self else {
             return Ok(None);
         };
         let mut totals = PowerTotals::default();
-        if span.is_empty() || !span.start.is_finite() || !span.end.is_finite() {
-            return Ok(Some(totals));
-        }
-        for (unit, output) in [("A", &mut totals.charge), ("W", &mut totals.energy)] {
-            let Some((index, channel)) = capture
-                .channels()
-                .iter()
-                .enumerate()
-                .find(|(_, channel)| channel.unit == unit)
+        for (unit, requested, output) in [
+            ("A", windows.current, &mut totals.charge),
+            ("W", windows.power, &mut totals.energy),
+        ] {
+            let Some(span) = requested
+                .filter(|span| !span.is_empty() && span.start.is_finite() && span.end.is_finite())
             else {
+                continue;
+            };
+            let Some((index, channel)) = power_channel(capture.channels(), unit) else {
                 continue;
             };
             let time = span.start.max(channel.start_seconds)
@@ -400,6 +430,22 @@ impl Recording {
 
     pub fn power_recording(&self) -> bool {
         matches!(self.capture, Capture::Power(_))
+    }
+
+    /// Nominal extents of the recorded channels used for power totals.
+    pub fn power_coverage(&self) -> Option<PowerWindows> {
+        if !self.power_recording() {
+            return None;
+        }
+        let extent = |unit| {
+            let (_, channel) = power_channel(self.channels(), unit)?;
+            let range = channel.start_seconds..channel.time_at(channel.sample_count);
+            (!range.is_empty()).then_some(range)
+        };
+        Some(PowerWindows {
+            current: extent("A"),
+            power: extent("W"),
+        })
     }
 
     pub fn triggered_segments(&self) -> bool {

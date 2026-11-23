@@ -57,6 +57,7 @@ struct PowerVisit {
     source: u64,
     selection: power::Selection,
     request: Range<f64>,
+    scope: power::Scope,
     clock: Clock,
     before: Range<f64>,
     scroll: f32,
@@ -72,6 +73,8 @@ enum Reveal {
 pub(super) struct Shared {
     pub pin: Option<Pin>,
     reads: BTreeMap<u64, Query>,
+    power_basis: power::Basis,
+    power_comparison: Option<power::Comparison>,
     visit: Option<PowerVisit>,
     restore_scroll: Option<f32>,
 }
@@ -87,6 +90,7 @@ impl Shared {
     pub fn set(&mut self, pin: Option<Pin>) {
         self.pin = pin;
         self.reads.clear();
+        self.power_comparison = None;
         self.visit = None;
         self.restore_scroll = None;
     }
@@ -134,8 +138,29 @@ impl Shared {
             self.set(None);
             return None;
         }
+        self.power_controls(ui, sources, preview, projected.as_ref(), view, domain);
         self.visit_controls(ui, sources, view, domain);
         projected
+    }
+
+    fn power_controls(
+        &mut self,
+        ui: &mut Ui,
+        sources: &[Source],
+        preview: Option<alignment::Suggestion>,
+        projected: Option<&Range<f64>>,
+        view: &mut Range<f64>,
+        domain: &Range<f64>,
+    ) {
+        self.power_comparison =
+            projected.and_then(|range| power::Comparison::from_sources(sources, preview, range));
+        if let Some(comparison) = &self.power_comparison {
+            let before = self.power_basis;
+            comparison.controls(ui, &mut self.power_basis);
+            if self.power_basis != before {
+                self.end_visit(ui, view, domain);
+            }
+        }
     }
 
     pub fn source(
@@ -149,10 +174,18 @@ impl Shared {
         scroll: f32,
     ) -> Option<Range<f64>> {
         let native = self.pin.as_ref()?.native_for(source.id, clock, shared?);
+        let scope = self
+            .power_comparison
+            .as_ref()
+            .filter(|_| self.power_basis == power::Basis::Common)
+            .map_or(power::Scope::Each, |comparison| {
+                comparison.scope(source, clock)
+            });
         self.visit.take_if(|visit| {
-            visit.source == source.id && (visit.request != native || visit.clock != clock)
+            visit.source == source.id
+                && (visit.request != native || visit.scope != scope || visit.clock != clock)
         });
-        match self.measurement_ui(ui, source, &native, clock) {
+        match self.measurement_ui(ui, source, &native, &scope, clock) {
             Some(Reveal::Span(span)) => {
                 self.visit = None;
                 focus(view, domain, &clock.workspace_range(&span));
@@ -168,6 +201,7 @@ impl Shared {
                     source: source.id,
                     selection,
                     request: native.clone(),
+                    scope,
                     clock,
                     before,
                     scroll,
@@ -213,7 +247,13 @@ impl Shared {
                 ui.small_button("Back to shared readings").clicked()
             })
             .inner;
-        if back && let Some(visit) = self.visit.take() {
+        if back {
+            self.end_visit(ui, view, domain);
+        }
+    }
+
+    fn end_visit(&mut self, ui: &Ui, view: &mut Range<f64>, domain: &Range<f64>) {
+        if let Some(visit) = self.visit.take() {
             *view = timeline::fit(domain, visit.before, 0.0);
             self.restore_scroll = Some(visit.scroll);
             ui.ctx().request_repaint();
@@ -225,6 +265,7 @@ impl Shared {
         ui: &mut Ui,
         source: &Source,
         requested: &Range<f64>,
+        scope: &power::Scope,
         clock: Clock,
     ) -> Option<Reveal> {
         let (input, name) = match &source.capture {
@@ -254,15 +295,22 @@ impl Shared {
             }
             Capture::Unavailable(_) => return None,
         };
+        let wants_power = scope.has_windows()
+            && matches!(&input, Input::Samples(recording, _) if recording.power_recording());
+        let request = Request {
+            input,
+            native: requested.clone(),
+            power: scope.clone(),
+        };
         let query = self.reads.entry(source.id).or_default();
-        query.update(
-            ui.ctx(),
-            Request {
-                input,
-                native: requested.clone(),
-            },
-        );
-        let result = query.result.as_ref().map(|(_, result)| result);
+        query.update(ui.ctx(), &request);
+        let result = query.result.as_ref();
+        let waveform = result
+            .filter(|(key, outcome)| *key == request || outcome.is_ok())
+            .map(|(_, outcome)| outcome);
+        let totals = result
+            .filter(|(key, _)| *key == request)
+            .map(|(_, outcome)| outcome);
         let readout = ui.scope(|ui| {
             ui.spacing_mut().interact_size.y = 22.0;
             ui.spacing_mut().button_padding.y = 2.0;
@@ -272,7 +320,7 @@ impl Shared {
                         timeline::shared_color(ui.visuals()),
                         format!("{} · {name}", source.name()),
                     );
-                    match result {
+                    match waveform {
                         None => {
                             ui.weak("Measuring shared range…");
                             None
@@ -291,11 +339,22 @@ impl Shared {
                     }
                 })
                 .inner;
-            result
-                .and_then(|measured| measured.as_ref().ok()?.power.as_ref())
-                .and_then(|power| power::readings(ui, power, clock))
-                .map(Reveal::Power)
-                .or_else(|| span.map(Reveal::Span))
+            let power = if wants_power {
+                match totals {
+                    Some(Ok(result)) => result
+                        .power
+                        .as_ref()
+                        .and_then(|power| power::readings(ui, power, scope, clock)),
+                    Some(Err(_)) => None,
+                    None => {
+                        ui.weak("Measuring power totals…");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            power.map(Reveal::Power).or_else(|| span.map(Reveal::Span))
         });
         if matches!(readout.inner, Some(Reveal::Span(_))) {
             readout.response.scroll_to_me(Some(egui::Align::TOP));
@@ -308,6 +367,13 @@ impl Shared {
 struct Request {
     input: Input,
     native: Range<f64>,
+    power: power::Scope,
+}
+
+impl Request {
+    fn same_waveform(&self, other: &Self) -> bool {
+        self.input == other.input && self.native == other.native
+    }
 }
 
 type Outcome = Result<Measurement, String>;
@@ -319,21 +385,21 @@ struct Query {
 }
 
 impl Query {
-    fn update(&mut self, ctx: &Context, request: Request) {
-        self.pending.take_if(|(key, _)| *key != request);
-        self.result.take_if(|(key, _)| *key != request);
+    fn update(&mut self, ctx: &Context, request: &Request) {
+        self.pending.take_if(|(key, _)| *key != *request);
+        self.result.take_if(|(key, _)| !key.same_waveform(request));
         if let Some(result) = take_query_result(&mut self.pending) {
             self.result = Some(result);
         }
-        if self.pending.is_none() && self.result.is_none() {
+        if self.pending.is_none() && self.result.as_ref().is_none_or(|(key, _)| key != request) {
             let load = request.clone();
             let repaint = ctx.clone();
             let job = Task::start(&JOBS, Duration::from_secs(20), move |cancel| {
-                let result = load.input.read(load.native, cancel);
+                let result = load.input.read(load.native, load.power, cancel);
                 repaint.request_repaint();
                 result
             });
-            self.pending = Some((request, job));
+            self.pending = Some((request.clone(), job));
         }
         if self.pending.is_some() {
             ctx.request_repaint_after(Duration::from_millis(24));

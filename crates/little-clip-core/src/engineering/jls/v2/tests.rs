@@ -51,6 +51,11 @@ impl Fixture {
         let mut source = vec![0; 64];
         source.extend_from_slice(b"Test device\0\x1fTest vendor\0\x1fJS220\0\x1f");
         self.chunk(SOURCE_DEF, 1, &source);
+        self.signal_definition(1, datatype, b"Current\0\x1fA\0\x1f")
+            .1
+    }
+
+    fn signal_definition(&mut self, id: u16, datatype: u32, label: &[u8]) -> (u64, u64) {
         let mut signal = vec![0; 128];
         signal[..2].copy_from_slice(&1u16.to_le_bytes());
         signal[4..8].copy_from_slice(&datatype.to_le_bytes());
@@ -59,11 +64,11 @@ impl Fixture {
         signal[16..20].copy_from_slice(&4u32.to_le_bytes());
         signal[20..24].copy_from_slice(&8u32.to_le_bytes());
         signal[24..28].copy_from_slice(&2u32.to_le_bytes());
-        signal.extend_from_slice(b"Current\0\x1fA\0\x1f");
-        let def = self.chunk(SIGNAL_DEF, 1, &signal);
-        let head = self.chunk(FSR_HEAD, 1, &[0; 128]);
+        signal.extend_from_slice(label);
+        let def = self.chunk(SIGNAL_DEF, id, &signal);
+        let head = self.chunk(FSR_HEAD, id, &[0; 128]);
         self.link(def, head);
-        head
+        (def, head)
     }
 
     fn track_head(&self, head: u64, offsets: &[u64]) {
@@ -205,6 +210,50 @@ fn power_totals_weight_both_fringe_samples_and_reject_missing_cells() {
     let inside = (time(1) + 0.00025)..(time(1) + 0.0005);
     assert!((charge(inside).unwrap().value - 0.001).abs() < 1e-12);
     assert!(charge((time(3) + 0.00075)..(time(4) + 0.00025)).is_none());
+}
+
+#[test]
+fn power_totals_use_separate_current_and_power_windows() {
+    use crate::engineering::waveforms::{Capture as Waveform, PowerWindows};
+
+    let mut fixture = Fixture::new();
+    let current_head = fixture.definitions(0x2004);
+    let (power_def, power_head) = fixture.signal_definition(2, 0x2004, b"Power\0\x1fW\0\x1f");
+    fixture.link(current_head, power_def);
+    let current = fixture.table(FSR_DATA, 1, 0, 4, 32, &floats(&[1.0, 2.0, 3.0, 4.0]));
+    let power = fixture.table(FSR_DATA, 2, 0, 4, 32, &floats(&[10.0, 20.0, 40.0, 80.0]));
+    fixture.track_head(current_head, &[current]);
+    fixture.track_head(power_head, &[power]);
+
+    let capture = Waveform::Power(Capture::open(fixture.finish()).unwrap());
+    let cancel = AtomicBool::new(false);
+    let current = 0.0005..0.00225;
+    let power = 0.0015..0.00325;
+    let measure = |current| {
+        capture
+            .power_totals_for(
+                PowerWindows {
+                    current,
+                    power: Some(power.clone()),
+                },
+                &cancel,
+            )
+            .unwrap()
+            .unwrap()
+    };
+
+    let totals = measure(Some(current.clone()));
+    let charge = totals.charge.unwrap();
+    assert_eq!(charge.time, current);
+    assert_eq!(charge.channel, 0);
+    assert!((charge.value - 0.00325).abs() < 1e-12);
+    let energy = totals.energy.unwrap();
+    assert_eq!(energy.time, power);
+    assert_eq!(energy.channel, 1);
+    assert!((energy.value - 0.07).abs() < 1e-12);
+    let energy_only = measure(None);
+    assert!(energy_only.charge.is_none());
+    assert_eq!(energy_only.energy.unwrap().value, energy.value);
 }
 
 #[test]

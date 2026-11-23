@@ -190,6 +190,12 @@ The shared measurements name the contributing recording. Average current and cha
 
 The desktop check reopened a recipe with a 1 kHz standby capture and a 2 kHz load-step capture shifted forward by 62.5 ms. A’s 557.25 ms–2.51175 s interval produced 0.135729 mAh and 0.678646 mWh. B contributed through 2.0625 s and showed 0.278507 mAh and 0.835521 mWh with partial coverage. B’s energy opened the Power lane and marked its interval across the 1.5–2.25 W step. Back returned to both readings, and A’s charge opened its 250 mA Current lane. The 800 × 620 check also returned to Files without a discard prompt. Core tests cover a missing boundary sample and a range contained within one sample cell.
 
+## 21. Compare Joulescope totals over the same time
+
+With multiple power recordings, Common interval measures the part of the pin covered by all their corrected clocks. Current and power use their own common intervals. Each recording restores the totals over its own coverage of the pin. The waveform statistics still describe the pin in both modes. A power total opens the exact interval used for that reading, and Back restores the viewport and scroll position. Switching the comparison mode counts as browsing.
+
+With the 1 kHz and 2 kHz pair, the pin ran from 557.25 ms to 2.51175 s and the common interval ended at 2.0625 s. A measured 0.104531 mAh and 0.522656 mWh on the common interval. B measured 0.278507 mAh and 0.835521 mWh. Each recording restored A’s 0.678646 mWh and B’s partial label. The shorter Power interval opened from A’s reading and Back restored both rows at 1500 × 1000 and 800 × 620. A second check showed no common coverage after shifting B outside the pin. Removing B’s Power signal from a fixture kept the common current comparison and identified the missing power coverage. The core test integrates different Current and Power intervals in the same recording.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.
