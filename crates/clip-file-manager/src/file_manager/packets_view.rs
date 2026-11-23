@@ -23,7 +23,7 @@ use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
 use capture::{Capture, ConversationScope, Filter, Filtered, TimeRestriction};
 use conversations::{Action as ConversationAction, Selection as ConversationSelection};
 use egui::{Context, Id, Layout, PointerButton, Sense, Ui, vec2};
-use filter_ui::AppliedFilter;
+use filter_ui::{AppliedFilter, FilterCheckpoint, FilterRequest};
 use little_clip_core::{
     BackgroundJobs,
     engineering::packets::{
@@ -63,7 +63,8 @@ pub(super) struct Viewer {
     protocol_colors: bool,
     endpoint: String,
     filtered: Option<AppliedFilter>,
-    filter_job: Option<(Filter, Job<Filtered>)>,
+    filter_job: Option<(FilterRequest, Job<Filtered>)>,
+    previous_filter: Option<FilterCheckpoint>,
     filter_error: Option<String>,
     conversation_panel: conversations::Panel,
     conversation: Option<ConversationSelection>,
@@ -101,6 +102,7 @@ impl Viewer {
             endpoint: String::new(),
             filtered: None,
             filter_job: None,
+            previous_filter: None,
             filter_error: None,
             conversation_panel: conversations::Panel::default(),
             conversation: None,
@@ -180,7 +182,11 @@ impl Viewer {
                     .on_hover_text("Seeking may decode earlier data in the compressed stream");
             }
             if let Some(range) = self.range.as_ref() {
-                ui.monospace(format!("Packets {}–{}", range.start + 1, range.end));
+                ui.monospace(format!(
+                    "Source selection  {}–{}",
+                    range.start + 1,
+                    range.end
+                ));
             }
             self.copy_action(ui, copies);
             if ui
@@ -311,17 +317,8 @@ impl Viewer {
             .request(ctx, &self.capture, index, scope);
     }
 
-    fn use_conversation(&mut self, ctx: &Context, mut selection: Option<ConversationSelection>) {
-        self.conversation_panel
-            .highlight(selection.as_ref().map(|active| active.key));
-        if let Some(active) = &mut selection {
-            active.bounds = self.conversation_panel.bounds(active).or(active.bounds);
-        }
-        self.conversation = selection;
-        let scope = self
-            .conversation
-            .as_ref()
-            .map(|active| (active.key, active.scope.clone()));
+    fn use_conversation(&mut self, ctx: &Context, selection: Option<ConversationSelection>) {
+        let scope = selection.map(|active| (active.key, active.scope));
         let query = self.filter_basis().with_conversation(scope);
         self.request_filter(ctx, query);
     }

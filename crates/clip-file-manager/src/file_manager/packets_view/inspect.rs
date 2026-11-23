@@ -5,6 +5,11 @@ use little_clip_core::engineering::packets::{
 };
 use std::ops::Range;
 
+pub(super) enum FieldFilter {
+    Add(String),
+    Replace(String),
+}
+
 #[derive(Default)]
 pub(super) struct Inspector {
     row: Option<u64>,
@@ -23,7 +28,7 @@ impl Inspector {
         interface: Option<&Interface>,
         origin: Option<i128>,
         draft: bool,
-    ) -> Option<String> {
+    ) -> Option<FieldFilter> {
         if self.row != Some(packet.header.row) {
             self.row = Some(packet.header.row);
             self.layers = packet.layers();
@@ -105,7 +110,7 @@ impl Inspector {
         }
     }
 
-    fn tree(&mut self, ui: &mut Ui, draft: bool) -> Option<String> {
+    fn tree(&mut self, ui: &mut Ui, draft: bool) -> Option<FieldFilter> {
         let mut filter = None;
         let mut selection = None;
         let height = (ui.available_height() * 0.53).max(52.0);
@@ -162,9 +167,9 @@ impl Inspector {
                             }
                             let exact = self.field == Some(addressed);
                             if let Some(expression) = field.filter.as_ref().filter(|_| exact) {
-                                if field_actions(ui, expression, draft, &mut self.reveal_field) {
-                                    filter = Some(expression.clone());
-                                }
+                                filter =
+                                    field_actions(ui, expression, draft, &mut self.reveal_field)
+                                        .or(filter.take());
                             } else {
                                 let reveal = self.field.map_or(selected, |_| exact);
                                 reveal_tree_row(&response, reveal, &mut self.reveal_field);
@@ -251,20 +256,38 @@ fn reveal_tree_row(response: &egui::Response, selected: bool, pending: &mut bool
     }
 }
 
-fn field_actions(ui: &mut Ui, expression: &str, draft: bool, reveal: &mut bool) -> bool {
+fn field_actions(
+    ui: &mut Ui,
+    expression: &str,
+    draft: bool,
+    reveal: &mut bool,
+) -> Option<FieldFilter> {
     let actions = ui.horizontal_wrapped(|ui| {
         let label = if draft {
             "Add to filter draft"
         } else {
-            "Filter by this field"
+            "Add criterion"
         };
-        let applied = ui.small_button(label).clicked();
+        let add = ui
+            .small_button(label)
+            .on_hover_text("Keep the other criteria and require this field too")
+            .clicked();
+        let replace = ui
+            .small_button("Replace query")
+            .on_hover_text("Use this field alone and retain any explicit time filter")
+            .clicked();
         if ui.small_button("Copy filter").clicked() {
             ui.ctx().copy_text(expression.to_owned());
         }
         ui.add(egui::Label::new(egui::RichText::new(expression).monospace()).truncate())
             .on_hover_text(expression);
-        applied
+        if add {
+            Some(FieldFilter::Add(expression.to_owned()))
+        } else if replace {
+            Some(FieldFilter::Replace(expression.to_owned()))
+        } else {
+            None
+        }
     });
     reveal_tree_row(&actions.response, true, reveal);
     actions.inner

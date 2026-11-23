@@ -359,6 +359,21 @@ impl Filter {
         self.endpoint.description()
     }
 
+    pub fn endpoint_text(&self) -> String {
+        match &self.endpoint {
+            EndpointFilter::Port(port) => port.to_string(),
+            endpoint => endpoint.description().unwrap_or_default(),
+        }
+    }
+
+    pub fn replace_criteria(&self, display: String) -> Self {
+        Self {
+            display,
+            time_restriction: self.time_restriction.clone(),
+            ..Self::default()
+        }
+    }
+
     pub fn with_conversation(
         mut self,
         conversation: Option<(ConversationKey, ConversationScope)>,
@@ -367,8 +382,8 @@ impl Filter {
         self
     }
 
-    pub fn conversation(&self) -> Option<ConversationKey> {
-        self.conversation.as_ref().map(|(key, _)| *key)
+    pub fn conversation(&self) -> Option<&(ConversationKey, ConversationScope)> {
+        self.conversation.as_ref()
     }
 
     pub fn with_time(mut self, restriction: Option<TimeRestriction>) -> Self {
