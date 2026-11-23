@@ -89,6 +89,10 @@ enum Wave {
 }
 
 impl Viewer {
+    pub(in crate::file_manager) fn analysis_edits(&self) -> protocols::SessionSettings {
+        self.protocols.session_settings().analysis_edits()
+    }
+
     pub(super) fn restoring_details(&self) -> bool {
         self.show_transitions && self.protocols.decoding()
     }

@@ -35,6 +35,12 @@ pub(super) struct Settings {
     pub editor: StageFocus,
 }
 
+impl PartialEq for Settings {
+    fn eq(&self, other: &Self) -> bool {
+        self.stages == other.stages && self.interval == other.interval
+    }
+}
+
 impl Settings {
     fn rows(&self, channel: &Channel, extent: &Range<f64>) -> Range<usize> {
         let span = self.interval.as_ref().unwrap_or(extent);

@@ -5,6 +5,13 @@ use little_clip_core::engineering::analysis::SpectrumWindow;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
+#[derive(PartialEq)]
+pub(in crate::file_manager) struct AnalysisEdits {
+    math: String,
+    digital: super::digital::Settings,
+    filters: Vec<SavedFilter>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(in crate::file_manager) struct Settings {
     active: usize,
@@ -28,6 +35,14 @@ pub(in crate::file_manager) struct Settings {
 }
 
 impl Viewer {
+    pub(in crate::file_manager) fn analysis_edits(&self) -> AnalysisEdits {
+        AnalysisEdits {
+            math: self.math.clone(),
+            digital: self.digital.analysis_edits(),
+            filters: self.filters.analysis_edits(),
+        }
+    }
+
     pub(in crate::file_manager) fn session_settings(&self) -> Settings {
         Settings {
             active: self.active,

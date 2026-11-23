@@ -174,7 +174,7 @@ fn cutoffs_row(
     changed
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(in crate::file_manager) struct Settings {
     rules: Vec<Threshold>,
     shown: Vec<bool>,
@@ -183,6 +183,14 @@ pub(in crate::file_manager) struct Settings {
 }
 
 impl Digital {
+    pub(in crate::file_manager) fn analysis_edits(&self) -> Settings {
+        let mut settings = self.save();
+        settings.open = false;
+        settings.shown.clear();
+        settings.decoders = settings.decoders.analysis_edits();
+        settings
+    }
+
     pub(in crate::file_manager) fn save(&self) -> Settings {
         Settings {
             rules: self.config.rules.clone(),

@@ -59,7 +59,7 @@ struct Source {
     capture: Capture,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Reference {
     source: u64,
     native_time: f64,
@@ -131,7 +131,7 @@ impl Viewer {
             source.id = index as u64 + 1;
         }
         let domain = extent(&sources);
-        Self {
+        let mut viewer = Self {
             sources,
             derived: derived::Derived::default(),
             alignment: alignment::Alignment::default(),
@@ -144,7 +144,9 @@ impl Viewer {
             reveal_source: None,
             session: session::Session::default(),
             error: None,
-        }
+        };
+        viewer.capture_edit_baseline();
+        viewer
     }
 
     pub(super) fn set_check(&mut self, check: ReadCheck) {
@@ -194,6 +196,9 @@ impl Viewer {
             palette,
             close,
         );
+        if self.session_dirty() {
+            shell = shell.with_badge("Modified", Some(ui.visuals().warn_fg_color));
+        }
         shell.render_header(ui, |_| {});
         self.controls(ui);
         self.align_recordings(ui);

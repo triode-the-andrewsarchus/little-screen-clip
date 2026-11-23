@@ -18,7 +18,7 @@ use std::{collections::BTreeMap, ops::Range, sync::LazyLock, time::Duration};
 static JOBS: LazyLock<BackgroundJobs> =
     LazyLock::new(|| BackgroundJobs::new(2, super::MAX_SOURCES));
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Pin {
     pub source: u64,
     pub native: Range<f64>,

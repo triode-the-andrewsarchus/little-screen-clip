@@ -522,6 +522,7 @@ impl Viewers {
             Some(ViewerSession::Model(state)) => state.tick(ctx),
             Some(ViewerSession::Scene(state)) => state.tick(ctx),
             Some(ViewerSession::Video(state)) => state.tick(ctx),
+            Some(ViewerSession::Signals(state)) => state.tick_session(ctx),
             Some(
                 ViewerSession::Comparison(_)
                 | ViewerSession::Mail(_)
@@ -529,7 +530,6 @@ impl Viewers {
                 | ViewerSession::Minecraft(_)
                 | ViewerSession::Toolpath(_)
                 | ViewerSession::Embroidery(_)
-                | ViewerSession::Signals(_)
                 | ViewerSession::Touchstone(_)
                 | ViewerSession::RfComparison(_)
                 | ViewerSession::PacketCapture(_)

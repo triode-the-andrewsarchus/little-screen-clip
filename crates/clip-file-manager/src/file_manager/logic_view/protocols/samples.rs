@@ -14,7 +14,7 @@ pub(in crate::file_manager) struct Pins {
     pwm: PwmPins,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct SavedPins {
     pcm: Option<PinRecipe>,
     pwm: Option<PinRecipe>,

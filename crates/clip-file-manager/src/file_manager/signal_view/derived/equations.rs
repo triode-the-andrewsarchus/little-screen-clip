@@ -7,7 +7,7 @@ use little_clip_core::engineering::analysis::{Binding, SignalGraph, SignalType};
 
 const MAX_DRAFT_CHARS: usize = 12_000;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Equation {
     pub id: u64,
     pub text: String,
@@ -26,6 +26,7 @@ pub(super) struct Book {
 struct Draft {
     target: Option<u64>,
     text: String,
+    original: String,
     focus: bool,
     error: Option<String>,
 }
@@ -89,6 +90,12 @@ impl Book {
 
     pub fn editing(&self) -> bool {
         self.edit.is_some()
+    }
+
+    pub fn has_draft_edits(&self) -> bool {
+        self.edit
+            .as_ref()
+            .is_some_and(|draft| draft.text.trim() != draft.original.trim())
     }
 
     pub fn edit(&mut self, index: usize) {
@@ -255,6 +262,7 @@ impl Draft {
     fn new(target: Option<u64>, text: String) -> Self {
         Self {
             target,
+            original: text.clone(),
             text,
             focus: true,
             error: None,
@@ -416,12 +424,14 @@ mod tests {
         book.apply(Action::Apply, INPUTS, &Default::default())
             .unwrap();
         book.edit(0);
+        assert!(!book.has_draft_edits());
         book.edit.as_mut().unwrap().text = "A = missing".into();
         assert!(
             book.apply(Action::Apply, INPUTS, &Default::default())
                 .is_none()
         );
         assert_eq!(book.rows[0].text, "A = 1V");
+        assert!(book.has_draft_edits());
         let draft = book.edit.as_ref().unwrap();
         assert_eq!(draft.text, "A = missing");
         assert!(draft.error.as_ref().unwrap().contains("missing"));

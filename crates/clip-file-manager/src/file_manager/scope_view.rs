@@ -18,7 +18,7 @@ pub(super) mod reads;
 mod session;
 mod snap;
 mod trace_fft;
-pub(super) use session::Settings as SessionSettings;
+pub(super) use session::{AnalysisEdits, Settings as SessionSettings};
 use trace_fft::Trace as ScopeTrace;
 pub(super) mod strip;
 

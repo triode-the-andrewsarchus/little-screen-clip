@@ -371,6 +371,10 @@ impl Alignment {
         self.marks.save(self.recordings)
     }
 
+    pub(super) fn analysis_edits(&self) -> Settings {
+        self.marks.save(None)
+    }
+
     pub(super) fn restore(&mut self, saved: Settings, sources: &[Source]) -> Result<(), String> {
         self.recordings = self.marks.restore(saved, sources)?;
         Ok(())

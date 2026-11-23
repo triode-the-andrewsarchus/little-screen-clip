@@ -22,13 +22,13 @@ use std::{
 
 pub(super) use crate::file_manager::signal_view::filter_editor::FILTER_COLOR;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct SavedFilter {
     channel: usize,
     settings: LaneSettings,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct LaneSettings {
     name: String,
     visible: bool,
@@ -286,6 +286,14 @@ impl Viewer {
 }
 
 impl Filters {
+    pub(super) fn analysis_edits(&self) -> Vec<SavedFilter> {
+        let mut filters = self.save();
+        for filter in &mut filters {
+            filter.settings.visible = false;
+        }
+        filters
+    }
+
     pub(super) fn save(&self) -> Vec<SavedFilter> {
         self.lanes
             .iter()

@@ -46,6 +46,12 @@ pub(super) struct SavedFrequency {
 }
 
 impl Frequency {
+    pub(super) fn filter_settings(
+        &self,
+    ) -> &std::collections::BTreeMap<usize, super::filtering::Settings> {
+        &self.filters.settings
+    }
+
     pub(super) fn save(&self) -> SavedFrequency {
         SavedFrequency {
             lane: self.lane,

@@ -452,12 +452,67 @@ impl Destination {
 
 type SaveResult = Result<Result<FileSource, String>, JobError>;
 
+#[derive(PartialEq)]
+struct AnalysisEdits {
+    sources: Vec<SourceEdits>,
+    reference: Option<Reference>,
+    shared: Option<super::interval::Pin>,
+    derived: derived::AnalysisEdits,
+    alignment: super::alignment::Settings,
+}
+
+#[derive(PartialEq)]
+struct SourceEdits {
+    id: u64,
+    path: PathBuf,
+    clock: Clock,
+    settings: CaptureEdits,
+}
+
+#[derive(PartialEq)]
+enum CaptureEdits {
+    Scope(scope_view::AnalysisEdits),
+    Logic(logic_view::protocols::SessionSettings),
+    Unavailable,
+}
+
+impl AnalysisEdits {
+    fn take(viewer: &Viewer) -> Self {
+        Self {
+            sources: viewer
+                .sources
+                .iter()
+                .map(|source| SourceEdits {
+                    id: source.id,
+                    path: source.path.clone(),
+                    clock: source.clock,
+                    settings: match &source.capture {
+                        Capture::Analog(view) => CaptureEdits::Scope(view.analysis_edits()),
+                        Capture::Digital(view) => CaptureEdits::Logic(view.analysis_edits()),
+                        Capture::Unavailable(_) => CaptureEdits::Unavailable,
+                    },
+                })
+                .collect(),
+            reference: viewer.reference.clone(),
+            shared: viewer.shared.pin.clone(),
+            derived: viewer.derived.analysis_edits(),
+            alignment: viewer.alignment.analysis_edits(),
+        }
+    }
+}
+
+struct PendingSave {
+    receiver: mpsc::Receiver<SaveResult>,
+    edits: AnalysisEdits,
+}
+
 #[derive(Default)]
 pub(super) struct Session {
     pub(super) file: Option<FileSource>,
     pub(super) scroll: Scroll,
     form: Option<Destination>,
-    pending: Option<mpsc::Receiver<SaveResult>>,
+    pending: Option<PendingSave>,
+    baseline: Option<AnalysisEdits>,
     message: Option<Result<String, String>>,
 }
 
@@ -513,7 +568,7 @@ impl Scroll {
 impl Session {
     fn poll(&mut self, ctx: &Context) {
         let Some(pending) = &self.pending else { return };
-        let result = match pending.try_recv() {
+        let result = match pending.receiver.try_recv() {
             Err(mpsc::TryRecvError::Empty) => {
                 ctx.request_repaint_after(Duration::from_millis(35));
                 return;
@@ -523,7 +578,9 @@ impl Session {
                 .and_then(|result| result.map_err(|error| error.to_string()))
                 .and_then(|result| result),
         };
-        self.pending = None;
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
         self.message = Some(result.map(|source| {
             let name = source
                 .path()
@@ -532,6 +589,7 @@ impl Session {
                 .to_string_lossy();
             let message = format!("Saved {name}");
             self.file = Some(source);
+            self.baseline = Some(pending.edits);
             self.form = None;
             message
         }));
@@ -597,6 +655,7 @@ impl Viewer {
         {
             *source.capture.span() = source.clock.native_range(&viewer.span);
         }
+        viewer.capture_edit_baseline();
         Ok(viewer)
     }
 
@@ -608,10 +667,27 @@ impl Viewer {
         self.session.pending.is_some()
     }
 
+    pub(super) fn capture_edit_baseline(&mut self) {
+        self.session.baseline = Some(AnalysisEdits::take(self));
+    }
+
+    pub(in crate::file_manager) fn session_dirty(&self) -> bool {
+        self.derived.has_draft_edits()
+            || self
+                .session
+                .baseline
+                .as_ref()
+                .is_some_and(|baseline| *baseline != AnalysisEdits::take(self))
+    }
+
+    pub(in crate::file_manager) fn tick_session(&mut self, ctx: &Context) {
+        self.session.poll(ctx);
+    }
+
     pub(super) fn save_buttons(&mut self, ui: &mut Ui) {
-        self.session.poll(ui.ctx());
         let idle = self.session.pending.is_none();
-        let may_save = idle && self.session.form.is_none();
+        let unapplied = self.derived.has_draft_edits();
+        let may_save = idle && self.session.form.is_none() && !unapplied;
         if ui
             .add_enabled(may_save, egui::Button::new("Save analysis"))
             .clicked()
@@ -632,6 +708,8 @@ impl Viewer {
         if !idle {
             ui.spinner();
             ui.weak("Saving analysis…");
+        } else if unapplied {
+            ui.weak("Apply or cancel the equation draft to save");
         }
     }
 
@@ -656,6 +734,7 @@ impl Viewer {
     }
 
     pub(super) fn save_form(&mut self, ui: &mut Ui) {
+        let may_save = !self.derived.has_draft_edits();
         if let Some(form) = &mut self.session.form {
             let pending = self.session.pending.is_some();
             let (save, cancel) = ui
@@ -665,7 +744,11 @@ impl Viewer {
                         ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(160.0));
                         ui.label("Folder");
                         ui.add(egui::TextEdit::singleline(&mut form.folder).desired_width(270.0));
-                        (ui.button("Save").clicked(), ui.button("Cancel").clicked())
+                        (
+                            ui.add_enabled(may_save, egui::Button::new("Save"))
+                                .clicked(),
+                            ui.button("Cancel").clicked(),
+                        )
                     })
                     .inner
                 })
@@ -696,6 +779,7 @@ impl Viewer {
 
     fn start_save(&mut self, target: Target, ctx: &Context) {
         let recipe = Recipe::take(self);
+        let edits = AnalysisEdits::take(self);
         let ctx = ctx.clone();
         let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
             let result = recipe.write(target);
@@ -703,7 +787,7 @@ impl Viewer {
             result
         });
         self.session.message = None;
-        self.session.pending = Some(receiver);
+        self.session.pending = Some(PendingSave { receiver, edits });
     }
 }
 
@@ -720,6 +804,46 @@ mod tests {
              #0\n0!\n#1000\n1!\n#1250\n0!\n#2000\n1!\n#2500\n0!\n#3000\n",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn recipe_dirty_tracks_analysis_changes_and_the_snapshot_accepted_for_save() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("capture.vcd");
+        let path = root.path().join("bench.clip-analysis");
+        logic_fixture(&source);
+        let cancel = AtomicBool::new(false);
+        let viewer = Viewer::load(&source, super::super::Format::LogicCapture, &cancel).unwrap();
+        Recipe::take(&viewer)
+            .write(Target::New(path.clone()))
+            .unwrap();
+
+        let mut viewer = Viewer::load_session(&path, &cancel).unwrap();
+        viewer.span = 0.001..0.002;
+        viewer.probe = Some(0.0015);
+        viewer.session.scroll.offset = 12.0;
+        viewer.comparison.spectrum = true;
+        assert!(!viewer.session_dirty());
+
+        viewer.sources[0].clock = Clock::offset(1.0);
+        assert!(viewer.session_dirty());
+        let ctx = Context::default();
+        let file = viewer.session.file.clone().unwrap();
+        viewer.start_save(Target::Replace(file), &ctx);
+        viewer.sources[0].clock = Clock::offset(2.0);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while viewer.session_write_pending() {
+            viewer.tick_session(&ctx);
+            assert!(std::time::Instant::now() < deadline, "save did not settle");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(viewer.session.message.as_ref().unwrap().is_ok());
+        assert!(viewer.session_dirty());
+        viewer.sources[0].clock = Clock::offset(1.0);
+        assert!(!viewer.session_dirty());
+        let saved = Viewer::load_session(&path, &cancel).unwrap();
+        assert_eq!(saved.sources[0].clock, Clock::offset(1.0));
+        assert!(!saved.session_dirty());
     }
 
     #[test]

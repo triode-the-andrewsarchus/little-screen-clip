@@ -64,6 +64,7 @@ impl Viewers {
             Some(ViewerSession::Image(state)) => state.has_unsaved_changes(),
             Some(ViewerSession::Audio(state)) => self.pad_audio || state.has_session_edits(),
             Some(ViewerSession::Text(state)) => state.dirty(),
+            Some(ViewerSession::Signals(state)) => state.session_dirty(),
             _ => false,
         }
     }

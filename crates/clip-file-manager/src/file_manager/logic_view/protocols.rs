@@ -144,7 +144,7 @@ struct Key {
     source_revision: u64,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct PinRecipe {
     inputs: Inputs,
     decoded_span: Range<f64>,
@@ -190,11 +190,21 @@ pub(in crate::file_manager) struct Panel {
     inspection: Option<Inspection>,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(in crate::file_manager) struct SessionSettings {
     decoders: Vec<DecoderSettings>,
     selected: Option<usize>,
     pins: Option<samples::SavedPins>,
+}
+
+impl SessionSettings {
+    pub(in crate::file_manager) fn analysis_edits(mut self) -> Self {
+        self.selected = None;
+        for decoder in &mut self.decoders {
+            decoder.show_samples = false;
+        }
+        self
+    }
 }
 
 impl Panel {
@@ -587,7 +597,7 @@ impl Panel {
     }
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct DecoderSettings {
     mode: Mode,
     spi: SpiInputs,

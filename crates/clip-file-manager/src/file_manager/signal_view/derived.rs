@@ -43,6 +43,15 @@ pub(super) struct SessionSettings {
     decoders: logic_view::protocols::SessionSettings,
 }
 
+#[derive(PartialEq)]
+pub(super) struct AnalysisEdits {
+    equations: Vec<equations::Equation>,
+    sample_rate: Option<f64>,
+    history_span: Option<Range<f64>>,
+    filters: std::collections::BTreeMap<usize, filtering::Settings>,
+    decoders: logic_view::protocols::SessionSettings,
+}
+
 impl SessionSettings {
     pub(super) fn equation_count(&self) -> usize {
         self.equations.len()
@@ -57,6 +66,16 @@ struct Key {
 }
 
 impl Derived {
+    pub(super) fn analysis_edits(&self) -> AnalysisEdits {
+        AnalysisEdits {
+            equations: self.equations.rows.clone(),
+            sample_rate: self.program_rate,
+            history_span: self.history_span.clone(),
+            filters: self.frequency.filter_settings().clone(),
+            decoders: self.decoders.save().analysis_edits(),
+        }
+    }
+
     pub(super) fn session_settings(&self) -> SessionSettings {
         SessionSettings {
             equations: self.equations.rows.clone(),
@@ -94,6 +113,10 @@ impl Derived {
 
     pub(super) fn open(&self) -> bool {
         self.equations.open()
+    }
+
+    pub(super) fn has_draft_edits(&self) -> bool {
+        self.equations.has_draft_edits()
     }
 
     pub(super) fn calculating(&self) -> bool {

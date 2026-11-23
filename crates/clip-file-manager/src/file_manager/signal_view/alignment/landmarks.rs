@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 const MAX_PAIRS: usize = 64;
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Deserialize, Serialize)]
 struct PairTimes {
     native: [f64; 2],
     included: bool,
@@ -24,13 +24,13 @@ impl PairTimes {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
 struct RecordingPairs {
     recordings: PairKey,
     pairs: Vec<PairTimes>,
 }
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Default, PartialEq, Deserialize, Serialize)]
 pub(in crate::file_manager::signal_view) struct Settings {
     recordings: Option<PairKey>,
     sets: Vec<RecordingPairs>,
