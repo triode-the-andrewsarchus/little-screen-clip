@@ -704,37 +704,42 @@
     - [ ] `.mark`
     - [x] `.rm`, `.rmdoc`, `.rmn` — Read-only reMarkable pages and ZIP/plain-TAR notebooks: native v5/v6 ink, authored page order, embedded SVG/PNG paper and redirected PDF backgrounds; list strips, little-screen artwork and a paged viewer. Missing factory paper is disclosed. v3/v4 layouts have synthetic coverage only; unsupported scene operations report compatibility errors, and tablet text/pen rendering is approximate.
     - [ ] `.lines`
-  - [ ] NanoVNA
-    - [ ] `.s1p`, `.s2p`, `.sNp` — Touchstone N-port network parameter data (S-parameters, RF frequency response plots, and interactive Smith chart rendering)
-  - [ ] Sigrok and logic analyzers
-    - [ ] `.sr` — sigrok session
-    - [ ] `.sal` — Saleae Logic capture (digital signal timing waveforms, multichannel state traces, and protocol annotations)
-    - [ ] `.vcd` — Value Change Dump (IEEE 1364 digital simulation and logic analyzer trace format: timescale, scope hierarchy, digital wire/reg states, transition timing, and waveform viewer)
+  - [ ] RF network measurements
+    - [x] `.s1p`, `.s2p`, `.sNp`, identified `.ts` — Touchstone v1/v2 S-parameters, including NanoVNA exports. Magnitude, phase and Smith views, linked markers, and CSV band copy.
+  - [ ] Oscilloscopes and power recordings
+    - [x] `.wfm` — Rigol DS1000Z and scalar Tektronix v1–3 waveforms. Scope cursors, spectrum, fundamental estimates, voltage expressions and CSV range copy.
+    - [x] `.bin`, `.csv` — identified Siglent SDS1000X-E V1 waveform files and Rigol scope exports.
+    - [x] `.jls` — Joulescope v1/v2 sample and summary tracks, with charge and energy over the selected interval where available.
+  - [ ] Logic analyzers
+    - [x] `.sr`, identified `.dsl` — digital Sigrok and DSView sessions.
+    - [x] `.sal`, identified `.bin` — Saleae digital captures and digital channel exports.
+    - [x] `.vcd` — digital Value Change Dumps. Logic viewers link waveforms and transitions with I²C and UART decoding and CSV range copy.
   - [ ] Signal analysis
     - [ ] `.vcfd` — VCF dump
-    - [ ] `.sigmf-meta`, `.sigmf-data`, `.sigmf-*` — SigMF signal metadata and binary samples (center frequency, sample rate, data format, IQ waterfall spectrogram, and time-domain preview)
-    - [ ] `.grc` — GNU Radio Companion flowgraph (XML/YAML flowgraph topology, DSP block hierarchies [sources, sinks, filters, modulators, FFT], sample rates, variables, and bus connections)
+    - [x] `.sigmf-meta`, `.sigmf-data` — paired SigMF recordings. Time activity, annotations, waterfall, spectrum and I/Q range copy.
+    - [x] `.cs8`, `.cu8`, `.iq`, `.bin` — unlabelled recordings can use **Open as raw I/Q** with user-specified sample encoding and optional sample rate and center frequency.
+    - [x] `.grc` — GNU Radio Companion XML and YAML flowgraphs. Linked blocks, ports, connections and authored settings in a read-only viewer.
     - [ ] `.urh` — Universal Radio Hacker project (signal capture configurations, demodulation parameters, message protocol decodings, and participant tables)
-    - [ ] `.wfm` — oscilloscope waveform
-    - [ ] `.chirp` — CHIRP radio configuration
-    - [ ] `.icf` — Icom radio configuration
+  - [ ] Radio programming
+    - [x] `.chirp`, identified `.csv` — CHIRP channels, frequency bands, tuning and tone settings.
+    - [x] `.icf` — Icom configuration records. Channel decoding for IC-R8600, ID-31 and supported ID-51 MapRev1 models. Other identified models expose addressed records.
   - [ ] Sub-GHz, NFC, infrared, and access tokens
-    - [ ] `.sub` — Flipper Zero Sub-GHz capture (protocol parameters, frequency, modulation, and RF pulse-train timing visualization)
-    - [ ] `.nfc`
-    - [ ] `.rfid`
-    - [ ] `.trace`, `.pm3` — Proxmark trace/capture
-    - [ ] `.mfd`, `.eml` — Mifare Classic (1K/4K) and EM410x RFID card dumps (card UID, sector trailer keys, access conditions, data blocks, and Proxmark/Flipper emulation data)
-    - [ ] `.ir` — Flipper Zero infrared capture (protocol parameters, address/command codes, and raw IR pulse timing visualization)
-    - [ ] `.ibtn` — Flipper Zero iButton data
+    - [x] Identified `.sub` — Flipper Zero Sub-GHz frequency, preset, raw pulse timing and decoded record inspection.
+    - [x] `.nfc`, `.rfid` — Flipper Zero NFC and LF RFID metadata and saved data.
+    - [x] `.trace`, `.pm3` — positively identified Proxmark frame traces and GraphBuffer waveforms.
+    - [x] `.mfd`, identified `.eml` — supported MIFARE memory layouts and Proxmark hex dumps in a read-only block viewer.
+    - [x] `.ir` — Flipper Zero infrared libraries, protocol fields and raw pulse timing.
+    - [x] `.ibtn` — Flipper Zero iButton saved data with ROM CRC checks where applicable.
   - [ ] CAN bus logs (SavvyCAN-compatible families; CSV deliberately omitted because it is already listed under spreadsheets)
     - [ ] `.dbc` — CAN database file (CAN message definitions, signal start bit/length, endianness, multiplexing, scaling factors, offsets, min/max bounds, and physical engineering units)
-    - [ ] `.asc` — Vector CANalyzer ASCII (May need disambiguation with ASCII-armored PGP keys)
+    - [x] Identified `.asc` — Vector CANalyzer ASCII.
     - [ ] `.avc`, `.evc`, `.qcc` — CAN-DO logs
-    - [ ] `.blf` — Vector CANalyzer binary
+    - [x] Identified `.blf` — Vector CANalyzer Binary Logging Format.
     - [ ] `.can` — Microchip / CAN-DO log
     - [ ] `.crt`, `.crtd` — CRTD / OVMS (May need disambiguation with X.509 certificates)
-    - [ ] `.trc` — IXXAT / PCAN trace
-    - [ ] `.trace` — Vector CANalyzer trace (same extension as Proxmark trace)
+    - [x] Identified `.trc` — PEAK PCAN trace.
+    - [x] `.trace` — classified as CAN when the content is a supported CAN logging format.
+    - [x] `.candump`, identified `.log` — SocketCAN candump logs. The CAN viewer links the traffic timeline, ID filter and frame bytes, with CSV range copy.
   - [ ] Firmware, memory maps, and hardware descriptions
     - [ ] `.hex` — Intel HEX firmware memory dump (record types, base address offsets, memory map, and Flash/ROM allocation)
     - [ ] `.srec`, `.s19`, `.s28`, `.s37` — Motorola S-record firmware format (header, 16/24/32-bit address data records, termination, and Flash/ROM allocation)
@@ -748,10 +753,7 @@
     - [ ] `openocd.cfg` — OpenOCD JTAG / SWD target configuration (interface drivers, transport protocols [swd/jtag], target architecture, Flash memory banks, and GDB server ports)
     - [ ] `keymap.json`, `vial.json`, `.vil` — QMK / VIA / Vial keyboard layout definitions (switch matrix row/col wiring, layer definitions, keycode bindings, rotary encoder mappings, tap-dance macros, and binary/JSON backup state)
 - [ ] Networking and messages
-  - [ ] `.pcap`
-  - [ ] `.pcapng`
-    - [ ] Capture file comments, interface descriptions, hardware/OS metadata, and packet timestamps
-    - [ ] Packet traffic flow visualization, conversation timelines, protocol hierarchy breakdown, and timing waterfall
+  - [x] `.pcap`, `.pcapng`, identified `.cap` and `.ntar` — packet timing, endpoints, protocol summaries, and packet bytes, with packet range copy. Supports gzip, Zstandard and LZ4 wrappers.
   - [x] `.eml` — saved MIME email; decoded address/date/subject headers, inert reflowed HTML or plain-text alternatives, attachment metadata/chips, original-source preview and guarded container rename
     - [x] 16 MiB input, 32 MIME nesting levels, 1,024 parts and two encoded-message nesting levels; actual truncation/decoding/structure failures are disclosed
     - [ ] Full HTML/CSS layout, remote/inline image rendering, attachment extraction/editing, sending, and encrypted-message decryption/signature verification
