@@ -669,6 +669,7 @@ fn engineering_fixture_cards() {
             "waveform",
         ),
         ("Oscilloscope captures/LeCroy WavePro 254HD.trc", "waveform"),
+        ("Oscilloscope captures/Keysight DSO-X 1102G.bin", "waveform"),
         ("Power recordings/Auto_Sample.jls", "waveform"),
         ("Power recordings/Standby and load pulses.jls", "waveform"),
         ("Logic captures/Sigrok Amulet LCD boot UART.sr", "logic"),

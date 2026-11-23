@@ -1,6 +1,7 @@
 //! Timestamped, calibrated analog channels read from saved oscilloscope captures.
 
 mod binary;
+mod keysight;
 mod lecroy;
 mod rigol;
 mod rigol_csv;
@@ -34,11 +35,12 @@ pub fn is_candidate_path(path: &Path) -> bool {
 
 /// Recognizes a supported waveform signature in a bounded prefix.
 ///
-/// This covers WFM signatures, LeCroy descriptors and Rigol CSV header rows.
+/// This covers WFM signatures, Keysight BIN, LeCroy descriptors and Rigol CSV headers.
 /// Use [matches_header_with_len] to identify Siglent binary captures as well.
 pub fn matches_header(prefix: &[u8]) -> bool {
     rigol::matches_header(prefix)
         || tektronix::matches_header(prefix)
+        || keysight::matches_header(prefix)
         || lecroy::matches_header(prefix)
         || rigol_csv::Header::recognize(prefix).is_some()
 }
@@ -114,6 +116,9 @@ impl Layout {
         }
         if lecroy::matches_header(prefix) {
             return lecroy::parse(prefix, file_len);
+        }
+        if keysight::matches_header(prefix) {
+            return keysight::parse(file, prefix, file_len);
         }
         if let Ok((channels, lanes)) = siglent::open(prefix, file_len) {
             return Ok(Self::binary("Siglent V1".into(), channels, lanes));

@@ -2,6 +2,11 @@
 use super::check_cancelled;
 use std::{fs::File, ops::Range, os::unix::fs::FileExt, sync::atomic::AtomicBool};
 
+pub(super) fn fixed_text(bytes: &[u8]) -> String {
+    let text = bytes.split(|&byte| byte == 0).next().unwrap_or_default();
+    String::from_utf8_lossy(text).trim().to_owned()
+}
+
 /// Endianness used for both the header and sample buffer.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ByteOrder {

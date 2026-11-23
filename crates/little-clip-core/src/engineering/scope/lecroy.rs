@@ -2,7 +2,7 @@
 
 use super::{
     Channel, Layout,
-    binary::{ByteOrder, Encoding, Lane},
+    binary::{ByteOrder, Encoding, Lane, fixed_text},
 };
 use std::ops::Range;
 
@@ -43,9 +43,9 @@ pub(super) fn parse(prefix: &[u8], file_len: u64) -> Result<Layout, String> {
     let window = sample_window(header, order, &blocks, encoding)?;
     let scale = Calibration::read(header, order, &window)?;
 
-    let name = text(&header[96..112]);
-    let instrument = text(&header[76..92]);
-    let unit = match text(&header[196..244]).as_str() {
+    let name = fixed_text(&header[96..112]);
+    let instrument = fixed_text(&header[76..92]);
+    let unit = match fixed_text(&header[196..244]).as_str() {
         "Volt" | "Volts" | "volts" => "V".into(),
         "Amp" | "Amps" | "amps" => "A".into(),
         unit => unit.to_owned(),
@@ -104,7 +104,7 @@ struct Calibration {
 
 impl Calibration {
     fn read(header: &[u8], order: ByteOrder, window: &Range<u64>) -> Result<Self, String> {
-        let horizontal = text(&header[244..292]);
+        let horizontal = fixed_text(&header[244..292]);
         if !matches!(
             horizontal.to_ascii_lowercase().as_str(),
             "s" | "sec" | "seconds"
@@ -177,14 +177,6 @@ fn sample_window(
         return Err("Invalid LeCroy valid sample window".into());
     }
     Ok(first..last + 1)
-}
-
-fn text(bytes: &[u8]) -> String {
-    let end = bytes
-        .iter()
-        .position(|&byte| byte == 0)
-        .unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).trim().to_owned()
 }
 
 #[cfg(test)]
