@@ -385,7 +385,7 @@ impl Viewer {
             }
             self.copy_selection(ui, copies);
             self.digital.toggle_lanes(ui);
-            decoder_row = ui.available_width() < 390.0;
+            decoder_row = ui.available_size_before_wrap().x < 390.0;
             if !decoder_row {
                 self.digital.decoder_buttons(ui);
             }
