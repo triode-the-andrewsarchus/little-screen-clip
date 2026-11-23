@@ -1,5 +1,6 @@
 use super::{CursorSnap, ScopeTrace, Viewer, display_value, plot, time_span};
-use egui::{Color32, Painter, Rect, Ui, pos2};
+use egui::{Color32, Painter, Rect, RichText, Ui, pos2};
+use little_clip_core::engineering::waveforms::Peak;
 use std::ops::Range;
 
 impl Viewer {
@@ -10,7 +11,7 @@ impl Viewer {
         } else {
             141.0
         };
-        let offset_width = if self.stacked { 0.0 } else { 146.0 };
+        let offset_width = if self.stacked { 0.0 } else { 189.0 };
         let group_width = name_width + 52.0 + offset_width + 2.0 * spacing + 7.0;
         let columns = ((ui.available_width() + spacing) / group_width)
             .floor()
@@ -83,38 +84,54 @@ impl Viewer {
                     if self.trace_fft_toggle(ui, trace) {
                         self.toggle_trace_fft(trace);
                     }
-                    self.offset_control(ui, index);
+                    self.offset_control(ui, index, self.channel_bounds(index));
                 }
             }
         });
         ui.add_space(7.0);
     }
 
-    fn offset_control(&mut self, ui: &mut Ui, index: usize) {
-        let bounds = self.channel_bounds(index);
+    pub(super) fn offset_control(&mut self, ui: &mut Ui, index: usize, bounds: Peak) {
         let unit = &self.overview.channels[index].unit;
-        let speed = (f64::from(bounds.max) - f64::from(bounds.min)).abs() / 100.0;
+        let span = f64::from(bounds.max) - f64::from(bounds.min);
+        let speed = if span.is_finite() && span > 0.0 {
+            span / 100.0
+        } else {
+            0.01
+        };
         let offset = &mut self.display_offsets[index];
-        ui.weak("Offset");
+        let caption = if *offset != 0.0 {
+            RichText::new("Shifted ").color(ui.visuals().warn_fg_color)
+        } else if unit == "V" {
+            RichText::new("V offset ")
+        } else {
+            RichText::new("Offset ")
+        };
         let response = ui
             .add(
                 egui::DragValue::new(offset)
                     .range(-1.0e12..=1.0e12)
-                    .speed(if speed.is_finite() && speed > 0.0 {
-                        speed
-                    } else {
-                        0.01
-                    })
+                    .speed(speed)
                     .max_decimals(8)
-                    .suffix(format!(" {unit}")),
+                    .prefix(caption)
+                    .suffix(if unit.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {unit}")
+                    }),
             )
-            .on_hover_text("Vertical offset on the shared overlay scale");
-        response.context_menu(|ui| {
-            if ui.button("Reset vertical offset").clicked() {
-                *offset = 0.0;
-                ui.close();
-            }
-        });
+            .on_hover_text("Display offset. Measurements and export use the original samples.");
+        if *offset != 0.0
+            && ui
+                .small_button("Reset")
+                .on_hover_text("Reset display offset")
+                .clicked()
+        {
+            *offset = 0.0;
+            ui.ctx().request_repaint();
+        } else if response.changed() {
+            ui.ctx().request_repaint();
+        }
     }
 
     pub(super) fn channel_label(&self, index: usize) -> String {

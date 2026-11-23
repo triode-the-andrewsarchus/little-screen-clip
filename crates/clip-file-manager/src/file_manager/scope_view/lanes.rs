@@ -86,6 +86,12 @@ pub(super) fn shifted(bounds: Peak, offset: f32) -> Peak {
     }
 }
 
+pub(super) fn stacked_scale(mut bounds: Peak, offset: f32) -> Peak {
+    // Keep the original reference and the shifted waveform on the same axis.
+    bounds.merge(shifted(bounds, offset));
+    bounds
+}
+
 impl Viewer {
     pub(super) fn lane(&self, area: Rect, slot: usize) -> Lane {
         Lane::new(area, slot, self.lane_count())
@@ -104,13 +110,14 @@ mod tests {
         };
         let axis = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 80.0));
         for offset in [-2.0, 0.0, 2.0] {
-            let mut display = bounds;
-            display.merge(shifted(bounds, offset));
+            let display = stacked_scale(bounds, offset);
             let samples = shifted(display, -offset);
-            assert_eq!(
-                plot::y_at(axis, samples, 1.0),
-                plot::y_at(axis, display, 1.0 + offset)
-            );
+            assert!(display.min <= bounds.min && display.max >= bounds.max);
+            assert!(display.min <= bounds.min + offset && display.max >= bounds.max + offset);
+            let shifted_y = plot::y_at(axis, samples, 1.0);
+            let original_y = plot::y_at(axis, bounds, 1.0);
+            assert_eq!(shifted_y, plot::y_at(axis, display, 1.0 + offset));
+            assert_eq!(shifted_y.total_cmp(&original_y), 0.0_f32.total_cmp(&offset));
         }
     }
 }

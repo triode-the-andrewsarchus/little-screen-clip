@@ -664,25 +664,21 @@ impl Viewer {
                 }
                 continue;
             }
-            let channel = &self.overview.channels[index];
             let color = plot::color(index);
-            if self.trace_fft.contains_key(&ScopeTrace::Recorded(index)) || self.stacked {
-                let mut heading = lane.heading(ui, ("scope-channel", index));
-                heading.colored_label(color, &channel.name);
-                if self.trace_fft_toggle(&mut heading, ScopeTrace::Recorded(index)) {
-                    change = Some(index);
-                }
+            let trace = ScopeTrace::Recorded(index);
+            let fft = self.trace_fft.contains_key(&trace);
+            let raw = (self.stacked && !fft).then(|| self.channel_bounds(index));
+            if fft || self.stacked {
+                change = self.recorded_lane_controls(ui, lane, index, raw).or(change);
             }
-            if self.trace_fft.contains_key(&ScopeTrace::Recorded(index)) {
-                self.paint_trace_fft(ui, lane.plot, ScopeTrace::Recorded(index));
+            if fft {
+                self.paint_trace_fft(ui, lane.plot, trace);
                 continue;
             }
-            let display = overlay.unwrap_or_else(|| self.channel_bounds(index));
-            let offset = if overlay.is_some() {
-                self.display_offsets[index]
-            } else {
-                0.0
-            };
+            let channel = &self.overview.channels[index];
+            let offset = self.display_offsets[index];
+            let display =
+                overlay.unwrap_or_else(|| lanes::stacked_scale(raw.unwrap_or_default(), offset));
             if self.stacked || !overlay_axis {
                 if overlay.is_some() {
                     lane.label(painter, "Shared scale", ink);
@@ -706,6 +702,22 @@ impl Viewer {
             });
         }
         (plotted, change)
+    }
+
+    fn recorded_lane_controls(
+        &mut self,
+        ui: &mut Ui,
+        lane: lanes::Lane,
+        index: usize,
+        raw: Option<Peak>,
+    ) -> Option<usize> {
+        let mut heading = lane.heading(ui, ("scope-channel", index));
+        heading.colored_label(plot::color(index), &self.overview.channels[index].name);
+        let toggle = self.trace_fft_toggle(&mut heading, ScopeTrace::Recorded(index));
+        if let Some(bounds) = raw {
+            self.offset_control(&mut heading, index, bounds);
+        }
+        toggle.then_some(index)
     }
 
     fn overlay_scale(&self) -> Option<Peak> {

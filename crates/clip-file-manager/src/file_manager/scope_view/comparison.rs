@@ -1,5 +1,10 @@
-use super::{Copies, Link, PlottedChannel, ScopeTrace, Viewer, lanes::Lane, plot, timeline};
-use egui::{Rect, Sense, Ui, pos2, vec2};
+use super::{
+    Copies, Link, PlottedChannel, ScopeTrace, Viewer,
+    lanes::{self, Lane},
+    plot, timeline,
+};
+use egui::{Rect, Sense, Ui, vec2};
+use little_clip_core::engineering::waveforms::Peak;
 
 #[derive(Default)]
 pub(in crate::file_manager) struct TraceInteraction {
@@ -102,7 +107,12 @@ impl Viewer {
             .add(egui::Button::selectable(active, label).small())
             .on_hover_text("Use this trace for analysis and export")
             .clicked();
-        let toggle = self.trace_fft_toggle(&mut heading, ScopeTrace::Recorded(index));
+        let trace = ScopeTrace::Recorded(index);
+        let toggle = self.trace_fft_toggle(&mut heading, trace);
+        let bounds = (!self.trace_fft.contains_key(&trace)).then(|| self.channel_bounds(index));
+        if let Some(bounds) = bounds {
+            self.offset_control(&mut heading, index, bounds);
+        }
         heading
             .add(egui::Label::new(egui::RichText::new(source).weak()).truncate())
             .on_hover_text(source);
@@ -110,13 +120,13 @@ impl Viewer {
             selected: selected || toggle,
             ..Default::default()
         };
-        if self.trace_fft.contains_key(&ScopeTrace::Recorded(index)) {
-            self.paint_trace_fft(ui, lane.plot, ScopeTrace::Recorded(index));
+        if let Some(bounds) = bounds {
+            interaction = self.comparison_waveform(ui, lane, index, link, bounds, interaction);
         } else {
-            interaction = self.comparison_waveform(ui, lane, index, link, interaction);
+            self.paint_trace_fft(ui, lane.plot, trace);
         }
         if toggle {
-            self.toggle_trace_fft(ScopeTrace::Recorded(index));
+            self.toggle_trace_fft(trace);
             ui.ctx().request_repaint();
         }
         interaction
@@ -128,6 +138,7 @@ impl Viewer {
         lane: Lane,
         index: usize,
         link: &Link,
+        raw: Peak,
         mut interaction: TraceInteraction,
     ) -> TraceInteraction {
         let rect = lane.plot;
@@ -164,9 +175,11 @@ impl Viewer {
         let painter = ui.painter_at(lane.frame);
         let ink = ui.visuals().weak_text_color();
         let color = plot::color(index);
-        let bounds = self.channel_bounds(index);
+        let display_offset = self.display_offsets[index];
+        let display = lanes::stacked_scale(raw, display_offset);
+        let bounds = lanes::shifted(display, -display_offset);
         let channel = &self.overview.channels[index];
-        lane.scale(&painter, bounds, &channel.unit, color);
+        lane.scale(&painter, display, &channel.unit, color);
         let divisions = plot::x_divisions(rect);
         for tick in 0..=divisions {
             let x = egui::lerp(rect.x_range(), tick as f32 / divisions as f32);
@@ -189,44 +202,16 @@ impl Viewer {
         }
         self.paint_comparison_filter(&painter, index, rect, bounds);
         self.paint_time_markers(ui, &painter, rect, Some(link), index == self.active);
-        self.paint_comparison_probe(
-            ui,
+        self.paint_lane_probe(
             &painter,
             PlottedChannel {
                 index,
                 plot: rect,
                 bounds,
-                display_offset: 0.0,
+                display_offset,
             },
         );
         interaction
-    }
-
-    fn paint_comparison_probe(&self, ui: &Ui, painter: &egui::Painter, channel: PlottedChannel) {
-        let Some(time) = self.hover.time.filter(|time| self.span.contains(time)) else {
-            return;
-        };
-        let rect = channel.plot;
-        let x = plot::x_at(rect, &self.span, time);
-        let color = plot::color(channel.index);
-        let probe = self.recorded_probe(channel.index, time).1;
-        let ink = ui.visuals().text_color();
-        painter.vline(x, rect.y_range(), egui::Stroke::new(1.0, ink));
-        if let super::hover::Probe::Value(value) = probe
-            && channel.bounds.valid()
-        {
-            let y = plot::y_at(rect, channel.bounds, value);
-            painter.circle_filled(pos2(x, y), 3.0, color);
-        }
-        super::hover::selection_label(
-            painter,
-            rect,
-            x,
-            rect.top() + 3.0,
-            &probe.text(&self.overview.channels[channel.index].unit),
-            ink,
-            ui.visuals().window_fill(),
-        );
     }
 
     pub(in crate::file_manager) fn comparison_tools(

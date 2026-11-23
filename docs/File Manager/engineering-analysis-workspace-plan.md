@@ -196,6 +196,14 @@ With multiple power recordings, Common interval measures the part of the pin cov
 
 With the 1 kHz and 2 kHz pair, the pin ran from 557.25 ms to 2.51175 s and the common interval ended at 2.0625 s. A measured 0.104531 mAh and 0.522656 mWh on the common interval. B measured 0.278507 mAh and 0.835521 mWh. Each recording restored A’s 0.678646 mWh and B’s partial label. The shorter Power interval opened from A’s reading and Back restored both rows at 1500 × 1000 and 800 × 620. A second check showed no common coverage after shifting B outside the pin. Removing B’s Power signal from a fixture kept the common current comparison and identified the missing power coverage. The core test integrates different Current and Power intervals in the same recording.
 
+## 22. Offset a recorded waveform in its own lane
+
+The stacked and interleaved waveform headers show an editable offset in the trace’s unit. A nonzero value shows Shifted and Reset. The scale includes the original bounds and the shifted waveform. The probe dot follows the plotted trace, with the original and shifted values together at the intersection. Separate lanes keep their own labels, and the shared overlay groups labels whose panels meet. The offset applies to display geometry while measurements and exports use the recorded values.
+
+In two copies of the four-channel Rigol capture, adding 0.50 V to A’s CH1 moved its waveform and its probe dot. At the same time position, A read 3.44 V raw and 3.94 V shifted. B read 3.44 V. The offset survived an FFT round trip and reopening the saved recipe. Reset restored matching plots and probe values. The desktop checks also switched a single file between stacked and overlay views and verified an independent shift and reset at 800 × 620 in the light theme.
+
+The single-recording CPU frame benchmark ran with a threshold equation on the 50 KiB CSV and 12 MB WFM. At wide zoom the p95 was 1.12 ms and 2.34 ms respectively, including egui tessellation. The benchmark times CPU plotting for the panned views. The desktop walkthrough covers the probe and the interleaved lanes.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.

@@ -174,15 +174,14 @@ impl Viewer {
     ) {
         let Some(time) = self.hover.time else { return };
         let x = plot::x_at(rect, &self.span, time);
-        let visible = rect.intersect(painter.clip_rect());
-        if !visible.is_positive() || !visible.x_range().contains(x) {
+        let Some(layout) = ProbeLayout::new(painter, rect, x) else {
             return;
-        }
+        };
         painter.vline(x, rect.y_range(), Stroke::new(1.0, ink));
-        if visible.top() == rect.top() {
+        if layout.visible.top() == rect.top() {
             selection_label(
                 painter,
-                visible,
+                layout.visible,
                 x,
                 rect.top() + 5.0,
                 &display_value(clock.to_workspace(time), "s"),
@@ -190,112 +189,205 @@ impl Viewer {
                 fill,
             );
         }
-        let to_right = visible.right() - x >= x - visible.left();
-        let available = if to_right {
-            visible.right() - x
-        } else {
-            x - visible.left()
-        };
-        let text_width = (available - 19.0).max(1.0);
         let mut labels = Vec::new();
-        let mut add_label = |(lane, bounds): (Rect, Peak),
-                             probe: Probe,
-                             name: &str,
-                             unit: &str,
-                             display_offset,
-                             color| {
-            let value = match probe {
-                Probe::Value(value) if bounds.valid() => Some(value),
-                _ => None,
-            };
-            let y = value.map_or(lane.center().y, |value| plot::y_at(lane, bounds, value));
-            if !visible.y_range().contains(y) {
-                return;
-            }
-            if value.is_some() {
-                painter.circle_filled(pos2(x, y), 3.0, color);
-            }
-            let measured = probe.text(unit);
-            let text = match value {
-                Some(value) if display_offset != 0.0 => {
-                    let displayed = display_value(f64::from(value + display_offset), unit);
-                    format!("{name}  {measured} raw · {displayed} shifted")
-                }
-                _ => format!("{name}  {measured}"),
-            };
-            let mut job = LayoutJob::simple(text, FontId::monospace(12.0), color, text_width);
-            job.wrap.max_rows = 1;
-            job.wrap.break_anywhere = true;
-            labels.push((y, painter.layout_job(job)));
-        };
-        for &PlottedChannel {
-            index,
-            plot,
-            bounds,
-            display_offset,
-        } in channels
-        {
-            let channel = &self.overview.channels[index];
-            add_label(
-                (plot, bounds),
-                self.recorded_probe(index, time).1,
-                &channel.name,
-                &channel.unit,
-                display_offset,
-                super::plot::color(index),
-            );
+        for channel in channels {
+            labels.extend(layout.label(painter, self.recorded_label(channel, time, true), None));
         }
         let math_slot = self.physical_lanes();
         if let Some((raw, bounds)) = self.calculated()
             && let Some(value) = raw.value_at(time)
         {
-            add_label(
-                (self.lane(rect, math_slot).plot, *bounds),
-                Probe::from_sample(value),
-                "Math",
-                &self.math_unit(),
-                0.0,
-                super::MATH_COLOR,
-            );
+            labels.extend(layout.label(
+                painter,
+                ProbeReading {
+                    plot: self.lane(rect, math_slot).plot,
+                    bounds: *bounds,
+                    value: Probe::from_sample(value),
+                    name: "Math",
+                    unit: &self.math_unit(),
+                    offset: 0.0,
+                    color: super::MATH_COLOR,
+                },
+                None,
+            ));
         }
         let filter_start = math_slot + usize::from(self.math_state.numeric().is_some());
         for (slot, index, name, bounds, value) in self.filters.probes(time) {
-            let unit = &self.overview.channels[index].unit;
-            add_label(
-                (self.lane(rect, filter_start + slot).plot, bounds),
-                Probe::from_sample(value),
-                name,
-                unit,
-                0.0,
-                super::filters::FILTER_COLOR,
-            );
+            labels.extend(layout.label(
+                painter,
+                ProbeReading {
+                    plot: self.lane(rect, filter_start + slot).plot,
+                    bounds,
+                    value: Probe::from_sample(value),
+                    name,
+                    unit: &self.overview.channels[index].unit,
+                    offset: 0.0,
+                    color: super::filters::FILTER_COLOR,
+                },
+                None,
+            ));
         }
-        paint_probe_labels(painter, visible, x, to_right, fill, &mut labels);
+        layout.paint(painter, fill, &mut labels);
+    }
+
+    pub(super) fn paint_lane_probe(&self, painter: &Painter, channel: PlottedChannel) {
+        let Some(time) = self.hover.time.filter(|time| self.span.contains(time)) else {
+            return;
+        };
+        let x = plot::x_at(channel.plot, &self.span, time);
+        let Some(layout) = ProbeLayout::new(painter, channel.plot, x) else {
+            return;
+        };
+        let painter = painter.with_clip_rect(layout.visible);
+        let visuals = &painter.ctx().global_style().visuals;
+        painter.vline(
+            x,
+            layout.visible.y_range(),
+            Stroke::new(1.0, visuals.text_color()),
+        );
+        if let Some(label) = layout.label(
+            &painter,
+            self.recorded_label(&channel, time, false),
+            Some(visuals.text_color()),
+        ) {
+            let height = label.1.size().y + PANEL_PADDING;
+            let top = panel_top(label.0, height, layout.visible.y_range());
+            layout.paint_panel(&painter, visuals.window_fill(), &[label], top, height);
+        }
+    }
+
+    fn recorded_label<'a>(
+        &'a self,
+        plotted: &PlottedChannel,
+        time: f64,
+        name: bool,
+    ) -> ProbeReading<'a> {
+        let index = plotted.index;
+        let channel = &self.overview.channels[index];
+        ProbeReading {
+            plot: plotted.plot,
+            bounds: plotted.bounds,
+            value: self.recorded_probe(index, time).1,
+            name: if name { &channel.name } else { "" },
+            unit: &channel.unit,
+            offset: plotted.display_offset,
+            color: plot::color(index),
+        }
     }
 }
 
-fn paint_probe_labels(
-    painter: &Painter,
-    area: Rect,
+struct ProbeReading<'a> {
+    plot: Rect,
+    bounds: Peak,
+    value: Probe,
+    name: &'a str,
+    unit: &'a str,
+    offset: f32,
+    color: Color32,
+}
+
+impl ProbeReading<'_> {
+    fn caption(&self) -> String {
+        let mut caption = if self.name.is_empty() {
+            self.value.text(self.unit)
+        } else {
+            format!("{}  {}", self.name, self.value.text(self.unit))
+        };
+        if self.offset != 0.0
+            && let Probe::Value(value) = self.value
+        {
+            let displayed = display_value(f64::from(value) + f64::from(self.offset), self.unit);
+            caption.push_str(&format!(" raw · {displayed} shifted"));
+        }
+        caption
+    }
+}
+
+struct ProbeLayout {
+    visible: Rect,
     x: f32,
     to_right: bool,
-    fill: Color32,
-    labels: &mut [(f32, Arc<Galley>)],
-) {
-    labels.sort_by(|first, second| first.0.total_cmp(&second.0));
-    let panels = label_panels(
-        labels.iter().map(|(y, label)| (*y, label.size().y)),
-        area.y_range(),
-    );
-    for panel in panels {
-        let rows = &labels[panel.rows];
+    text_width: f32,
+}
+
+const PANEL_PADDING: f32 = 6.0;
+
+impl ProbeLayout {
+    fn new(painter: &Painter, rect: Rect, x: f32) -> Option<Self> {
+        let visible = rect.intersect(painter.clip_rect());
+        if !visible.is_positive() || !visible.x_range().contains(x) {
+            return None;
+        }
+        let left = x - visible.left();
+        let right = visible.right() - x;
+        Some(Self {
+            visible,
+            x,
+            to_right: right >= left,
+            text_width: (left.max(right) - 19.0).max(1.0),
+        })
+    }
+
+    fn label(
+        &self,
+        painter: &Painter,
+        reading: ProbeReading<'_>,
+        foreground: Option<Color32>,
+    ) -> Option<(f32, Arc<Galley>)> {
+        let intersection = match reading.value {
+            Probe::Value(value) if reading.bounds.valid() => {
+                Some(plot::y_at(reading.plot, reading.bounds, value))
+            }
+            _ => None,
+        };
+        let y = intersection.unwrap_or_else(|| reading.plot.center().y);
+        if !self.visible.y_range().contains(y) {
+            return None;
+        }
+        if intersection.is_some() {
+            painter.circle_filled(pos2(self.x, y), 3.0, reading.color);
+        }
+        let mut job = LayoutJob::simple(
+            reading.caption(),
+            FontId::monospace(12.0),
+            foreground.unwrap_or(reading.color),
+            self.text_width,
+        );
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        Some((y, painter.layout_job(job)))
+    }
+
+    fn paint(&self, painter: &Painter, fill: Color32, labels: &mut [(f32, Arc<Galley>)]) {
+        labels.sort_by(|first, second| first.0.total_cmp(&second.0));
+        let panels = label_panels(
+            labels.iter().map(|(y, label)| (*y, label.size().y)),
+            self.visible.y_range(),
+        );
+        for panel in panels {
+            self.paint_panel(painter, fill, &labels[panel.rows], panel.top, panel.height);
+        }
+    }
+
+    fn paint_panel(
+        &self,
+        painter: &Painter,
+        fill: Color32,
+        rows: &[(f32, Arc<Galley>)],
+        top: f32,
+        height: f32,
+    ) {
         let width = rows
             .iter()
             .map(|(_, line)| line.size().x)
             .fold(0.0_f32, f32::max)
             + 12.0;
-        let left = if to_right { x + 7.0 } else { x - width - 7.0 };
-        let rect = Rect::from_min_size(pos2(left, panel.top), vec2(width, panel.height));
+        let left = if self.to_right {
+            self.x + 7.0
+        } else {
+            self.x - width - 7.0
+        };
+        let rect = Rect::from_min_size(pos2(left, top), vec2(width, height));
         painter.rect_filled(rect, 3.0, fill);
         let mut top = rect.top() + 3.0;
         for (_, line) in rows {
@@ -303,6 +395,10 @@ fn paint_probe_labels(
             top += line.size().y;
         }
     }
+}
+
+fn panel_top(y: f32, height: f32, area: Rangef) -> f32 {
+    (y - height * 0.5).clamp(area.min, (area.max - height).max(area.min))
 }
 
 struct LabelPanel {
@@ -313,15 +409,12 @@ struct LabelPanel {
 }
 
 fn label_panels(labels: impl Iterator<Item = (f32, f32)>, area: Rangef) -> Vec<LabelPanel> {
-    const PADDING: f32 = 6.0;
     let mut panels: Vec<LabelPanel> = Vec::new();
-    let top_at =
-        |y: f32, height: f32| (y - height * 0.5).clamp(area.min, (area.max - height).max(area.min));
     for (index, (y, height)) in labels.enumerate() {
-        let height = height + PADDING;
+        let height = height + PANEL_PADDING;
         let mut panel = LabelPanel {
             rows: index..index + 1,
-            top: top_at(y, height),
+            top: panel_top(y, height, area),
             height,
             first_y: y,
         };
@@ -330,10 +423,10 @@ fn label_panels(labels: impl Iterator<Item = (f32, f32)>, area: Rangef) -> Vec<L
             .is_some_and(|prev| prev.top + prev.height > panel.top)
         {
             let prev = panels.pop().expect("overlapping panel");
-            panel.height += prev.height - PADDING;
+            panel.height += prev.height - PANEL_PADDING;
             panel.first_y = prev.first_y;
             panel.rows.start = prev.rows.start;
-            panel.top = top_at((prev.first_y + y) * 0.5, panel.height);
+            panel.top = panel_top((prev.first_y + y) * 0.5, panel.height, area);
         }
         panels.push(panel);
     }
@@ -375,6 +468,25 @@ mod tests {
         assert_eq!(coordinate(&channel, -0.26), Some(2));
         assert_eq!(coordinate(&channel, -0.01), Some(3));
         assert_eq!(coordinate(&channel, 0.0), None);
+    }
+
+    #[test]
+    fn shifted_probe_reports_original_units_and_preserves_missing_sample_state() {
+        let reading = |value, offset| ProbeReading {
+            plot: Rect::NOTHING,
+            bounds: Peak::default(),
+            value,
+            name: "",
+            unit: "V",
+            offset,
+            color: Color32::WHITE,
+        };
+        assert_eq!(
+            reading(Probe::Value(1.0), 0.5).caption(),
+            "1 V raw · 1.5 V shifted"
+        );
+        assert_eq!(reading(Probe::Value(1.0), 0.0).caption(), "1 V");
+        assert_eq!(reading(Probe::Gap, 0.5).caption(), "No sample");
     }
 
     #[test]
