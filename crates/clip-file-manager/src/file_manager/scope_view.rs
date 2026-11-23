@@ -2,8 +2,10 @@
 
 #[cfg(test)]
 mod frame_benchmark;
+mod math;
 pub(super) mod plot;
 mod reads;
+mod snap;
 pub(super) mod strip;
 
 use super::{preview_copy::Copies, preview_job::Task};
@@ -12,12 +14,13 @@ use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2};
 use little_clip_core::{
     BackgroundJobs,
     engineering::{
-        analysis::{Expression, SpectrumWindow},
+        analysis::SpectrumWindow,
         waveforms::{Envelope, Overview, Recording, display_value, time_span},
     },
     palette::AppPalette,
 };
-use reads::{AnalysisRequest, MathTrace, Measurements, RawChannel};
+use reads::{AnalysisRequest, Measurements, RawChannel};
+use snap::CursorSnap;
 use std::{
     ops::Range,
     path::Path,
@@ -46,13 +49,13 @@ pub(super) struct Viewer {
     analysis_key: Option<AnalysisKey>,
     analysis_dirty_at: f64,
     math: String,
-    math_error: Option<String>,
+    math_state: math::Math,
     spectrum: bool,
     spectrum_window: SpectrumWindow,
     spectrum_db: bool,
     spectrum_marker: Option<usize>,
     spectrum_span: Option<Range<f64>>,
-    pending_snaps: [Option<SnapJob>; 2],
+    snaps: [CursorSnap; 2],
     error: Option<String>,
 }
 
@@ -68,12 +71,6 @@ impl PlotData {
             Self::Summary(_) => None,
         }
     }
-}
-
-struct SnapJob {
-    time: f64,
-    channel: usize,
-    task: Task<Result<Option<f64>, String>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -108,13 +105,13 @@ impl Viewer {
             analysis_key: None,
             analysis_dirty_at: 0.0,
             math: String::new(),
-            math_error: None,
+            math_state: math::Math::default(),
             spectrum: false,
             spectrum_window: SpectrumWindow::Hann,
             spectrum_db: true,
             spectrum_marker: None,
             spectrum_span: None,
-            pending_snaps: [None, None],
+            snaps: std::array::from_fn(|_| CursorSnap::default()),
             error: None,
         })
     }
@@ -160,6 +157,11 @@ impl Viewer {
             self.spectrum_ui(ui);
         }
         self.request_detail();
+        self.math_state
+            .request(&self.recording, ui.ctx(), &self.span);
+        for snap in &mut self.snaps {
+            snap.request(&self.recording, ui.ctx());
+        }
         self.request_analysis(ui.ctx());
         if self.pending() {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
@@ -193,6 +195,9 @@ impl Viewer {
                     label.color(plot::color(index))
                 };
                 if ui.selectable_label(selected, label).clicked() {
+                    if index != self.active {
+                        self.snaps.iter_mut().for_each(CursorSnap::clear);
+                    }
                     self.active = index;
                 }
             }
@@ -216,7 +221,15 @@ impl Viewer {
                 });
             }
         });
-        if !self.recording.power_recording() || self.overview.channels[self.active].unit == "V" {
+        self.math_controls(ui);
+    }
+
+    fn math_controls(&mut self, ui: &mut Ui) {
+        let channel = &self.overview.channels[self.active];
+        if !self.recording.power_recording() || channel.unit == "V" {
+            let status = self
+                .math_state
+                .status(channel, &self.span, self.math_envelope());
             ui.horizontal(|ui| {
                 ui.label("Math");
                 let hint = if self.recording.power_recording() {
@@ -230,13 +243,33 @@ impl Viewer {
                         .char_limit(256)
                         .desired_width((ui.available_width() - 10.0).min(420.0)),
                 );
+                if let Some(status) = status {
+                    ui.weak(status);
+                }
             });
         }
-        if let Some(message) = self.math_error.as_ref().or(self.error.as_ref()) {
+        let input = if self.recording.power_recording() && channel.unit != "V" {
+            ""
+        } else {
+            &self.math
+        };
+        self.math_state
+            .compile(input, self.active, &self.overview.channels);
+        if let Some(message) = self.math_state.error().or(self.error.as_deref()) {
             ui.colored_label(ui.visuals().error_fg_color, message);
         } else if self.index_job.is_some() {
             ui.weak("Refining overview…");
         }
+    }
+
+    fn math_envelope(&self) -> &Envelope {
+        if let Some((cover, PlotData::Summary(envelopes))) = &self.detail
+            && contains(cover, &self.span)
+            && let Some(envelope) = envelopes.get(self.active)
+        {
+            return envelope;
+        }
+        &self.index.as_ref().unwrap_or(&self.overview.envelopes)[self.active]
     }
 
     fn waveform(&mut self, ui: &mut Ui, height: f32) {
@@ -359,6 +392,14 @@ impl Viewer {
     }
 
     fn draw_math(&self, painter: &egui::Painter, rect: Rect) {
+        let lane = plot::lane(rect, self.active, self.overview.channels.len());
+        self.math_state.paint(
+            painter,
+            lane,
+            &self.span,
+            &self.overview.channels[self.active],
+            self.math_envelope(),
+        );
         if self
             .measurement_key
             .as_ref()
@@ -366,63 +407,29 @@ impl Viewer {
         {
             return;
         }
-        let Some(math) = self
+        let Some((raw, bounds)) = self
             .measurements
             .as_ref()
             .and_then(|data| data.math.as_ref())
         else {
             return;
         };
-        let lane = plot::lane(rect, self.active, self.overview.channels.len());
-        let color = Color32::from_rgb(235, 242, 125);
-        match math {
-            MathTrace::Predicate(ranges) => {
-                // Merge at display resolution to keep dense alternating results
-                // from producing one GPU primitive per source sample.
-                let mut last: Option<Range<f64>> = None;
-                let pixel = (self.span.end - self.span.start) / f64::from(lane.width().max(1.0));
-                for current in ranges
-                    .iter()
-                    .filter(|range| range.end > self.span.start && range.start < self.span.end)
-                {
-                    if let Some(previous) = &mut last {
-                        if current.start - previous.end <= pixel {
-                            previous.end = current.end;
-                            continue;
-                        }
-                        plot::highlight(
-                            painter,
-                            lane,
-                            &self.span,
-                            previous.clone(),
-                            color.gamma_multiply(0.28),
-                        );
-                    }
-                    last = Some(current.clone());
-                }
-                if let Some(range) = last {
-                    plot::highlight(painter, lane, &self.span, range, color.gamma_multiply(0.28));
-                }
-            }
-            MathTrace::Numeric(raw, bounds) => {
-                let (start, samples) = raw.visible(&self.span);
-                let stride = samples
-                    .len()
-                    .div_ceil((lane.width() as usize).max(8))
-                    .max(1);
-                let display = samples.iter().copied().step_by(stride).collect::<Vec<_>>();
-                plot::draw_raw(
-                    painter,
-                    lane,
-                    &self.span,
-                    start,
-                    raw.step * stride as f64,
-                    &display,
-                    *bounds,
-                    color,
-                );
-            }
-        }
+        let (start, samples) = raw.visible(&self.span);
+        let stride = samples
+            .len()
+            .div_ceil((lane.width() as usize).max(8))
+            .max(1);
+        let display = samples.iter().copied().step_by(stride).collect::<Vec<_>>();
+        plot::draw_raw(
+            painter,
+            lane,
+            &self.span,
+            start,
+            raw.step * stride as f64,
+            &display,
+            *bounds,
+            Color32::from_rgb(235, 242, 125),
+        );
     }
 
     fn overview_ui(&mut self, ui: &mut Ui) {
@@ -556,7 +563,8 @@ impl Viewer {
         self.index_job.is_some()
             || self.detail_job.is_some()
             || self.analysis_job.is_some()
-            || self.pending_snaps.iter().any(Option::is_some)
+            || self.snaps.iter().any(CursorSnap::pending)
+            || self.math_state.pending()
             || self.analysis_key.is_none()
     }
 
@@ -623,47 +631,36 @@ impl Viewer {
                 .input(|input| input.pointer.press_origin())
                 .unwrap_or(point);
             let origin = plot::at(rect, &self.span, origin.x);
-            self.pending_snaps = [None, None];
+            self.snaps.iter_mut().for_each(CursorSnap::clear);
             self.drag = near(origin).or_else(|| {
-                self.place_cursor(0, origin, radius, free, true);
+                self.place_cursor(0, origin, radius, free);
                 Some(1)
             });
         }
         if response.clicked_by(PointerButton::Primary) {
             let selected = near(time);
-            self.pending_snaps = [None, None];
+            self.snaps.iter_mut().for_each(CursorSnap::clear);
             if selected.is_none() {
                 self.cursors[1] = None;
             }
-            self.place_cursor(selected.unwrap_or(0), time, radius, free, true);
+            self.place_cursor(selected.unwrap_or(0), time, radius, free);
         } else if let Some(slot) = self.drag {
             let done = response.drag_stopped_by(PointerButton::Primary);
-            self.place_cursor(slot, time, radius, free, done);
+            self.place_cursor(slot, time, radius, free);
             if done {
                 self.drag = None;
             }
         }
     }
 
-    fn place_cursor(&mut self, slot: usize, time: f64, radius: f64, free: bool, finish: bool) {
-        let raw = self
+    fn place_cursor(&mut self, slot: usize, time: f64, radius: f64, free: bool) {
+        let detail = self
             .detail
             .as_ref()
-            .filter(|(cover, _)| cover.contains(&time))
-            .and_then(|(_, detail)| detail.raw(self.active));
-        let snapped = (!free).then(|| raw?.snap(time, radius)).flatten();
-        self.cursors[slot] = Some(snapped.unwrap_or(time));
-        if !free && finish && snapped.is_none() {
-            let recording = self.recording.clone();
-            let channel = self.active;
-            self.pending_snaps[slot] = Some(SnapJob {
-                time,
-                channel,
-                task: Task::start(&JOBS, Duration::from_secs(4), move |cancel| {
-                    reads::snap(&recording, channel, time, radius, cancel)
-                }),
-            });
-        }
+            .and_then(|(_, data)| data.raw(self.active));
+        let meta = &self.overview.channels[self.active];
+        self.cursors[slot] =
+            Some(self.snaps[slot].place(self.active, meta, time, radius, free, detail));
     }
 
     fn poll(&mut self, ctx: &Context) {
@@ -706,20 +703,11 @@ impl Viewer {
                 self.spectrum_marker = None;
             }
         }
-        for (cursor, pending) in self.cursors.iter_mut().zip(&mut self.pending_snaps) {
-            let Some(job) = pending.as_ref() else {
-                continue;
-            };
-            let Some(result) = job.task.poll() else {
-                continue;
-            };
-            if self.active == job.channel
-                && *cursor == Some(job.time)
-                && let Ok(Ok(Some(snapped))) = result
-            {
-                *cursor = Some(snapped);
+        self.math_state.poll();
+        for (cursor, snap) in self.cursors.iter_mut().zip(&mut self.snaps) {
+            if let Some(time) = snap.poll(self.active) {
+                *cursor = Some(time);
             }
-            *pending = None;
         }
         if self.pending() {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -773,13 +761,10 @@ impl Viewer {
             span: self.selection().unwrap_or_else(|| self.span.clone()),
             channel: self.active,
             fft: self.spectrum.then_some(self.spectrum_window),
-            expression: if self.recording.power_recording()
-                && self.overview.channels[self.active].unit != "V"
-            {
-                String::new()
-            } else {
-                self.math.clone()
-            },
+            expression: self
+                .math_state
+                .numeric()
+                .map_or_else(String::new, |_| self.math.clone()),
         };
         if self.analysis_key.as_ref() == Some(&key) {
             return;
@@ -793,41 +778,11 @@ impl Viewer {
         }
         self.analysis_dirty_at = now + 0.1;
         self.spectrum_span = None;
-        let names = self
-            .overview
-            .channels
-            .iter()
-            .map(|channel| {
-                if channel.unit == "V" {
-                    channel.name.as_str()
-                } else {
-                    ""
-                }
-            })
-            .collect::<Vec<_>>();
-        let math = if key.expression.trim().is_empty() {
-            self.math_error = None;
-            None
-        } else if self.overview.channels[self.active].unit != "V" {
-            self.math_error = Some("Voltage expressions require an active voltage channel".into());
-            None
-        } else {
-            match Expression::parse(&key.expression, &names, self.active) {
-                Ok(expression) => {
-                    self.math_error = None;
-                    Some(expression)
-                }
-                Err(error) => {
-                    self.math_error = Some(error.to_string());
-                    None
-                }
-            }
-        };
         let request = AnalysisRequest {
             span: key.span.clone(),
             active: key.channel,
             spectrum: key.fft,
-            math,
+            math: self.math_state.numeric().cloned(),
         };
         self.analysis_key = Some(key);
         let recording = self.recording.clone();

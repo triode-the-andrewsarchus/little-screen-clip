@@ -1,5 +1,6 @@
 //! Offline CPU plot benchmark for a small and a large waveform.
 //! Set SCOPE_BENCH_SMALL and SCOPE_BENCH_LARGE to supported test captures.
+//! Optionally set SCOPE_BENCH_MATH to an expression such as `> 1V`.
 //! Run cargo test -p clip-file-manager --lib scope_frame_benchmark -- --ignored --nocapture
 
 use super::*;
@@ -8,12 +9,14 @@ use std::time::Instant;
 #[test]
 #[ignore = "manual frame-time benchmark using explicit capture paths"]
 fn scope_frame_benchmark() {
+    let math = std::env::var("SCOPE_BENCH_MATH").unwrap_or_default();
     for key in ["SCOPE_BENCH_SMALL", "SCOPE_BENCH_LARGE"] {
         let path = std::env::var_os(key).expect("set the waveform benchmark input paths");
         let path = Path::new(&path);
         let cancel = AtomicBool::new(false);
         let start = Instant::now();
         let mut viewer = Viewer::load(path, &cancel).unwrap();
+        viewer.math.clone_from(&math);
         let opened = start.elapsed();
         let start = Instant::now();
         viewer.index = Some(viewer.recording.index(&cancel).unwrap());
@@ -76,7 +79,7 @@ fn scope_frame_benchmark() {
             }
             let p95 = latencies.len() * 95 / 100;
             println!(
-                "{key} {label}: preview {opened:?}, index {indexed:?}, CPU frame p95 {:?}, paint p95 {:?}, tessellate p95 {:?}",
+                "{key} {label} math={math:?}: preview {opened:?}, index {indexed:?}, CPU frame p95 {:?}, paint p95 {:?}, tessellate p95 {:?}",
                 latencies[p95], painting[p95], tessellation[p95]
             );
         }

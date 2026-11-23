@@ -1,7 +1,7 @@
 use little_clip_core::engineering::{
     analysis::{self, Expression, Spectrum, Value},
     scope::Channel,
-    waveforms::{Peak, PowerTotals, Recording, sample_span},
+    waveforms::{Capture, Peak, PowerTotals, Recording, sample_span},
 };
 use std::{ops::Range, sync::atomic::AtomicBool};
 
@@ -9,6 +9,7 @@ pub(super) const DETAIL_SAMPLES: u64 = 4096;
 const ANALYSIS_SAMPLES: u64 = 65_536;
 
 pub(super) struct RawChannel {
+    pub first: u64,
     pub start: f64,
     pub step: f64,
     pub samples: Vec<f32>,
@@ -39,6 +40,12 @@ impl RawChannel {
         Some(self.start + index * self.step)
     }
 
+    pub fn covers(&self, rows: &Range<u64>) -> bool {
+        rows.is_empty()
+            || self.first <= rows.start
+                && rows.end <= self.first.saturating_add(self.samples.len() as u64)
+    }
+
     pub fn visible(&self, span: &Range<f64>) -> (f64, &[f32]) {
         let first = self.index_at(span.start).floor().max(0.0) as usize;
         let last = (self.index_at(span.end).ceil().max(0.0) as usize)
@@ -62,36 +69,34 @@ pub(super) fn detail(
             .map(|(index, channel)| {
                 let range = padded_span(channel, &span, 2);
                 let range = range.start..range.end.min(range.start + DETAIL_SAMPLES * 3);
-                let start = channel.time_at(range.start);
-                Ok(RawChannel {
-                    start,
-                    step: channel.interval_seconds,
-                    samples: capture.read_samples(index, range, cancel)?,
-                })
+                read_raw(capture, index, range, cancel)
             })
             .collect()
     })
 }
 
-pub(super) fn snap(
+pub(super) fn read_raw(
+    capture: &Capture,
+    index: usize,
+    range: Range<u64>,
+    cancel: &AtomicBool,
+) -> Result<RawChannel, String> {
+    let channel = &capture.channels()[index];
+    Ok(RawChannel {
+        first: range.start,
+        start: channel.time_at(range.start),
+        step: channel.interval_seconds,
+        samples: capture.read_samples(index, range, cancel)?,
+    })
+}
+
+pub(super) fn snap_window(
     recording: &Recording,
     channel: usize,
-    time: f64,
-    radius: f64,
+    range: Range<u64>,
     cancel: &AtomicBool,
-) -> Result<Option<f64>, String> {
-    recording.checked(cancel, |capture| {
-        let meta = &capture.channels()[channel];
-        let radius = radius.min(meta.interval_seconds * DETAIL_SAMPLES as f64);
-        let range = padded_span(meta, &(time - radius..time + radius), 1);
-        let start = meta.time_at(range.start);
-        let raw = RawChannel {
-            start,
-            step: meta.interval_seconds,
-            samples: capture.read_samples(channel, range, cancel)?,
-        };
-        Ok(raw.snap(time, radius))
-    })
+) -> Result<RawChannel, String> {
+    recording.checked(cancel, |capture| read_raw(capture, channel, range, cancel))
 }
 
 pub(super) struct Measurements {
@@ -99,14 +104,9 @@ pub(super) struct Measurements {
     pub raw: RawChannel,
     pub extrema: Peak,
     pub spectrum: Option<Spectrum>,
-    pub math: Option<MathTrace>,
+    pub math: Option<(RawChannel, Peak)>,
     pub limited: bool,
     pub power_totals: Option<PowerTotals>,
-}
-
-pub(super) enum MathTrace {
-    Predicate(Vec<Range<f64>>),
-    Numeric(RawChannel, Peak),
 }
 
 pub(super) struct AnalysisRequest {
@@ -137,11 +137,7 @@ pub(super) fn analyze(
                     span.start
                 };
                 let end = span.end.min(start.saturating_add(ANALYSIS_SAMPLES));
-                Ok(RawChannel {
-                    start: channel.time_at(start),
-                    step: channel.interval_seconds,
-                    samples: capture.read_samples(index, start..end, cancel)?,
-                })
+                read_raw(capture, index, start..end, cancel)
             })
             .collect::<Result<Vec<_>, String>>()?;
 
@@ -176,51 +172,31 @@ pub(super) fn analyze(
     })
 }
 
-fn math_trace(expression: &Expression, data: &[RawChannel], index: usize) -> MathTrace {
+fn math_trace(expression: &Expression, data: &[RawChannel], index: usize) -> (RawChannel, Peak) {
     let active = &data[index];
-    let samples = (0..active.samples.len()).map(|index| {
-        let t = active.time(index);
-        expression.evaluate(|channel| data.get(channel)?.value_at(t).map(f64::from))
-    });
-    if expression.is_predicate() {
-        let mut runs = Vec::new();
-        let mut start = None;
-        for (index, value) in samples.enumerate() {
-            match (start, value) {
-                (None, Some(Value::Predicate(true))) => start = Some(index),
-                (Some(first), Some(Value::Predicate(true))) => start = Some(first),
-                (Some(first), _) => {
-                    runs.push(active.time(first)..active.time(index));
-                    start = None;
-                }
-                _ => {}
-            }
-        }
-        if let Some(first) = start {
-            runs.push(active.time(first)..active.time(active.samples.len()));
-        }
-        MathTrace::Predicate(runs)
-    } else {
-        let samples = samples
-            .map(|value| match value {
+    let samples = (0..active.samples.len())
+        .map(|index| {
+            let t = active.time(index);
+            match expression.evaluate(|channel| data.get(channel)?.value_at(t).map(f64::from)) {
                 Some(Value::Numeric(value)) => value as f32,
                 _ => f32::NAN,
-            })
-            .collect::<Vec<_>>();
-        let mut extrema = Peak::default();
-        extrema.add(&samples);
-        MathTrace::Numeric(
-            RawChannel {
-                start: active.start,
-                step: active.step,
-                samples,
-            },
-            extrema,
-        )
-    }
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut extrema = Peak::default();
+    extrema.add(&samples);
+    (
+        RawChannel {
+            first: active.first,
+            start: active.start,
+            step: active.step,
+            samples,
+        },
+        extrema,
+    )
 }
 
-fn padded_span(channel: &Channel, range: &Range<f64>, padding: u64) -> Range<u64> {
+pub(super) fn padded_span(channel: &Channel, range: &Range<f64>, padding: u64) -> Range<u64> {
     let span = sample_span(channel, range.clone());
     span.start.saturating_sub(padding)..span.end.saturating_add(padding).min(channel.sample_count)
 }
