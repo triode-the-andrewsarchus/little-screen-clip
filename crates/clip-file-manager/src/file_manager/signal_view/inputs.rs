@@ -3,6 +3,7 @@ use crate::file_manager::scope_view::{FilterSamples, FilteredChannel, reads::Raw
 use little_clip_core::engineering::{
     analysis::{Binding, Dimension, SignalType, Value},
     logic::{Level, Trace},
+    logic_decode::PcmLane,
     logic_preview,
     scope::Channel,
     waveforms::{Recording, sample_span, time_span},
@@ -46,6 +47,10 @@ enum Source {
         index: usize,
         rate: Option<f64>,
     },
+    Pcm {
+        lane: Arc<PcmLane>,
+        generation: u64,
+    },
 }
 
 pub(super) enum Samples {
@@ -62,6 +67,10 @@ pub(super) enum Samples {
     Digital {
         trace: Trace,
         native: Range<f64>,
+        offset: f64,
+    },
+    Pcm {
+        lane: Arc<PcmLane>,
         offset: f64,
     },
     Empty,
@@ -137,9 +146,34 @@ impl Input {
         self.offset
     }
 
+    pub(super) fn pcm(
+        id: u64,
+        offset: f64,
+        label: &str,
+        channel: usize,
+        generation: u64,
+        lane: &Arc<PcmLane>,
+    ) -> Self {
+        let (suffix, side) = if channel == 0 {
+            ("l", "Left")
+        } else {
+            ("r", "Right")
+        };
+        Self {
+            alias: format!("s{id}_pcm_{suffix}"),
+            label: format!("{label} · {side} PCM (full scale)"),
+            offset,
+            source: Source::Pcm {
+                lane: lane.clone(),
+                generation,
+            },
+        }
+    }
+
     pub(super) fn signature(&self) -> Signature {
         let generation = match &self.source {
             Source::Filtered { samples, .. } => samples.as_ref().map(|samples| samples.generation),
+            Source::Pcm { generation, .. } => Some(*generation),
             _ => None,
         };
         Signature {
@@ -161,6 +195,7 @@ impl Input {
             }
             Source::Filtered { dimension, .. } => SignalType::Analog(*dimension),
             Source::Digital { .. } => SignalType::Digital,
+            Source::Pcm { .. } => SignalType::Analog(Dimension::SCALAR),
         };
         Binding {
             name: &self.alias,
@@ -175,6 +210,7 @@ impl Input {
             }
             Source::Filtered { rate, .. } => Some(*rate),
             Source::Digital { rate, .. } => *rate,
+            Source::Pcm { lane, .. } => Some(lane.interval().recip()),
         }
         .filter(|rate| rate.is_finite() && *rate > 0.0)
     }
@@ -205,6 +241,10 @@ impl Input {
                     native,
                     offset: self.offset,
                 })
+            }),
+            Source::Pcm { lane, .. } => Ok(Samples::Pcm {
+                lane: lane.clone(),
+                offset: self.offset,
             }),
         }
     }
@@ -280,6 +320,7 @@ impl Samples {
                     _ => None,
                 }
             }
+            Self::Pcm { lane, offset } => lane.value_at(time - offset).map(Value::Numeric),
             Self::Empty => None,
         }
     }

@@ -528,7 +528,14 @@ impl Source {
             }
             Capture::Digital(view) => {
                 let (recording, lanes) = view.recording();
-                inputs::Input::digital(self.id, self.offset, &label, recording, lanes)
+                let mut inputs =
+                    inputs::Input::digital(self.id, self.offset, &label, recording, lanes);
+                if let Some(pins) = view.decoded_pcm() {
+                    inputs.extend(pins.lanes().map(|(channel, generation, lane)| {
+                        inputs::Input::pcm(self.id, self.offset, &label, channel, generation, lane)
+                    }));
+                }
+                inputs
             }
         }
     }

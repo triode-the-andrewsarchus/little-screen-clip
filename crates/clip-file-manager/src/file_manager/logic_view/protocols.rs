@@ -18,6 +18,7 @@ const DECODE_EDGES: usize = 8192;
 mod i2s;
 mod samples;
 use i2s::I2sInputs;
+pub(in crate::file_manager) use samples::PcmPins;
 
 pub(in crate::file_manager) trait TraceInput: Send + Sync {
     fn time_bounds(&self, index: usize) -> Option<Range<f64>>;
@@ -148,9 +149,21 @@ struct Decoded {
 pub(in crate::file_manager) struct Panel {
     decoders: Vec<Decoder>,
     selected: Option<usize>,
+    pcm: Option<PcmPins>,
 }
 
 impl Panel {
+    pub(super) fn recorded() -> Self {
+        Self {
+            pcm: Some(PcmPins::default()),
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn pcm(&self) -> Option<&PcmPins> {
+        self.pcm.as_ref()
+    }
+
     fn current(&self) -> Option<&Decoder> {
         self.selected.and_then(|index| self.decoders.get(index))
     }
@@ -260,8 +273,15 @@ impl Panel {
         self.current()?.cursor_event(span, cursor)
     }
 
-    pub fn table(&mut self, ui: &mut Ui, span: &Range<f64>, cursor: Option<f64>) -> Option<Event> {
-        self.current_mut()?.table(ui, span, cursor)
+    pub fn table(
+        &mut self,
+        ui: &mut Ui,
+        span: &Range<f64>,
+        cursor: Option<f64>,
+        selection: Option<&Range<f64>>,
+    ) -> Option<Event> {
+        let decoder = self.decoders.get_mut(self.selected?)?;
+        decoder.table(ui, span, cursor, self.pcm.as_mut(), selection)
     }
 
     pub fn events(&self, span: &Range<f64>) -> &[Event] {
@@ -468,6 +488,8 @@ impl Decoder {
         ui: &mut Ui,
         span: &Range<f64>,
         cursor: Option<f64>,
+        pcm: Option<&mut PcmPins>,
+        selection: Option<&Range<f64>>,
     ) -> Option<Event> {
         if let Err(message) = self.inputs() {
             ui.weak(message);
@@ -480,7 +502,14 @@ impl Decoder {
         match self.current(span) {
             Some(Ok(output)) => {
                 let events = &output.events;
-                decoded_controls(ui, events, self.mode, &mut show_samples);
+                decoded_controls(
+                    ui,
+                    events,
+                    self.mode,
+                    &mut show_samples,
+                    pcm,
+                    selection.unwrap_or(span),
+                );
                 coverage(ui, output, span);
                 let picked = if self.mode == Mode::I2s && show_samples && !events.is_empty() {
                     samples::plot(ui, span, cursor, events)
@@ -520,7 +549,14 @@ impl Decoder {
     }
 }
 
-fn decoded_controls(ui: &mut Ui, events: &[Event], mode: Mode, show_samples: &mut bool) {
+fn decoded_controls(
+    ui: &mut Ui,
+    events: &[Event],
+    mode: Mode,
+    show_samples: &mut bool,
+    pcm: Option<&mut PcmPins>,
+    selection: &Range<f64>,
+) {
     if events.is_empty() {
         return;
     }
@@ -544,6 +580,9 @@ fn decoded_controls(ui: &mut Ui, events: &[Event], mode: Mode, show_samples: &mu
                 ui.ctx().copy_text(samples::tsv(events));
             }
             ui.toggle_value(show_samples, "Sample plot");
+            if let Some(pcm) = pcm {
+                pcm.controls(ui, events, selection);
+            }
         }
     });
 }

@@ -1,8 +1,51 @@
 use super::{Event, Kind, active_event, event_label};
 use crate::file_manager::scope_view::plot as timing;
 use egui::{Align2, FontId, Painter, Rect, Sense, Stroke, Ui, vec2};
-use little_clip_core::engineering::logic_decode::I2sChannel;
-use std::{fmt::Write, ops::Range};
+use little_clip_core::engineering::logic_decode::{I2sChannel, PcmLane};
+use std::{fmt::Write, ops::Range, sync::Arc};
+
+#[derive(Default)]
+pub(in crate::file_manager) struct PcmPins {
+    generation: u64,
+    lanes: [Option<Arc<PcmLane>>; 2],
+    error: bool,
+}
+
+impl PcmPins {
+    pub(in crate::file_manager) fn lanes(
+        &self,
+    ) -> impl Iterator<Item = (usize, u64, &Arc<PcmLane>)> {
+        self.lanes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, lane)| lane.as_ref().map(|lane| (index, self.generation, lane)))
+    }
+
+    pub(super) fn controls(&mut self, ui: &mut Ui, events: &[Event], span: &Range<f64>) {
+        if ui
+            .button("Pin PCM for equations")
+            .on_hover_text(
+                "Use visible decoded words, or the brushed region, as fixed full-scale PCM inputs.",
+            )
+            .clicked()
+        {
+            let lanes = [I2sChannel::Left, I2sChannel::Right]
+                .map(|channel| PcmLane::from_events(events, channel, span).map(Arc::new));
+            self.error = lanes.iter().all(Option::is_none);
+            if !self.error {
+                self.generation = self.generation.wrapping_add(1);
+                self.lanes = lanes;
+            }
+        }
+        if self.lanes.iter().any(Option::is_some) && ui.button("Clear PCM pins").clicked() {
+            self.lanes = [None, None];
+            self.error = false;
+        }
+        if self.error {
+            ui.weak("Select at least three word times and one valid sample on a channel.");
+        }
+    }
+}
 
 pub(super) fn plot(
     ui: &mut Ui,

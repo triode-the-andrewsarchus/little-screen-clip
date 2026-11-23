@@ -4,8 +4,10 @@ use super::logic::{Edge, Level, Trace};
 use std::ops::Range;
 
 mod i2s;
+mod pcm;
 mod spi;
 pub use i2s::{I2sChannel, I2sConfig, I2sFormat, i2s};
+pub use pcm::PcmLane;
 pub use spi::{SpiConfig, spi};
 
 const MAX_EVENTS: usize = 16_384;

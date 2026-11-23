@@ -80,7 +80,7 @@ impl Viewer {
     pub fn load(path: &Path, cancel: &AtomicBool) -> Result<Self, String> {
         let recording = Recording::open(path, cancel)?;
         let overview = recording.overview(cancel)?;
-        let protocols = protocols::Panel::default();
+        let protocols = protocols::Panel::recorded();
         Ok(Self {
             span: overview.span.clone(),
             overview,
@@ -134,6 +134,10 @@ impl Viewer {
         (&self.recording, &self.overview.lanes)
     }
 
+    pub(super) fn decoded_pcm(&self) -> Option<&protocols::PcmPins> {
+        self.protocols.pcm()
+    }
+
     pub(super) fn cursor(&self) -> Option<f64> {
         self.cursor
     }
@@ -170,7 +174,10 @@ impl Viewer {
         if self.show_transitions && !self.protocols.edges() {
             self.protocols
                 .update(ui.ctx(), self.span.clone(), self.refined, &self.recording);
-            if let Some(event) = self.protocols.table(ui, &self.span, self.cursor) {
+            if let Some(event) =
+                self.protocols
+                    .table(ui, &self.span, self.cursor, self.selected.as_ref())
+            {
                 self.cursor = Some(event.time.start);
                 ui.ctx().request_repaint();
             }

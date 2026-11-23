@@ -83,7 +83,7 @@ impl Decoders {
         if !self.active() {
             return;
         }
-        if let Some(event) = self.panel.table(ui, span, probe.or(self.cursor)) {
+        if let Some(event) = self.panel.table(ui, span, probe.or(self.cursor), None) {
             self.cursor = Some(event.time.start);
             ui.ctx().request_repaint();
         }
