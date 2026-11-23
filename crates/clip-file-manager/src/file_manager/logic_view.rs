@@ -53,6 +53,7 @@ pub(super) struct Viewer {
     followed_cursor: Option<f64>,
     request_after: f64,
     show_transitions: bool,
+    evidence_lane: Option<usize>,
     protocols: protocols::Panel,
     frequency: frequency::Frequency,
     error: Option<String>,
@@ -148,6 +149,7 @@ impl Viewer {
             followed_cursor: None,
             request_after: 0.0,
             show_transitions: false,
+            evidence_lane: None,
             protocols,
             frequency: frequency::Frequency::default(),
             error: None,
@@ -229,6 +231,10 @@ impl Viewer {
     fn capture_ui(&mut self, ui: &mut Ui, copies: &mut Copies, link: Option<&Link>) -> Interaction {
         self.poll(ui.ctx());
         self.refine(ui.ctx(), link.is_none());
+        self.evidence_lane = link.and_then(|link| link.visiting_input);
+        if link.is_some_and(|link| link.reveal_input.is_some()) {
+            self.frequency.visible = false;
+        }
         let share = self.toolbar(ui, copies, link);
         self.channel_choices(ui);
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
@@ -392,16 +398,20 @@ impl Viewer {
     }
 
     fn visible_lanes(&self) -> Vec<usize> {
-        if self.show_transitions
-            && let Some(mut channels) = self.protocols.channels()
-        {
-            channels.retain(|lane| *lane < self.overview.lanes.len());
-            if !channels.is_empty() {
-                return channels;
-            }
+        let configured = self
+            .show_transitions
+            .then(|| self.protocols.channels())
+            .flatten();
+        let mut visible = configured.unwrap_or_default();
+        visible.retain(|lane| *lane < self.overview.lanes.len());
+        if visible.is_empty() {
+            let first = self.active / LANES_PER_PAGE * LANES_PER_PAGE;
+            visible.extend(first..(first + LANES_PER_PAGE).min(self.overview.lanes.len()));
         }
-        let first = self.active / LANES_PER_PAGE * LANES_PER_PAGE;
-        (first..(first + LANES_PER_PAGE).min(self.overview.lanes.len())).collect()
+        if let Some(index) = self.evidence_lane.filter(|index| !visible.contains(index)) {
+            visible.push(index);
+        }
+        visible
     }
 
     fn focused_lane(&self) -> usize {
@@ -452,7 +462,7 @@ impl Viewer {
         let axis = Link::clock(link).workspace_range(&self.span);
         timing::axes(&painter, rect, &axis, ink);
         let clipped = painter.with_clip_rect(rect);
-        self.draw_channels(ui, &painter, &clipped, rect, ink);
+        self.draw_channels(ui, &painter, &clipped, rect, ink, link);
         super::signal_view::frequency_plot::paint_origin(
             ui,
             &clipped,
@@ -508,6 +518,7 @@ impl Viewer {
         clipped: &egui::Painter,
         rect: Rect,
         ink: Color32,
+        link: Option<&Link>,
     ) {
         let visible = self.visible_lanes();
         let selected = self.focused_lane();
@@ -521,6 +532,8 @@ impl Viewer {
         let picking = self.protocols.wiring_active() || self.channel_picker.active();
         for (offset, index) in visible.into_iter().enumerate() {
             let lane = timing::lane(rect, offset, count);
+            Link::reveal_trace(link, ui, lane, index);
+            Link::paint_trace_evidence(link, clipped, lane, &self.span, index);
             let color = if selected == index {
                 Color32::from_rgb(130, 225, 163)
             } else {

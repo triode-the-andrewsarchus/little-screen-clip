@@ -1,15 +1,17 @@
 use super::super::{
+    evidence::InputEvidence,
     inputs::{Input, Samples},
     spectra,
 };
 use crate::file_manager::scope_view::reads::RawChannel;
 use little_clip_core::engineering::{
-    analysis::{SignalGraph, SignalType, Value},
+    analysis::{InputHistory, SignalGraph, SignalType, Value},
     logic::{self, Bin, Edge, Level, Trace},
     scope::Channel,
     waveforms::{self, Peak},
 };
 use std::{
+    collections::BTreeMap,
     ops::Range,
     sync::{
         Arc,
@@ -25,6 +27,8 @@ pub(super) struct Frame {
     pub step: f64,
     pub lanes: Vec<Lane>,
     pub digital: Vec<logic::Lane>,
+    pub inputs: Vec<InputEvidence>,
+    pub history: Vec<BTreeMap<usize, InputHistory>>,
 }
 
 pub(super) enum Lane {
@@ -115,10 +119,16 @@ pub(super) fn calculate(
         })
         .collect();
     Ok(Frame {
-        span: range,
+        span: range.clone(),
         step,
         lanes,
         digital,
+        inputs: inputs
+            .iter()
+            .zip(&samples)
+            .map(|(input, samples)| input.evidence(samples, &range))
+            .collect(),
+        history: graph.input_history(),
     })
 }
 

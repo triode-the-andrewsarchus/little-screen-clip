@@ -311,6 +311,7 @@ impl Viewer {
             self.span = link.clock.workspace_range(view.span());
             ui.ctx().request_repaint();
         }
+        Link::reveal_trace(Some(link), ui, rect, key.channel);
         if self.reveal_source.take_if(|id| *id == source.id).is_some() {
             ui.scroll_to_rect(rect, Some(Align::TOP));
         }

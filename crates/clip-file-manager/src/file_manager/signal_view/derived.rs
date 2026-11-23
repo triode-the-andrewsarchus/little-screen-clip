@@ -65,6 +65,17 @@ struct Key {
     span: Range<f64>,
 }
 
+impl Key {
+    fn matches_inputs(&self, inputs: &[Input]) -> bool {
+        self.inputs.len() == inputs.len()
+            && self
+                .inputs
+                .iter()
+                .zip(inputs)
+                .all(|(old, input)| *old == input.signature())
+    }
+}
+
 impl Derived {
     pub(super) fn analysis_edits(&self) -> AnalysisEdits {
         AnalysisEdits {
@@ -203,6 +214,7 @@ impl Derived {
     }
 
     fn invalidate(&mut self) {
+        self.decoders.retire_frame();
         self.revision = self.revision.wrapping_add(1);
         self.accepted = None;
         self.pending = None;
@@ -255,6 +267,33 @@ impl Derived {
         if let Some(result) = take_query_result(&mut self.pending) {
             self.accepted = Some(result);
         }
+    }
+
+    pub(super) fn source_windows(
+        &mut self,
+        span: &Range<f64>,
+        inputs: &[Input],
+    ) -> Vec<super::evidence::Window> {
+        match &self.accepted {
+            Some((key, Ok(_))) if key.matches_inputs(inputs) => self.decoders.source_windows(span),
+            Some((key, _)) if !key.matches_inputs(inputs) => {
+                self.decoders.retire_frame();
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) fn return_to_event(&mut self, ui: &mut Ui, span: &mut Range<f64>) {
+        self.decoders.return_to_event(ui, span);
+    }
+
+    pub(super) fn visiting_input(&self) -> Option<super::evidence::TraceTarget> {
+        self.decoders.visiting_input()
+    }
+
+    pub(super) fn take_source_target(&mut self) -> Option<super::evidence::TraceTarget> {
+        self.decoders.take_source_target()
     }
 
     pub(super) fn content(
@@ -323,13 +362,7 @@ impl Derived {
 
     fn current_frame(&self, ui: &mut Ui, inputs: &[Input]) -> Option<Arc<Frame>> {
         let (key, result) = self.accepted.as_ref()?;
-        if key.inputs.len() != inputs.len()
-            || key
-                .inputs
-                .iter()
-                .zip(inputs)
-                .any(|(old, input)| *old != input.signature())
-        {
+        if !key.matches_inputs(inputs) {
             return None;
         }
         match result {

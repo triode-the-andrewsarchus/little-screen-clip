@@ -33,6 +33,9 @@ impl Viewer {
         link: &Link,
     ) {
         self.poll(ui.ctx());
+        if let Some(channel) = link.reveal_input {
+            self.reveal_recorded(channel);
+        }
         self.span = span;
         self.hover.time = link.probe;
     }
@@ -174,6 +177,7 @@ impl Viewer {
             );
         }
         self.paint_channel(&painter, index, rect, bounds, color);
+        Link::paint_trace_evidence(Some(link), &painter, rect, &self.span, index);
         if index == self.active {
             self.math_state.paint(
                 &painter.with_clip_rect(rect.intersect(painter.clip_rect())),

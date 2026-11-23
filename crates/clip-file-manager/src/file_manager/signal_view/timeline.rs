@@ -11,6 +11,9 @@ pub(in crate::file_manager) struct Link {
     pub reference: Option<f64>,
     pub landmark: Option<LandmarkMarker>,
     pub shared: Option<Range<f64>>,
+    pub evidence: Vec<super::evidence::Marker>,
+    pub reveal_input: Option<usize>,
+    pub visiting_input: Option<usize>,
     pub share_selection: bool,
 }
 
@@ -46,6 +49,28 @@ impl Link {
             selection.cloned()
         } else {
             None
+        }
+    }
+
+    pub fn reveal_trace(link: Option<&Self>, ui: &egui::Ui, rect: Rect, channel: usize) {
+        if link.and_then(|link| link.reveal_input) == Some(channel) {
+            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        }
+    }
+
+    pub fn paint_trace_evidence(
+        link: Option<&Self>,
+        painter: &egui::Painter,
+        rect: Rect,
+        span: &Range<f64>,
+        channel: usize,
+    ) {
+        for marker in link
+            .into_iter()
+            .flat_map(|link| &link.evidence)
+            .filter(|marker| marker.channel == channel)
+        {
+            marker.paint(painter, rect, span);
         }
     }
 

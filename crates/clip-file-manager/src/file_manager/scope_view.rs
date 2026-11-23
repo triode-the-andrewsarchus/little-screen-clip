@@ -236,6 +236,12 @@ impl Viewer {
         if self.spectrum { 410.0 } else { 205.0 }
     }
 
+    fn reveal_recorded(&mut self, index: usize) {
+        self.visible[index] = true;
+        self.trace_fft.remove(&ScopeTrace::Recorded(index));
+        self.spectra.only = false;
+    }
+
     pub(super) fn content(
         &mut self,
         ui: &mut Ui,
@@ -261,6 +267,9 @@ impl Viewer {
         can_add_equation: bool,
     ) -> Interaction {
         self.poll(ui.ctx());
+        if let Some(channel) = link.and_then(|link| link.reveal_input) {
+            self.reveal_recorded(channel);
+        }
         let (spectrum_opened, derive_predicate) = ui
             .scope(|ui| {
                 ui.spacing_mut().interact_size.y = 24.0;
@@ -543,7 +552,7 @@ impl Viewer {
         self.hover.time = probe
             .or(link.and_then(|link| link.probe))
             .or_else(|| self.digital.cursor());
-        let (channels, fft_change) = self.draw_channels(ui, &painter, rect, ink);
+        let (channels, fft_change) = self.draw_channels(ui, &painter, rect, ink, link);
         self.digital
             .highlight_analog_inputs(&clipped, &self.span, &channels, self.stacked);
         self.draw_math(ui, &painter, &clipped, rect);
@@ -639,6 +648,7 @@ impl Viewer {
         painter: &egui::Painter,
         rect: Rect,
         ink: Color32,
+        link: Option<&Link>,
     ) -> (Vec<PlottedChannel>, Option<usize>) {
         let overlay = self.overlay_scale();
         let order = self.channel_slots().collect::<Vec<_>>();
@@ -647,6 +657,7 @@ impl Viewer {
         let mut overlay_axis = false;
         for (slot, index) in order {
             let lane = self.lane(rect, slot);
+            Link::reveal_trace(link, ui, lane.frame, index);
             if !ui.is_rect_visible(lane.frame) {
                 if let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index)) {
                     spectrum.suspend();
@@ -686,6 +697,7 @@ impl Viewer {
             }
             let bounds = lanes::shifted(display, -offset);
             self.paint_channel(painter, index, lane.plot, bounds, color);
+            Link::paint_trace_evidence(link, painter, lane.plot, &self.span, index);
             plotted.push(PlottedChannel {
                 index,
                 plot: lane.plot,

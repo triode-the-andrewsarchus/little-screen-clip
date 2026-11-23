@@ -573,6 +573,10 @@ impl Panel {
             .cursor_event(self.decode_window(span), cursor)
     }
 
+    pub(in crate::file_manager) fn picked_event(&self, span: &Range<f64>) -> Option<&Event> {
+        self.events(span).get(self.current()?.picked?)
+    }
+
     pub fn table(
         &mut self,
         ui: &mut Ui,
@@ -1260,6 +1264,7 @@ mod tests {
         };
 
         let mut visible = original.clone();
+        assert!(panel.picked_event(&visible).is_none());
         let cursor = panel.follow_event(
             EventAction::Inspect(event.clone()),
             &mut visible,
@@ -1273,6 +1278,7 @@ mod tests {
             panel.cursor_event(&visible, Some(cursor)).unwrap().kind,
             event.kind
         );
+        assert_eq!(panel.picked_event(&visible), Some(&event));
         panel.exit_inspection(&mut visible);
         assert_eq!(visible, original);
         assert!(!panel.inspecting());

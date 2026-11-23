@@ -3,7 +3,7 @@
 use super::expression::{rename_reference, rewrite_references};
 use super::{Binding, Dimension, Expression, SignalType, Value};
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
 };
 
@@ -25,6 +25,30 @@ impl fmt::Display for GraphError {
 }
 
 impl std::error::Error for GraphError {}
+
+/// Enclosing sample ages for one input in a derived lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputHistory {
+    /// The newest sample the expression may use, in rows before its output.
+    pub newest: u32,
+    /// The oldest sample age, or `None` if feedback reaches the evaluation start.
+    pub oldest: Option<u32>,
+}
+
+impl InputHistory {
+    fn delayed(self, rows: u32) -> Self {
+        Self {
+            newest: self.newest + rows,
+            oldest: self.oldest.map(|oldest| oldest + rows),
+        }
+    }
+
+    /// Widens the bounds to include another path to the same input.
+    pub fn merge(&mut self, other: Self) {
+        self.newest = self.newest.min(other.newest);
+        self.oldest = self.oldest.zip(other.oldest).map(|(a, b)| a.max(b));
+    }
+}
 
 /// A named output and its physical or digital result type.
 pub struct DerivedLane {
@@ -214,6 +238,49 @@ impl SignalGraph {
     /// Returns the recorded inputs required by the expressions.
     pub fn used_inputs(&self) -> &[usize] {
         &self.used_inputs
+    }
+
+    /// Returns the potential inputs of each lane in output order.
+    ///
+    /// The age bounds include all expression branches and enclose sparse taps.
+    pub fn input_history(&self) -> Vec<BTreeMap<usize, InputHistory>> {
+        let mut histories: Vec<BTreeMap<usize, InputHistory>> =
+            Vec::with_capacity(self.lanes.len());
+        for (output, lane) in self.lanes.iter().enumerate() {
+            let mut history = BTreeMap::<usize, InputHistory>::new();
+            let mut feedback = false;
+            lane.expression.visit_inputs(|index, delay| {
+                let rows = u32::from(delay);
+                if index < self.inputs {
+                    let age = InputHistory {
+                        newest: rows,
+                        oldest: Some(rows),
+                    };
+                    history
+                        .entry(index)
+                        .and_modify(|entry| entry.merge(age))
+                        .or_insert(age);
+                } else if let Some(previous) = histories.get(index - self.inputs) {
+                    for (&input, &age) in previous {
+                        let age = age.delayed(rows);
+                        history
+                            .entry(input)
+                            .and_modify(|entry| entry.merge(age))
+                            .or_insert(age);
+                    }
+                } else {
+                    debug_assert_eq!(index - self.inputs, output);
+                    feedback = true;
+                }
+            });
+            if feedback {
+                for age in history.values_mut() {
+                    age.oldest = None;
+                }
+            }
+            histories.push(history);
+        }
+        histories
     }
 
     /// Returns whether evaluating a lane depends on past samples.
@@ -414,6 +481,48 @@ mod tests {
             evaluator.evaluate(|index| input[index].filter(|_| index != 1)),
             &[None, None]
         );
+    }
+
+    #[test]
+    fn input_history_tracks_transitive_delays_and_retains_feedback_start() {
+        let inputs = ["a", "b", "unused"].map(|name| Binding {
+            name,
+            signal_type: SignalType::Digital,
+        });
+        let graph = SignalGraph::compile(
+            "other = !unused\nmixed = a[n-2] | a[n-7] | b\nlatch[n]: logic = mixed | latch[n-1]\nwire = latch[n-3]",
+            &inputs,
+            0,
+        )
+        .unwrap();
+        let history = graph.input_history();
+        assert_eq!(
+            history[1][&0],
+            InputHistory {
+                newest: 2,
+                oldest: Some(7)
+            }
+        );
+        assert_eq!(
+            history[3],
+            BTreeMap::from([
+                (
+                    0,
+                    InputHistory {
+                        newest: 5,
+                        oldest: None
+                    }
+                ),
+                (
+                    1,
+                    InputHistory {
+                        newest: 3,
+                        oldest: None
+                    }
+                ),
+            ])
+        );
+        assert!(history[0].contains_key(&2));
     }
 
     #[test]

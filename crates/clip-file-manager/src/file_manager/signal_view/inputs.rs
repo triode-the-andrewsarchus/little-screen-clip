@@ -1,3 +1,4 @@
+use super::evidence::{InputEvidence, TraceTarget};
 use crate::file_manager::{
     logic_view::protocols::TraceInput,
     scope_view::{FilterSamples, FilteredChannel, ThresholdInput, reads::RawChannel},
@@ -23,6 +24,7 @@ pub(super) struct Input {
     pub alias: String,
     pub label: String,
     clock: Clock,
+    target: Option<TraceTarget>,
     source: Source,
 }
 
@@ -148,6 +150,7 @@ impl Input {
             alias: saved.alias.clone(),
             label: format!("{} (unavailable)", saved.label),
             clock,
+            target: None,
             source: Source::Missing {
                 kind: saved.kind,
                 rate: saved.rate,
@@ -170,6 +173,10 @@ impl Input {
                     alias: Self::analog_alias(id, index),
                     label: format!("{label} · {}", channel.name),
                     clock,
+                    target: Some(TraceTarget {
+                        source: id,
+                        channel: index,
+                    }),
                     source: Source::Analog {
                         reader: reader.clone(),
                         index,
@@ -193,6 +200,10 @@ impl Input {
             alias: format!("s{id}_f{}", index + 1),
             label: format!("{label} · {name}"),
             clock,
+            target: Some(TraceTarget {
+                source: id,
+                channel: index,
+            }),
             source: Source::Filtered {
                 dimension: Dimension::from_unit(&channel.unit)?,
                 rate: channel.interval_seconds.recip(),
@@ -215,6 +226,10 @@ impl Input {
                 alias: format!("s{id}_c{}", index + 1),
                 label: format!("{label} · {}", lane.name),
                 clock,
+                target: Some(TraceTarget {
+                    source: id,
+                    channel: index,
+                }),
                 source: Source::Digital {
                     reader: reader.clone(),
                     index,
@@ -238,6 +253,10 @@ impl Input {
                 alias: format!("s{id}_d{}", index + 1),
                 label: format!("{label} · {}", lane.name),
                 clock,
+                target: Some(TraceTarget {
+                    source: id,
+                    channel: index,
+                }),
                 source: Source::Threshold {
                     reader: reader.clone(),
                     index,
@@ -267,6 +286,7 @@ impl Input {
             alias: format!("s{id}_pcm_{suffix}"),
             label: format!("{label} · {side} PCM (full scale)"),
             clock,
+            target: None,
             source: Source::Measured {
                 lane: Measurement::Pcm(lane.clone()),
                 generation,
@@ -291,6 +311,7 @@ impl Input {
             alias: format!("s{id}_pwm_{suffix}"),
             label: format!("{label} · PWM {name}"),
             clock,
+            target: None,
             source: Source::Measured {
                 lane: Measurement::Pwm(lane.clone(), measure),
                 generation,
@@ -380,6 +401,43 @@ impl Input {
             Source::Measured { lane, .. } => Some(lane.rate()),
         }
         .filter(|rate| rate.is_finite() && *rate > 0.0)
+    }
+
+    pub(super) fn evidence(&self, samples: &Samples, grid: &Range<f64>) -> InputEvidence {
+        let (coverage, note) = match samples {
+            Samples::Analog { channel, .. } => (
+                Some(
+                    self.clock
+                        .workspace_range(&time_span(std::slice::from_ref(channel))),
+                ),
+                "Analog interpolation can also use adjacent recorded samples.",
+            ),
+            Samples::Digital { trace, native, .. } => (
+                Some(
+                    self.clock
+                        .workspace_range(&(native.start..native.end.min(trace.inspected_until))),
+                ),
+                "Logic state can also depend on the last earlier transition.",
+            ),
+            Samples::Filtered { raw, .. } => (
+                Some(
+                    self.clock
+                        .workspace_range(&(raw.start..raw.time(raw.samples.len()))),
+                ),
+                "The equation uses a filtered trace. This opens the original channel. The filter can use earlier samples.",
+            ),
+            Samples::Measured { .. } => (
+                Some(grid.clone()),
+                "The equation uses a pinned decoder measurement.",
+            ),
+            Samples::Empty => (None, "Samples were unavailable in the equation grid."),
+        };
+        InputEvidence {
+            label: self.label.clone(),
+            target: self.target,
+            coverage,
+            note,
+        }
     }
 
     pub(super) fn read(&self, span: &Range<f64>, cancel: &AtomicBool) -> Result<Samples, String> {

@@ -14,7 +14,7 @@ pub use alignment::{Correlation, correlate, strongest_peaks};
 pub use clock::{Clock, Landmark, fit_clock};
 pub use expression::{Binding, Dimension, Expression, ExpressionError, SignalType, Value};
 pub use filter::{FilterChain, FilterKind, FilterStage};
-pub use graph::{DerivedLane, Evaluator, GraphError, SignalGraph};
+pub use graph::{DerivedLane, Evaluator, GraphError, InputHistory, SignalGraph};
 pub use measurements::{Measurement, MeasurementGrid, Moments};
 pub use spectrum::{
     MAX_ANALYSIS_SAMPLES, Spectrum, SpectrumWindow, fundamental_hz, spectrum, spectrum_with_window,

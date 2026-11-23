@@ -626,6 +626,7 @@ impl Viewer {
             reference: recipe.reference,
             shared: super::interval::Shared::restore(recipe.shared),
             reveal_source: None,
+            reveal_input: None,
             derived: derived::Derived::default(),
             alignment: super::alignment::Alignment::default(),
             comparison: super::comparison::Comparison {

@@ -3,6 +3,7 @@
 mod alignment;
 mod comparison;
 mod derived;
+mod evidence;
 pub(super) mod filter_editor;
 pub(super) mod frequency_plot;
 mod inputs;
@@ -41,6 +42,7 @@ pub(super) struct Viewer {
     reference: Option<Reference>,
     shared: interval::Shared,
     reveal_source: Option<u64>,
+    reveal_input: Option<evidence::TraceTarget>,
     session: session::Session,
     error: Option<String>,
 }
@@ -50,6 +52,8 @@ struct LinkedTimeline<'a> {
     preview: Option<alignment::Suggestion>,
     shared: Option<&'a Range<f64>>,
     reference: Option<f64>,
+    evidence: &'a [evidence::Window],
+    visiting: Option<evidence::TraceTarget>,
 }
 
 struct Source {
@@ -143,6 +147,7 @@ impl Viewer {
             reference: None,
             shared: interval::Shared::default(),
             reveal_source: None,
+            reveal_input: None,
             session: session::Session::default(),
             error: None,
         };
@@ -340,6 +345,16 @@ impl Viewer {
             self.span = domain.clone();
         }
         self.domain = domain;
+        let inputs = if self.derived.open() {
+            self.sources
+                .iter()
+                .flat_map(|source| source.inputs_on(source.display_clock(preview)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.derived.return_to_event(ui, &mut self.span);
+        let evidence = self.derived.source_windows(&self.span, &inputs);
         let shared = self
             .shared
             .controls(ui, &self.sources, preview, &mut self.span, &self.domain);
@@ -349,6 +364,8 @@ impl Viewer {
             preview,
             shared: shared.as_ref(),
             reference: self.reference_time_on(preview),
+            evidence: &evidence,
+            visiting: self.derived.visiting_input(),
         };
         let available = ui.available_height();
         let height = if matches!(
@@ -381,14 +398,6 @@ impl Viewer {
                 next_probe = probe.or(next_probe);
                 action = request.map(|request| (index, request)).or(action.take());
             }
-            let inputs = if self.derived.open() {
-                self.sources
-                    .iter()
-                    .flat_map(|source| source.inputs_on(source.display_clock(preview)))
-                    .collect()
-            } else {
-                Vec::new()
-            };
             next_probe = self
                 .derived
                 .content(
@@ -402,6 +411,7 @@ impl Viewer {
                 )
                 .or(next_probe);
         });
+        self.reveal_input = self.derived.take_source_target();
         self.session
             .scroll
             .finish(ui.ctx(), scroll.state.clamped_offset().y, || {
@@ -498,6 +508,20 @@ impl Viewer {
             &mut self.span,
             &self.domain,
         );
+        let reveal_input = self
+            .reveal_input
+            .take_if(|target| target.source == source.id);
+        let evidence = timeline
+            .evidence
+            .iter()
+            .filter_map(|window| {
+                let target = window.target.filter(|target| target.source == source.id)?;
+                Some(evidence::Marker {
+                    channel: target.channel,
+                    native: clock.native_range(window.span.as_ref()?),
+                })
+            })
+            .collect();
         Link {
             domain: clock.native_range(&self.domain),
             clock,
@@ -505,6 +529,12 @@ impl Viewer {
             reference: timeline.reference.map(|time| clock.to_native(time)),
             landmark: self.alignment.marker(source.id),
             shared,
+            evidence,
+            reveal_input: reveal_input.map(|target| target.channel),
+            visiting_input: timeline
+                .visiting
+                .filter(|target| target.source == source.id)
+                .map(|target| target.channel),
             share_selection: self.sources.len() > 1,
         }
     }

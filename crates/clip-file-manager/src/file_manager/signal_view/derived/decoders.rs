@@ -1,11 +1,15 @@
+use super::super::evidence::{TraceTarget, Window};
 use super::compute::{Frame, Lane};
 use crate::file_manager::logic_view::{
     plot,
-    protocols::{Panel, TraceInput},
+    protocols::{Panel, TraceInput, event_label},
 };
 use egui::{Painter, Rect, Ui};
-use little_clip_core::engineering::logic::Trace;
+use little_clip_core::engineering::{
+    analysis::InputHistory, logic::Trace, waveforms::display_value,
+};
 use std::{
+    collections::BTreeMap,
     ops::Range,
     sync::{
         Arc,
@@ -19,6 +23,16 @@ pub(super) struct Decoders {
     frame: Option<Arc<Frame>>,
     revision: u64,
     cursor: Option<f64>,
+    visit: Option<Visit>,
+    reveal_event: bool,
+    reveal_input: Option<TraceTarget>,
+}
+
+struct Visit {
+    origin: Range<f64>,
+    label: String,
+    window: Range<f64>,
+    target: TraceTarget,
 }
 
 impl Decoders {
@@ -36,31 +50,44 @@ impl Decoders {
 
     pub(super) fn remap(&mut self, digital: &[Option<usize>]) {
         self.panel.remap_channels(digital);
+        self.retire_frame();
+    }
+
+    pub(super) fn retire_frame(&mut self) {
         self.frame = None;
         self.cursor = None;
+        self.visit = None;
+        self.reveal_input = None;
+        self.reveal_event = false;
     }
 
     pub(super) fn controls(&mut self, ui: &mut Ui, frame: &Arc<Frame>, span: &Range<f64>) {
         if frame.digital.is_empty() {
             return;
         }
-        self.panel.decoder_buttons(ui, &frame.digital);
-        self.panel.controls(ui, &frame.digital);
+        let added = self.panel.decoder_buttons(ui, &frame.digital);
+        if self.panel.controls(ui, &frame.digital) || added {
+            self.retire_frame();
+        }
         if self.panel.edges() {
             return;
         }
-        if !self.panel.inspecting()
-            && self
-                .frame
-                .as_ref()
-                .is_none_or(|old| !Arc::ptr_eq(old, frame))
-        {
+        if self.frame.as_ref().is_none_or(|old| {
+            self.visit.is_none() && !self.panel.inspecting() && !Arc::ptr_eq(old, frame)
+        }) {
             self.frame = Some(frame.clone());
             self.revision = self.revision.wrapping_add(1);
         }
         let source: Arc<dyn TraceInput> = self.frame.as_ref().unwrap_or(frame).clone();
-        self.panel
-            .update_materialized(ui.ctx(), span.clone(), self.revision, source);
+        self.panel.update_materialized(
+            ui.ctx(),
+            self.visit
+                .as_ref()
+                .map_or(span, |visit| &visit.origin)
+                .clone(),
+            self.revision,
+            source,
+        );
     }
 
     pub(super) fn active(&self) -> bool {
@@ -75,8 +102,15 @@ impl Decoders {
         plots: impl IntoIterator<Item = Rect>,
         span: &Range<f64>,
     ) {
-        if let Some(event) = self.panel.cursor_event(span, self.cursor) {
-            for rect in plots {
+        let decode_span = self.decode_span(span);
+        if let Some(event) = self.panel.cursor_event(decode_span, self.cursor)
+            && let Some(frame) = &self.frame
+        {
+            let wired = self.wired(frame);
+            for (index, rect) in plots.into_iter().enumerate() {
+                if !wired.contains(&index) {
+                    continue;
+                }
                 crate::file_manager::scope_view::plot::highlight(
                     painter,
                     rect,
@@ -90,10 +124,119 @@ impl Decoders {
             painter,
             band,
             span,
-            self.panel.events(span),
+            self.panel.events(decode_span),
             ui.visuals().selection.bg_fill,
             ui.visuals().text_color(),
         );
+    }
+
+    fn decode_span<'a>(&'a self, span: &'a Range<f64>) -> &'a Range<f64> {
+        self.visit.as_ref().map_or(span, |visit| &visit.origin)
+    }
+
+    fn wired(&self, frame: &Frame) -> Vec<usize> {
+        let channels = self.panel.channels().unwrap_or_default();
+        frame
+            .lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, lane)| matches!(lane, Lane::Digital { .. }))
+            .enumerate()
+            .filter_map(|(wire, (index, _))| channels.contains(&wire).then_some(index))
+            .collect()
+    }
+
+    pub(super) fn source_windows(&self, span: &Range<f64>) -> Vec<Window> {
+        let Some(frame) = &self.frame else {
+            return Vec::new();
+        };
+        let Some(event) = self.panel.picked_event(self.decode_span(span)) else {
+            return Vec::new();
+        };
+        let mut ages: BTreeMap<usize, InputHistory> = BTreeMap::new();
+        for lane in self.wired(frame) {
+            for (&input, &age) in &frame.history[lane] {
+                ages.entry(input)
+                    .and_modify(|entry| entry.merge(age))
+                    .or_insert(age);
+            }
+        }
+        ages.into_iter()
+            .map(|(input, age)| {
+                frame.inputs[input].window(&event.time, age, &frame.span, frame.step)
+            })
+            .collect()
+    }
+
+    pub(super) fn return_to_event(&mut self, ui: &mut Ui, span: &mut Range<f64>) {
+        let Some(visit) = &self.visit else { return };
+        ui.horizontal_wrapped(|ui| {
+            if ui.small_button("Back to decoded event").clicked() {
+                *span = visit.origin.clone();
+                self.reveal_event = true;
+            }
+            ui.weak(format!(
+                "{} · {} to {}",
+                visit.label,
+                display_value(visit.window.start, "s"),
+                display_value(visit.window.end, "s"),
+            ));
+        });
+        if self.reveal_event {
+            self.visit = None;
+        }
+    }
+
+    pub(super) fn visiting_input(&self) -> Option<TraceTarget> {
+        self.visit.as_ref().map(|visit| visit.target)
+    }
+
+    pub(super) fn take_source_target(&mut self) -> Option<TraceTarget> {
+        self.reveal_input.take()
+    }
+
+    fn source_buttons(&mut self, ui: &mut Ui, span: &mut Range<f64>, domain: &Range<f64>) {
+        let inputs = self.source_windows(span);
+        if inputs.is_empty() {
+            return;
+        }
+        let Some(event) = self.panel.picked_event(self.decode_span(span)) else {
+            return;
+        };
+        let response = ui.horizontal_wrapped(|ui| {
+            ui.strong(event_label(event.kind));
+            ui.separator();
+            ui.weak("Equation inputs").on_hover_text(
+                "Windows that can contribute to the selected event, including delayed terms. Click a channel to see its waveform.",
+            );
+            let mut picked = None;
+            for input in inputs {
+                if input.button(ui) {
+                    picked = Some(input);
+                }
+            }
+            picked
+        });
+        if std::mem::take(&mut self.reveal_event) {
+            response.response.scroll_to_me(Some(egui::Align::Center));
+        }
+        let Some(input) = response.inner else { return };
+        let (Some(target), Some(window)) = (input.target, input.span) else {
+            return;
+        };
+        self.visit = Some(Visit {
+            origin: self.decode_span(span).clone(),
+            label: input.label,
+            window: window.clone(),
+            target,
+        });
+        self.reveal_input = Some(target);
+        if window.start < span.start || window.end > span.end {
+            let center = window.start.midpoint(window.end);
+            let half = ((span.end - span.start) * 0.5).max((window.end - window.start) * 0.65);
+            *span = super::timeline::fit(domain, center - half..center + half, 0.0);
+        }
+        ui.ctx().request_repaint();
     }
 
     pub(super) fn cursor(&self) -> Option<f64> {
@@ -101,7 +244,9 @@ impl Decoders {
     }
 
     pub(super) fn return_controls(&mut self, ui: &mut Ui, span: &mut Range<f64>) {
-        self.panel.return_controls(ui, span);
+        if self.visit.is_none() {
+            self.panel.return_controls(ui, span);
+        }
     }
 
     pub(super) fn table(
@@ -115,11 +260,22 @@ impl Decoders {
         if !self.active() {
             return;
         }
-        if let Some(action) =
-            self.panel
-                .table(ui, span, probe.or(self.cursor), None, Default::default())
-        {
-            self.cursor = Some(self.panel.follow_event(action, span, domain, step));
+        self.source_buttons(ui, span, domain);
+        let mut decode_span = self.decode_span(span).clone();
+        if let Some(action) = self.panel.table(
+            ui,
+            &decode_span,
+            probe.or(self.cursor),
+            None,
+            Default::default(),
+        ) {
+            self.cursor = Some(
+                self.panel
+                    .follow_event(action, &mut decode_span, domain, step),
+            );
+            if self.visit.is_none() {
+                *span = decode_span;
+            }
             ui.ctx().request_repaint();
         }
     }

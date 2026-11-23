@@ -154,9 +154,9 @@ The private walkthrough added a CH2 threshold and then a CH1 expression with nes
 
 ## 15. Follow derived decoder events to their inputs
 
-Today an event decoded from an equation moves the shared time cursor, and its interval is visible in the derived plots. Review the path back to the recording with a two-equation bus and an unrelated trace. Put the input names beside the selected event and let each name reveal its recorded trace in the shared timeline. Reuse the equation graph’s resolved bindings so source reordering and clock correction preserve the link. Show the time extent supported by the inputs and explain when sample history or resampling extends that extent.
+Selecting a decoded event shows its equation inputs above the transaction table. The recording and channel buttons open the corresponding waveform and mark the input window on that channel. A delayed term shows an earlier window, and feedback can extend the window to the start of the equation grid. The readout uses the workspace clock and indicates where interpolation or filter history can contribute neighboring samples. Back to decoded event restores the previous time view and brings the selected result into view. These visits are browsing state and leave the recipe clean.
 
-Check the interaction with a direct threshold, a chained equation and a renamed source lane. The event should reach only the traces that supplied its decoder inputs. Returning to the transfer view should retain the event, its wiring and the working time range.
+The desktop walkthrough used two captures with a 4 µs clock correction, reordered channels, a direct data threshold, and a clock threshold retimed through a second equation. Address 0x42 and data 0xA5 both decoded with acknowledgements. Selecting the address at 37 µs showed the input on Clock probe CH1 from 32 to 113 µs, alongside the separate Data probe CH2 input. The unused channels kept their original display. Back restored the address, wiring, full 242 µs viewport, and the independent shared selection from 187 to 212 µs. The same round trip passed at 800 × 620. The recipe closed without a discard prompt in both sizes.
 
 ## Review after each addition
 
