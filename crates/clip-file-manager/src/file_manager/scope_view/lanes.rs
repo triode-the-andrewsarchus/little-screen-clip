@@ -1,6 +1,5 @@
 use super::{Viewer, plot};
 use egui::{Align, Align2, Color32, FontId, Layout, Painter, Rect, Ui, UiBuilder, pos2, vec2};
-use little_clip_core::engineering::scope::Channel;
 use little_clip_core::engineering::waveforms::Peak;
 
 const HEADER_HEIGHT: f32 = 24.0;
@@ -51,81 +50,27 @@ impl Lane {
         plot::paint_y_scale(painter, self.plot, bounds, unit, color);
     }
 
-    pub fn trace_heading(
-        self,
-        ui: &mut Ui,
-        channel: &Channel,
-        index: usize,
-        offset: &mut f32,
-        bounds: Peak,
-    ) {
-        let unit = &channel.unit;
-        let range = (f64::from(bounds.max) - f64::from(bounds.min)).abs();
-        let header = self.header.shrink2(vec2(7.0, 0.0));
-        let mut ui = ui.new_child(
+    pub fn heading(self, ui: &mut Ui, id: impl egui::AsIdSalt) -> Ui {
+        let mut child = ui.new_child(
             UiBuilder::new()
-                .id_salt(("scope-trace-heading", index))
-                .max_rect(header)
+                .id_salt(id)
+                .max_rect(self.header.shrink2(vec2(7.0, 0.0)))
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        ui.set_clip_rect(ui.clip_rect().intersect(self.header));
-        ui.spacing_mut().interact_size.y = 22.0;
-        ui.spacing_mut().button_padding.y = 2.0;
-        ui.colored_label(plot::color(index), &channel.name);
-        ui.add_space(6.0);
-        let label = if unit == "V" {
-            "V offset"
-        } else {
-            "Display offset"
-        };
-        ui.label(label);
-        let speed = if range.is_finite() && range > 0.0 {
-            range / 100.0
-        } else {
-            0.01
-        };
-        ui.add(
-            egui::DragValue::new(offset)
-                .range(-1.0e12..=1.0e12)
-                .speed(speed)
-                .max_decimals(8)
-                .suffix(if unit.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {unit}")
-                }),
-        )
-        .on_hover_text("Vertical shift for this display");
-        if *offset != 0.0 {
-            ui.colored_label(ui.visuals().warn_fg_color, "Shifted");
-            if ui.button("Reset").clicked() {
-                *offset = 0.0;
-            }
-        }
+        child.set_clip_rect(ui.clip_rect().intersect(self.header));
+        child.spacing_mut().interact_size.y = 18.0;
+        child.spacing_mut().button_padding.y = 1.0;
+        child
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct Scale {
-    pub display: Peak,
-    pub samples: Peak,
-}
-
-impl Scale {
-    pub fn new(bounds: Peak, offset: f32) -> Self {
-        let mut display = bounds;
-        // Retain the original axis extent and keep shifted samples in view.
-        if bounds.valid() && offset != 0.0 {
-            display.merge(Peak {
-                min: bounds.min + offset,
-                max: bounds.max + offset,
-            });
-        }
-        let samples = Peak {
-            min: display.min - offset,
-            max: display.max - offset,
-        };
-        Self { display, samples }
+pub(super) fn shifted(bounds: Peak, offset: f32) -> Peak {
+    if !bounds.valid() {
+        return bounds;
+    }
+    Peak {
+        min: bounds.min + offset,
+        max: bounds.max + offset,
     }
 }
 
@@ -147,13 +92,13 @@ mod tests {
         };
         let axis = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 80.0));
         for offset in [-2.0, 0.0, 2.0] {
-            let scale = Scale::new(bounds, offset);
+            let mut display = bounds;
+            display.merge(shifted(bounds, offset));
+            let samples = shifted(display, -offset);
             assert_eq!(
-                plot::y_at(axis, scale.samples, 1.0),
-                plot::y_at(axis, scale.display, 1.0 + offset)
+                plot::y_at(axis, samples, 1.0),
+                plot::y_at(axis, display, 1.0 + offset)
             );
-            assert!(scale.display.min <= bounds.min);
-            assert!(scale.display.max >= bounds.max);
         }
     }
 }

@@ -66,6 +66,10 @@ pub(in crate::file_manager) fn labelled_x_axis(
     );
 }
 
+pub(super) fn x_divisions(rect: Rect) -> usize {
+    (rect.width() / 90.0).round().clamp(2.0, 6.0) as usize
+}
+
 pub(in crate::file_manager) fn x_axis_with_grid(
     painter: &Painter,
     rect: Rect,
@@ -74,7 +78,7 @@ pub(in crate::file_manager) fn x_axis_with_grid(
     foreground: Color32,
     grid: impl Iterator<Item = egui::Rangef> + Clone,
 ) {
-    let divisions = (rect.width() / 90.0).round().clamp(2.0, 6.0) as usize;
+    let divisions = x_divisions(rect);
     let spacing = (span.end - span.start) / divisions as f64;
     for bin in 0..=divisions {
         let fraction = bin as f32 / divisions as f32;

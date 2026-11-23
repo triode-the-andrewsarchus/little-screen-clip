@@ -1,3 +1,4 @@
+use super::ScopeTrace;
 use super::{
     JOBS, Task, Viewer, plot, reads,
     spectrum_input::{Input, LaneKind},
@@ -122,6 +123,7 @@ impl Viewer {
         });
         if lane.settings.stages.is_empty() {
             self.filters.lanes.remove(&self.active);
+            self.trace_fft.remove(&ScopeTrace::Filtered(self.active));
             if self.spectra.kind == LaneKind::Filtered {
                 self.set_spectrum_kind(LaneKind::Recorded);
             }
@@ -194,36 +196,80 @@ impl Viewer {
         }
     }
 
-    pub(super) fn draw_filters(&self, painter: &Painter, clip: &Painter, rect: Rect) {
+    pub(super) fn draw_filters(
+        &mut self,
+        ui: &mut Ui,
+        painter: &Painter,
+        clip: &Painter,
+        rect: Rect,
+    ) {
         let first = self.physical_lanes() + usize::from(self.math_state.numeric().is_some());
-        for (slot, (&index, derived)) in self.filters.visible().enumerate() {
+        let indices = self.filters.visible_indices().collect::<Vec<_>>();
+        for (slot, index) in indices.into_iter().enumerate() {
+            let trace = ScopeTrace::Filtered(index);
             let lane = self.lane(rect, first + slot);
             if !painter.clip_rect().intersects(lane.frame) {
+                if let Some(state) = self.trace_fft.get_mut(&trace) {
+                    state.suspend();
+                }
                 continue;
             }
             let channel = &self.overview.channels[index];
+            let derived = &self.filters.lanes[&index];
             let output = derived.ready();
             let status = match output {
                 Some(_) => "",
                 None if derived.error.is_some() => " · unavailable",
                 None => " · filtering…",
             };
-            if let Some(output) = output {
+            let mut heading = lane.heading(ui, ("scope-filter-lane", index));
+            let toggle = self.trace_fft_toggle(&mut heading, trace);
+            heading.colored_label(FILTER_COLOR, format!("{}{status}", derived.settings.name));
+            if self.trace_fft.contains_key(&trace) {
+                self.paint_trace_fft(ui, lane.plot, trace);
+            } else if let Some(output) = output {
                 draw_output(
                     &clip.with_clip_rect(lane.plot),
                     lane.plot,
                     &self.span,
                     channel,
                     output,
+                    output.bounds,
                 );
                 lane.scale(painter, output.bounds, &channel.unit, FILTER_COLOR);
             }
-            lane.label(
-                painter,
-                &format!("{}{status}", derived.settings.name),
-                FILTER_COLOR,
-            );
+            if toggle {
+                self.toggle_trace_fft(trace);
+                ui.ctx().request_repaint();
+            }
         }
+    }
+
+    pub(super) fn paint_comparison_filter(
+        &self,
+        painter: &Painter,
+        index: usize,
+        rect: Rect,
+        bounds: Peak,
+    ) {
+        let Some(output) = self
+            .filters
+            .lanes
+            .get(&index)
+            .filter(|lane| lane.settings.visible)
+            .and_then(Lane::ready)
+        else {
+            return;
+        };
+        let channel = &self.overview.channels[index];
+        draw_output(
+            &painter.with_clip_rect(rect.intersect(painter.clip_rect())),
+            rect,
+            &self.span,
+            channel,
+            output,
+            bounds,
+        );
     }
 
     pub(super) fn draw_filter_response(&mut self, ui: &mut Ui, rect: Rect, span: &Range<f64>) {
@@ -277,12 +323,20 @@ impl Filters {
         Ok(())
     }
 
+    pub(super) fn any(&self) -> bool {
+        !self.lanes.is_empty()
+    }
+
     pub(super) fn len(&self) -> usize {
         self.visible().count()
     }
 
     fn visible(&self) -> impl Iterator<Item = (&usize, &Lane)> {
         self.lanes.iter().filter(|(_, lane)| lane.settings.visible)
+    }
+
+    pub(super) fn visible_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.visible().map(|(&index, _)| index)
     }
 
     pub(super) fn visibility_controls(&mut self, ui: &mut Ui) {
@@ -476,6 +530,7 @@ fn draw_output(
     span: &Range<f64>,
     channel: &Channel,
     output: &Output,
+    bounds: Peak,
 ) {
     let (start, samples) = output.samples.raw.visible(span);
     if samples.len() <= 4096 {
@@ -486,7 +541,7 @@ fn draw_output(
             start,
             output.samples.raw.step,
             samples,
-            output.bounds,
+            bounds,
             FILTER_COLOR,
         );
         return;
@@ -505,7 +560,7 @@ fn draw_output(
             span,
             channel,
             &output.overview,
-            output.bounds,
+            bounds,
             FILTER_COLOR,
         );
     }

@@ -1,4 +1,6 @@
-use super::{MarkedRange, Viewer, filters::SavedFilter, spectrum_input::DisplaySettings};
+use super::{
+    MarkedRange, ScopeTrace, Viewer, filters::SavedFilter, spectrum_input::DisplaySettings,
+};
 use little_clip_core::engineering::analysis::SpectrumWindow;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
@@ -11,6 +13,8 @@ pub(in crate::file_manager) struct Settings {
     stacked: bool,
     visible: Vec<bool>,
     display_offsets: Vec<f32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fft_traces: Vec<ScopeTrace>,
     math: String,
     filters: Vec<SavedFilter>,
     spectrum: bool,
@@ -30,6 +34,7 @@ impl Viewer {
             stacked: self.stacked,
             visible: self.visible.clone(),
             display_offsets: self.display_offsets.clone(),
+            fft_traces: self.trace_fft.keys().copied().collect(),
             math: self.math.clone(),
             filters: self.filters.save(),
             spectrum: self.spectrum,
@@ -49,6 +54,7 @@ impl Viewer {
         if state.active >= count
             || state.visible.len() != count
             || state.display_offsets.len() != count
+            || state.fft_traces.iter().any(|trace| !trace.valid(count))
         {
             return Err("The saved scope channels do not match this recording".into());
         }
@@ -68,6 +74,11 @@ impl Viewer {
                 .any(|pair| pair[0].unit != pair[1].unit);
         self.visible = state.visible;
         self.display_offsets = state.display_offsets;
+        self.trace_fft = state
+            .fft_traces
+            .into_iter()
+            .map(|index| (index, Default::default()))
+            .collect();
         self.math = state.math;
         self.spectrum = state.spectrum;
         self.spectra.restore_settings(state.spectra);

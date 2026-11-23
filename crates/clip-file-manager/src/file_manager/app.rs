@@ -753,22 +753,16 @@ impl FileManagerApp {
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         ui.add(egui::Label::new(self.browser.selection_summary()).truncate());
-                        if let Some(action) = self.browser.analysis_selection_action() {
-                            let (label, help) = match action {
-                                super::EngineeringAction::CompareRf => (
-                                    "Compare RF sweeps",
-                                    "Compare selected sweeps on one frequency axis [Enter]",
-                                ),
-                                _ => (
-                                    "Analyze recordings",
-                                    "Open the selected recordings on one timeline [Enter]",
-                                ),
-                            };
+                        if matches!(
+                            self.browser.analysis_selection_action(),
+                            Some(super::EngineeringAction::CompareRf)
+                        ) {
                             let button = clip_ui::buttons::ButtonRole::Primary
-                                .button(label, &self.palette)
+                                .button("Compare RF sweeps", &self.palette)
                                 .compact();
                             if ui.add_enabled(!self.browser.browser_modal(), button)
-                                .on_hover_text(help).clicked()
+                                .on_hover_text("Compare selected sweeps on one frequency axis [Enter]")
+                                .clicked()
                             {
                                 self.browser.open_selected();
                             }

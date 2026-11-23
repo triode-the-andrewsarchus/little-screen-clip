@@ -1,6 +1,7 @@
 //! Mixed-signal analysis on a shared timeline with native source clocks.
 
 mod alignment;
+mod comparison;
 mod derived;
 pub(super) mod filter_editor;
 pub(super) mod frequency_plot;
@@ -33,6 +34,7 @@ pub(super) struct Viewer {
     sources: Vec<Source>,
     derived: derived::Derived,
     alignment: alignment::Alignment,
+    comparison: comparison::Comparison,
     domain: Range<f64>,
     span: Range<f64>,
     probe: Option<f64>,
@@ -41,6 +43,13 @@ pub(super) struct Viewer {
     reveal_source: Option<u64>,
     session: session::Session,
     error: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct LinkedTimeline<'a> {
+    preview: Option<alignment::Suggestion>,
+    shared: Option<&'a Range<f64>>,
+    reference: Option<f64>,
 }
 
 struct Source {
@@ -126,6 +135,7 @@ impl Viewer {
             sources,
             derived: derived::Derived::default(),
             alignment: alignment::Alignment::default(),
+            comparison: comparison::Comparison::default(),
             span: domain.clone(),
             domain,
             probe: None,
@@ -213,7 +223,13 @@ impl Viewer {
     }
 
     fn controls(&mut self, ui: &mut Ui) {
+        let grouped = self.compares_analog();
+        if grouped {
+            self.comparison.reconcile(&self.sources);
+        }
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().interact_size.y = 24.0;
+            ui.spacing_mut().button_padding.y = 2.0;
             self.derived.button(ui);
             self.save_buttons(ui);
             let unavailable = self
@@ -239,6 +255,9 @@ impl Viewer {
                 }
                 if ui.button("Fit all").clicked() {
                     self.span = extent_on(&self.sources, self.alignment.preview(&self.sources));
+                }
+                if grouped {
+                    self.comparison_toolbar(ui);
                 }
                 if let Some(probe) = self.probe {
                     ui.monospace(display_value(probe, "s"));
@@ -293,6 +312,14 @@ impl Viewer {
         }
     }
 
+    fn compares_analog(&self) -> bool {
+        self.sources.len() > 1
+            && self
+                .sources
+                .iter()
+                .any(|source| matches!(source.capture, Capture::Analog(_)))
+    }
+
     fn linked(&mut self, ui: &mut Ui, palette: &AppPalette, copies: &mut Copies) {
         let preview = self.alignment.preview(&self.sources);
         let domain = extent_on(&self.sources, preview);
@@ -305,80 +332,29 @@ impl Viewer {
             .controls(ui, &self.sources, preview, &mut self.span, &self.domain);
         let mut next_probe = None;
         let mut action = None;
-        let reference_time = self.reference_time_on(preview);
-        let may_remove = self.sources.len() > 1;
+        let timeline = LinkedTimeline {
+            preview,
+            shared: shared.as_ref(),
+            reference: self.reference_time_on(preview),
+        };
         let height = (ui.available_height() / self.sources.len() as f32 - 50.0).max(205.0);
+        let grouped = self.compares_analog();
         let scroll = self.session.scroll.area(ui).show(ui, |ui| {
-            for (index, source) in self.sources.iter_mut().enumerate() {
-                let id = ui.make_persistent_id(source.id);
-                ui.push_id(id, |ui| {
-                    if let Capture::Unavailable(recording) = &mut source.capture {
-                        let reveal = self.reveal_source.take_if(|id| *id == source.id).is_some();
-                        if let Some(request) = recording.ui(ui, &source.path, may_remove, reveal) {
-                            action = Some((index, request));
-                        }
-                        ui.separator();
-                        return;
-                    }
-                    let start = ui.next_widget_position();
-                    let is_reference = self
-                        .reference
-                        .as_ref()
-                        .is_some_and(|pin| pin.source == source.id);
-                    if let Some(request) = source.controls(
-                        ui,
-                        may_remove,
-                        reference_time,
-                        is_reference,
-                        preview,
-                        &mut self.alignment,
-                    ) {
-                        action = Some((index, request));
-                    }
-                    let clock = source.display_clock(preview);
-                    let native = self.shared.source(
-                        ui,
-                        source,
-                        shared.as_ref(),
-                        clock,
-                        &mut self.span,
-                        &self.domain,
-                    );
-                    let previous = clock.native_range(&self.span);
-                    *source.capture.span() = previous.clone();
-                    let link = Link {
-                        domain: clock.native_range(&self.domain),
-                        clock,
-                        probe: self.probe.map(|probe| clock.to_native(probe)),
-                        reference: reference_time.map(|time| clock.to_native(time)),
-                        landmark: self.alignment.marker(source.id),
-                        shared: native,
-                        share_selection: may_remove,
-                    };
-                    let height = height.max(source.capture.min_height());
-                    ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
-                        let interaction = source.capture.content(ui, palette, copies, Some(&link));
-                        next_probe = interaction
-                            .probe
-                            .map(|probe| clock.to_workspace(probe))
-                            .or(next_probe);
-                        if let Some(range) = interaction.share {
-                            action = Some((index, SourceAction::Share(range)));
-                        }
-                    });
-                    if self.reveal_source.take_if(|id| *id == source.id).is_some() {
-                        ui.scroll_to_rect(
-                            egui::Rect::from_min_size(start, egui::vec2(1.0, 22.0)),
-                            Some(egui::Align::TOP),
-                        );
-                    }
-                    let view = source.capture.span();
-                    if *view != previous {
-                        self.span = clock.workspace_range(view);
-                        ui.ctx().request_repaint();
-                    }
-                    ui.separator();
-                });
+            if grouped {
+                (next_probe, action) = self.analog_comparison(ui, copies, timeline);
+            }
+            for index in 0..self.sources.len() {
+                if grouped && matches!(self.sources[index].capture, Capture::Analog(_)) {
+                    continue;
+                }
+                let id = self.sources[index].id;
+                let (probe, request) = ui
+                    .push_id(id, |ui| {
+                        self.linked_source(ui, palette, copies, index, height, timeline)
+                    })
+                    .inner;
+                next_probe = probe.or(next_probe);
+                action = request.map(|request| (index, request)).or(action.take());
             }
             let inputs = if self.derived.open() {
                 self.sources
@@ -396,8 +372,8 @@ impl Viewer {
                     &self.domain,
                     &inputs,
                     self.probe,
-                    reference_time,
-                    shared.as_ref(),
+                    timeline.reference,
+                    timeline.shared,
                 )
                 .or(next_probe);
         });
@@ -416,6 +392,91 @@ impl Viewer {
         if let Some((index, request)) = action {
             self.apply_source_action(index, request);
             ui.ctx().request_repaint();
+        }
+    }
+
+    fn linked_source(
+        &mut self,
+        ui: &mut Ui,
+        palette: &AppPalette,
+        copies: &mut Copies,
+        index: usize,
+        height: f32,
+        timeline: LinkedTimeline<'_>,
+    ) -> (Option<f64>, Option<SourceAction>) {
+        let may_remove = self.sources.len() > 1;
+        let source = &mut self.sources[index];
+        let reveal = self.reveal_source.take_if(|id| *id == source.id).is_some();
+        let start = ui.next_widget_position();
+        if let Capture::Unavailable(recording) = &mut source.capture {
+            let action = recording.ui(ui, &source.path, may_remove, reveal);
+            ui.separator();
+            return (None, action);
+        }
+        let is_reference = self
+            .reference
+            .as_ref()
+            .is_some_and(|pin| pin.source == source.id);
+        let mut action = source.controls(
+            ui,
+            may_remove,
+            timeline.reference,
+            is_reference,
+            timeline.preview,
+            &mut self.alignment,
+        );
+        let link = self.link_source(ui, index, timeline);
+        let source = &mut self.sources[index];
+        let previous = link.clock.native_range(&self.span);
+        *source.capture.span() = previous.clone();
+        let height = height.max(source.capture.min_height());
+        let interaction = ui
+            .allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
+                source.capture.content(ui, palette, copies, Some(&link))
+            })
+            .inner;
+        if let Some(range) = interaction.share {
+            action = Some(SourceAction::Share(range));
+        }
+        if reveal {
+            ui.scroll_to_rect(
+                egui::Rect::from_min_size(start, egui::vec2(1.0, 22.0)),
+                Some(egui::Align::TOP),
+            );
+        }
+        let view = source.capture.span();
+        if *view != previous {
+            self.span = link.clock.workspace_range(view);
+            ui.ctx().request_repaint();
+        }
+        ui.separator();
+        (
+            interaction
+                .probe
+                .map(|probe| link.clock.to_workspace(probe)),
+            action,
+        )
+    }
+
+    fn link_source(&mut self, ui: &mut Ui, index: usize, timeline: LinkedTimeline<'_>) -> Link {
+        let source = &self.sources[index];
+        let clock = source.display_clock(timeline.preview);
+        let shared = self.shared.source(
+            ui,
+            source,
+            timeline.shared,
+            clock,
+            &mut self.span,
+            &self.domain,
+        );
+        Link {
+            domain: clock.native_range(&self.domain),
+            clock,
+            probe: self.probe.map(|time| clock.to_native(time)),
+            reference: timeline.reference.map(|time| clock.to_native(time)),
+            landmark: self.alignment.marker(source.id),
+            shared,
+            share_selection: self.sources.len() > 1,
         }
     }
 
@@ -450,9 +511,13 @@ impl Viewer {
                 }
             }
             SourceAction::ClearReference => self.reference = None,
-            SourceAction::Relink(source) => self.sources[index] = source,
+            SourceAction::Relink(source) => {
+                self.sources[index] = source;
+                self.comparison.initialized = false;
+            }
             SourceAction::Remove => {
                 let removed = self.sources.remove(index);
+                self.comparison.initialized = false;
                 self.alignment.forget(removed.id);
                 self.shared.remove_source(removed.id);
                 if self

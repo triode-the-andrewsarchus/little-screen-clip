@@ -19,7 +19,7 @@ use std::{
     os::fd::AsRawFd,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     time::Duration,
@@ -64,6 +64,12 @@ struct Recipe {
     derived: derived::SessionSettings,
     #[serde(default)]
     alignment: super::alignment::Settings,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    trace_order: Vec<super::comparison::Trace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_trace: Option<super::comparison::Trace>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    comparison_spectrum: bool,
 }
 
 #[derive(Deserialize)]
@@ -236,6 +242,9 @@ impl Recipe {
             shared: viewer.shared.pin.clone(),
             derived: viewer.derived.session_settings(),
             alignment: viewer.alignment.save(),
+            trace_order: viewer.comparison.order.clone(),
+            active_trace: viewer.comparison.active,
+            comparison_spectrum: viewer.comparison.spectrum,
         }
     }
 
@@ -452,16 +461,30 @@ pub(super) struct Session {
     message: Option<Result<String, String>>,
 }
 
-#[derive(Default)]
 pub(super) struct Scroll {
+    id: u64,
     offset: f32,
     restore: Option<f32>,
     settled: bool,
 }
 
+impl Default for Scroll {
+    fn default() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            offset: 0.0,
+            restore: None,
+            settled: false,
+        }
+    }
+}
+
 impl Scroll {
     pub(super) fn area(&mut self, ui: &Ui) -> egui::ScrollArea {
-        let area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+        let area = egui::ScrollArea::vertical()
+            .id_salt(("linked-recordings", self.id))
+            .auto_shrink([false, false]);
         if ui.input(|input| input.smooth_scroll_delta.y != 0.0 || input.pointer.any_pressed()) {
             self.restore = None;
         }
@@ -547,6 +570,12 @@ impl Viewer {
             reveal_source: None,
             derived: derived::Derived::default(),
             alignment: super::alignment::Alignment::default(),
+            comparison: super::comparison::Comparison {
+                order: recipe.trace_order,
+                active: recipe.active_trace,
+                spectrum: recipe.comparison_spectrum,
+                ..Default::default()
+            },
             probe: None,
             error: None,
             session: Session {
@@ -554,7 +583,7 @@ impl Viewer {
                 scroll: Scroll {
                     offset: recipe.scroll_offset,
                     restore: Some(recipe.scroll_offset),
-                    settled: false,
+                    ..Default::default()
                 },
                 ..Default::default()
             },

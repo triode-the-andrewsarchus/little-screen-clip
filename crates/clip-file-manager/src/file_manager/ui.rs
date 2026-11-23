@@ -1704,11 +1704,13 @@ struct ListActions {
     unmount_binary: Option<PathBuf>,
     search_similar: Option<PathBuf>,
     engineering_selection: Option<super::EngineeringAction>,
+    analyze_selection: bool,
 }
 
 impl ListActions {
     fn for_browser(browser: &FileManager) -> Self {
         Self {
+            analyze_selection: browser.can_analyze_selection(),
             search_results: browser.search.has_result_sources(),
             metadata_only: browser.search.has_offline_results(),
             context: browser.search_preview_context(),
@@ -1860,15 +1862,28 @@ impl ListActions {
         marked: bool,
         count: usize,
     ) {
-        if marked
-            && entry.regular_file
-            && !self.search_results
-            && !self.copy_only
-            && (2..=super::engineering_compare::MAX_SOURCES).contains(&count)
-            && ui.button("Compare selected files").clicked()
-        {
-            self.engineering_selection = Some(super::EngineeringAction::Compare);
-            ui.close();
+        use super::EngineeringAction;
+        if !marked || !entry.regular_file || self.search_results || self.copy_only {
+            return;
+        }
+        let may_compare = (2..=super::engineering_compare::MAX_SOURCES).contains(&count);
+        for (available, label, action) in [
+            (
+                self.analyze_selection,
+                "Analyze recordings",
+                EngineeringAction::Analyze,
+            ),
+            (
+                may_compare,
+                "Compare selected files",
+                EngineeringAction::Compare,
+            ),
+        ] {
+            if available && ui.button(label).clicked() {
+                self.engineering_selection = Some(action);
+                ui.close();
+                break;
+            }
         }
     }
 

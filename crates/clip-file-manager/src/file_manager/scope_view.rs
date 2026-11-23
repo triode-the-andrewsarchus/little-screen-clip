@@ -1,6 +1,7 @@
 //! File-backed oscilloscope plots with one timeline shared by cursors and analysis.
 
 mod channels;
+mod comparison;
 mod filters;
 pub(super) use filters::{FilterSamples, FilteredChannel};
 #[cfg(test)]
@@ -13,7 +14,9 @@ pub(super) mod plot;
 pub(super) mod reads;
 mod session;
 mod snap;
+mod trace_fft;
 pub(super) use session::Settings as SessionSettings;
+use trace_fft::Trace as ScopeTrace;
 pub(super) mod strip;
 
 use super::signal_view::spectra as spectrum_input;
@@ -78,6 +81,7 @@ pub(super) struct Viewer {
     stacked: bool,
     visible: Vec<bool>,
     display_offsets: Vec<f32>,
+    trace_fft: std::collections::BTreeMap<ScopeTrace, trace_fft::TraceSpectrum>,
     hover: hover::Hover,
     conversion: logic_export::Conversion,
     drag: Option<CursorDrag>,
@@ -151,6 +155,7 @@ impl Viewer {
             stacked: true,
             visible,
             display_offsets,
+            trace_fft: Default::default(),
             hover: hover::Hover::default(),
             conversion: logic_export::Conversion::default(),
             drag: None,
@@ -251,7 +256,13 @@ impl Viewer {
         if self.logic_subview(ui, palette, copies) {
             return Interaction::default();
         }
-        let spectrum_opened = self.toolbar(ui, copies);
+        let spectrum_opened = ui
+            .scope(|ui| {
+                ui.spacing_mut().interact_size.y = 24.0;
+                ui.spacing_mut().button_padding.y = 2.0;
+                self.toolbar(ui, copies)
+            })
+            .inner;
         self.power_totals(ui);
         let returned = super::signal_view::frequency_plot::origin_controls(
             ui,
@@ -262,10 +273,13 @@ impl Viewer {
         let showing_spectrum = self.spectrum && self.spectra.origin().is_none();
         let show_time = !showing_spectrum || !self.spectra.only;
         let interaction = if show_time {
+            let available = ui.available_height();
+            let content = (available - 92.0).max(100.0);
             let height = if showing_spectrum {
-                (ui.available_height() * 0.32).max(68.0)
+                // Leave a readable chart and spectrum controls beneath the time lanes.
+                (content * 0.60).min(content - 220.0).max(68.0)
             } else {
-                (ui.available_height() - 112.0).max(80.0)
+                content
             };
             let probe = self.waveform(ui, height, link);
             self.overview_ui(ui);
@@ -283,13 +297,19 @@ impl Viewer {
         };
         if showing_spectrum {
             let filter_added = std::mem::take(&mut self.filters.reveal_spectrum);
-            let view = ui.scope(|ui| self.spectrum_ui(ui, link));
-            if spectrum_opened || filter_added || returned {
-                view.response.scroll_to_me(None);
+            let view = ui.scope(|ui| self.spectrum_ui(ui, link, true));
+            let near_edge = view.response.rect.top() > ui.clip_rect().bottom() - 166.0;
+            if (spectrum_opened && near_edge) || filter_added || returned {
+                view.response.scroll_to_me(Some(egui::Align::Min));
             }
         } else {
             self.spectra.suspend();
         }
+        self.update_source(ui);
+        interaction
+    }
+
+    fn update_source(&mut self, ui: &Ui) {
         self.request_detail();
         self.update_hover(ui.ctx());
         self.math_state
@@ -302,7 +322,6 @@ impl Viewer {
         if self.pending() {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
-        interaction
     }
 
     fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) -> bool {
@@ -341,27 +360,33 @@ impl Viewer {
             {
                 self.stacked = !self.stacked;
             }
-            let range = self.selection();
-            if ui
-                .add_enabled(
-                    range.is_some() && !copies.busy(),
-                    egui::Button::new("Copy samples"),
-                )
-                .clicked()
-                && let Some(range) = range
-            {
-                let recording = self.recording.clone();
-                let index = self.active;
-                copies.start(ui.ctx(), move |cancel| {
-                    copy_samples(&recording, index, range, cancel)
-                });
-            }
+            self.copy_selection(ui, copies);
         });
         self.channel_controls(ui);
-        ui.horizontal_wrapped(|ui| self.filters.visibility_controls(ui));
+        if self.filters.any() {
+            ui.horizontal_wrapped(|ui| self.filters.visibility_controls(ui));
+        }
         self.math_controls(ui);
         self.logic_menu(ui, copies);
         spectrum_opened
+    }
+
+    fn copy_selection(&mut self, ui: &mut Ui, copies: &mut Copies) {
+        let range = self.selection();
+        if ui
+            .add_enabled(
+                range.is_some() && !copies.busy(),
+                egui::Button::new("Copy samples"),
+            )
+            .clicked()
+            && let Some(range) = range
+        {
+            let recording = self.recording.clone();
+            let index = self.active;
+            copies.start(ui.ctx(), move |cancel| {
+                copy_samples(&recording, index, range, cancel)
+            });
+        }
     }
 
     fn math_controls(&mut self, ui: &mut Ui) {
@@ -415,7 +440,12 @@ impl Viewer {
     }
 
     fn waveform(&mut self, ui: &mut Ui, height: f32, link: Option<&Link>) -> Option<f64> {
-        let height = height.max(lanes::MIN_HEIGHT * self.lane_count().max(1) as f32 + 20.0);
+        let lane_height = if self.trace_fft.is_empty() {
+            lanes::MIN_HEIGHT
+        } else {
+            95.0
+        };
+        let height = height.max(lane_height * self.lane_count().max(1) as f32 + 20.0);
         let (outer, frame) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
         let rect = Rect::from_min_max(
@@ -423,7 +453,15 @@ impl Viewer {
             outer.max - egui::vec2(9.0, 16.0),
         );
         let response = ui.interact(rect, frame.id.with("waveform"), Sense::click_and_drag());
-        if let Some(span) = timeline::navigate(ui.ctx(), rect, &response, &self.span, true) {
+        let fft_lanes = self
+            .fft_slots()
+            .map(|slot| self.lane(rect, slot).frame)
+            .collect::<Vec<_>>();
+        let in_fft_lane = |point| fft_lanes.iter().any(|lane| lane.contains(point));
+        let hover_in_fft = ui.input(|input| input.pointer.hover_pos().is_some_and(in_fft_lane));
+        if !hover_in_fft
+            && let Some(span) = timeline::navigate(ui.ctx(), rect, &response, &self.span, true)
+        {
             let domain = link.map_or(&self.domain, |link| &link.domain);
             self.span = timeline::fit(
                 domain,
@@ -431,7 +469,10 @@ impl Viewer {
                 self.overview.channels[self.active].interval_seconds,
             );
         }
-        self.move_cursors(ui, rect, &response);
+        let origin_in_fft = ui.input(|input| input.pointer.press_origin().is_some_and(in_fft_lane));
+        if !origin_in_fft && (!hover_in_fft || self.drag.is_some()) {
+            self.move_cursors(ui, rect, &response);
+        }
         let painter = ui.painter_at(outer);
         let lane_count = self.lane_count();
         let lanes = (0..lane_count)
@@ -448,28 +489,79 @@ impl Viewer {
             &axis,
             "s",
             ink,
-            lanes.map(|lane| lane.plot.y_range()),
+            lanes
+                .filter(|lane| !in_fft_lane(lane.plot.center()))
+                .map(|lane| lane.plot.y_range()),
         );
         let clipped = painter.with_clip_rect(rect);
         let probe = response
             .hover_pos()
-            .filter(|point| rect.contains(*point))
+            .filter(|point| rect.contains(*point) && !in_fft_lane(*point))
             .map(|point| plot::at(rect, &self.span, point.x));
         self.hover.time = probe.or(link.and_then(|link| link.probe));
-        let channels = self.draw_channels(ui, &painter, rect, ink);
-        self.draw_math(&painter, &clipped, rect);
-        self.draw_filters(&painter, &clipped, rect);
+        let (channels, fft_change) = self.draw_channels(ui, &painter, rect, ink);
+        self.draw_math(ui, &painter, &clipped, rect);
+        self.draw_filters(ui, &painter, &clipped, rect);
         let clock = Link::clock(link);
-        self.paint_marks(ui, &clipped, rect, clock.scale());
+        if fft_lanes.is_empty() {
+            self.paint_time_markers(ui, &clipped, rect, link, true);
+            self.paint_hover(
+                &clipped,
+                rect,
+                ui.visuals().text_color(),
+                ui.visuals().window_fill(),
+                clock,
+                &channels,
+            );
+        } else {
+            let mut labelled = false;
+            for lane in (0..self.lane_count()).map(|slot| self.lane(rect, slot)) {
+                if in_fft_lane(lane.plot.center()) || !ui.is_rect_visible(lane.frame) {
+                    continue;
+                }
+                let painter = clipped.with_clip_rect(lane.frame.intersect(clipped.clip_rect()));
+                let time_rect = Rect::from_min_max(
+                    pos2(rect.left(), lane.frame.top()),
+                    lane.frame.right_bottom(),
+                );
+                self.paint_time_markers(ui, &painter, time_rect, link, !labelled);
+                labelled = true;
+                self.paint_hover(
+                    &painter,
+                    rect,
+                    ui.visuals().text_color(),
+                    ui.visuals().window_fill(),
+                    clock,
+                    &channels,
+                );
+            }
+        }
+        if let Some(index) = fft_change {
+            self.toggle_trace_fft(ScopeTrace::Recorded(index));
+            ui.ctx().request_repaint();
+        }
+        probe
+    }
+
+    fn paint_time_markers(
+        &self,
+        ui: &Ui,
+        clipped: &egui::Painter,
+        rect: Rect,
+        link: Option<&Link>,
+        show_labels: bool,
+    ) {
+        let clock = Link::clock(link);
+        self.paint_marks(ui, clipped, rect, clock.scale(), show_labels);
         super::signal_view::frequency_plot::paint_origin(
             ui,
-            &clipped,
+            clipped,
             rect,
             &self.span,
             &self.spectra,
         );
         if let Some(link) = link {
-            link.paint_markers(&clipped, rect, &self.span);
+            link.paint_markers(clipped, rect, &self.span);
         }
         for (label, time) in ["A", "B"]
             .into_iter()
@@ -482,24 +574,17 @@ impl Viewer {
                     [pos2(x, rect.top()), pos2(x, rect.bottom())],
                     Stroke::new(1.4, Color32::WHITE),
                 );
-                clipped.text(
-                    pos2(x + 4.0, rect.top() + 2.0),
-                    egui::Align2::LEFT_TOP,
-                    label,
-                    egui::FontId::monospace(12.0),
-                    Color32::WHITE,
-                );
+                if show_labels {
+                    clipped.text(
+                        pos2(x + 4.0, rect.top() + 2.0),
+                        egui::Align2::LEFT_TOP,
+                        label,
+                        egui::FontId::monospace(12.0),
+                        Color32::WHITE,
+                    );
+                }
             }
         }
-        self.paint_hover(
-            &clipped,
-            rect,
-            ui.visuals().text_color(),
-            ui.visuals().window_fill(),
-            clock,
-            &channels,
-        );
-        probe
     }
 
     fn draw_channels(
@@ -508,86 +593,160 @@ impl Viewer {
         painter: &egui::Painter,
         rect: Rect,
         ink: Color32,
-    ) -> Vec<PlottedChannel> {
-        let envelopes = self.index.as_ref().unwrap_or(&self.overview.envelopes);
-        let overlay = (!self.stacked).then(|| {
-            let mut bounds = Peak::default();
-            for index in self.visible_channels() {
-                bounds.merge(envelopes[index].extrema());
-            }
-            bounds
-        });
-        let detail = self
-            .detail
-            .as_ref()
-            .filter(|(cover, _)| {
-                contains(
-                    cover,
-                    &(self.span.start.max(self.domain.start)..self.span.end.min(self.domain.end)),
-                )
-            })
-            .map(|(_, detail)| detail);
-        let mut plotted = Vec::with_capacity(self.visible_channels().count());
-        for (slot, index) in self
-            .visible
-            .iter()
-            .enumerate()
-            .filter_map(|(i, show)| show.then_some(i))
-            .enumerate()
-        {
-            let channel = &self.overview.channels[index];
-            let envelope = &envelopes[index];
-            let lane = self.lane(rect, if self.stacked { slot } else { 0 });
+    ) -> (Vec<PlottedChannel>, Option<usize>) {
+        let overlay = self.overlay_scale();
+        let order = self.channel_slots().collect::<Vec<_>>();
+        let mut plotted = Vec::with_capacity(order.len());
+        let mut change = None;
+        let mut overlay_axis = false;
+        for (slot, index) in order {
+            let lane = self.lane(rect, slot);
             if !ui.is_rect_visible(lane.frame) {
+                if let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index)) {
+                    spectrum.suspend();
+                }
                 continue;
             }
-            let bounds = overlay.unwrap_or_else(|| envelope.extrema());
+            let channel = &self.overview.channels[index];
             let color = plot::color(index);
-            let offset = if self.stacked {
-                let offset = &mut self.display_offsets[index];
-                lane.trace_heading(ui, channel, index, offset, bounds);
-                *offset
-            } else {
-                if slot == 0 {
-                    lane.label(painter, "Shared scale", ink);
+            if self.trace_fft.contains_key(&ScopeTrace::Recorded(index)) || self.stacked {
+                let mut heading = lane.heading(ui, ("scope-channel", index));
+                heading.colored_label(color, &channel.name);
+                if self.trace_fft_toggle(&mut heading, ScopeTrace::Recorded(index)) {
+                    change = Some(index);
                 }
+            }
+            if self.trace_fft.contains_key(&ScopeTrace::Recorded(index)) {
+                self.paint_trace_fft(ui, lane.plot, ScopeTrace::Recorded(index));
+                continue;
+            }
+            let display = overlay.unwrap_or_else(|| self.channel_bounds(index));
+            let offset = if overlay.is_some() {
+                self.display_offsets[index]
+            } else {
                 0.0
             };
-            let scale = lanes::Scale::new(bounds, offset);
-            if self.stacked || slot == 0 {
+            if self.stacked || !overlay_axis {
+                if overlay.is_some() {
+                    lane.label(painter, "Shared scale", ink);
+                }
                 lane.scale(
                     painter,
-                    scale.display,
+                    display,
                     &channel.unit,
                     if self.stacked { color } else { ink },
                 );
+                overlay_axis = true;
             }
-            let bounds = scale.samples;
-            let plot = lane.plot;
+            let bounds = lanes::shifted(display, -offset);
+            self.paint_channel(painter, index, lane.plot, bounds, color);
             plotted.push(PlottedChannel {
                 index,
-                plot,
+                plot: lane.plot,
                 bounds,
                 display_offset: offset,
             });
-            if !bounds.valid() {
-                continue;
-            }
-            let clipped = painter.with_clip_rect(plot);
-            if let Some(raw) = detail.and_then(|detail| detail.raw(index)) {
-                let (start, samples) = raw.visible(&self.span);
-                plot::draw_raw(
-                    &clipped, plot, &self.span, start, raw.step, samples, bounds, color,
-                );
-            } else {
-                let envelope = match detail {
-                    Some(PlotData::Summary(envelopes)) => &envelopes[index],
-                    _ => envelope,
-                };
-                plot::draw_envelope(&clipped, plot, &self.span, channel, envelope, bounds, color);
-            }
         }
-        plotted
+        (plotted, change)
+    }
+
+    fn overlay_scale(&self) -> Option<Peak> {
+        (!self.stacked).then(|| {
+            let mut bounds = Peak::default();
+            for index in self
+                .visible_channels()
+                .filter(|index| !self.trace_fft.contains_key(&ScopeTrace::Recorded(*index)))
+            {
+                let original = self.channel_bounds(index);
+                bounds.merge(original);
+                bounds.merge(lanes::shifted(original, self.display_offsets[index]));
+            }
+            bounds
+        })
+    }
+
+    fn channel_bounds(&self, index: usize) -> Peak {
+        self.index.as_ref().unwrap_or(&self.overview.envelopes)[index].extrema()
+    }
+
+    fn paint_channel(
+        &self,
+        painter: &egui::Painter,
+        index: usize,
+        plot: Rect,
+        bounds: Peak,
+        color: Color32,
+    ) {
+        if !bounds.valid() {
+            return;
+        }
+        let clipped = painter.with_clip_rect(plot.intersect(painter.clip_rect()));
+        let visible = self.span.start.max(self.domain.start)..self.span.end.min(self.domain.end);
+        let detail = self
+            .detail
+            .as_ref()
+            .filter(|(cover, _)| contains(cover, &visible))
+            .map(|(_, detail)| detail);
+        if let Some(raw) = detail.and_then(|detail| detail.raw(index)) {
+            let (start, samples) = raw.visible(&self.span);
+            plot::draw_raw(
+                &clipped, plot, &self.span, start, raw.step, samples, bounds, color,
+            );
+        } else {
+            let envelopes = match detail {
+                Some(PlotData::Summary(envelopes)) => envelopes,
+                _ => self.index.as_ref().unwrap_or(&self.overview.envelopes),
+            };
+            plot::draw_envelope(
+                &clipped,
+                plot,
+                &self.span,
+                &self.overview.channels[index],
+                &envelopes[index],
+                bounds,
+                color,
+            );
+        }
+    }
+
+    fn fft_slots(&self) -> impl Iterator<Item = usize> + '_ {
+        let math = self.math_state.numeric().is_some();
+        let physical = self.physical_lanes();
+        self.channel_slots()
+            .filter(|&(_, index)| self.trace_fft.contains_key(&ScopeTrace::Recorded(index)))
+            .map(|(slot, _)| slot)
+            .chain((math && self.trace_fft.contains_key(&ScopeTrace::Math)).then_some(physical))
+            .chain(
+                self.filters
+                    .visible_indices()
+                    .enumerate()
+                    .filter_map(move |(slot, index)| {
+                        self.trace_fft
+                            .contains_key(&ScopeTrace::Filtered(index))
+                            .then_some(physical + usize::from(math) + slot)
+                    }),
+            )
+    }
+
+    fn channel_slots(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let mut next_fft = usize::from(
+            self.visible_channels()
+                .any(|index| !self.trace_fft.contains_key(&ScopeTrace::Recorded(index))),
+        );
+        self.visible_channels()
+            .enumerate()
+            .map(move |(slot, index)| {
+                if self.stacked {
+                    return (slot, index);
+                }
+                if !self.trace_fft.contains_key(&ScopeTrace::Recorded(index)) {
+                    return (0, index);
+                }
+                // Overlay keeps all time traces on the first lane. FFTs stay independent.
+                let slot = next_fft;
+                next_fft += 1;
+                (slot, index)
+            })
     }
 
     fn visible_channels(&self) -> impl Iterator<Item = usize> + '_ {
@@ -601,7 +760,12 @@ impl Viewer {
         if self.stacked {
             self.visible_channels().count()
         } else {
-            usize::from(self.visible.contains(&true))
+            let total = self.visible_channels().count();
+            let spectra = self
+                .visible_channels()
+                .filter(|index| self.trace_fft.contains_key(&ScopeTrace::Recorded(*index)))
+                .count();
+            spectra + usize::from(total > spectra)
         }
     }
 
@@ -630,12 +794,21 @@ impl Viewer {
         }
     }
 
-    fn draw_math(&self, painter: &egui::Painter, clip: &egui::Painter, rect: Rect) {
-        if let Some(slot) = self
-            .visible_channels()
-            .position(|index| index == self.active)
+    fn draw_math(
+        &mut self,
+        ui: &mut Ui,
+        painter: &egui::Painter,
+        clip: &egui::Painter,
+        rect: Rect,
+    ) {
+        if let Some((slot, _)) = self
+            .channel_slots()
+            .find(|&(_, index)| index == self.active)
+            && !self
+                .trace_fft
+                .contains_key(&ScopeTrace::Recorded(self.active))
         {
-            let lane = self.lane(rect, if self.stacked { slot } else { 0 });
+            let lane = self.lane(rect, slot);
             self.math_state.paint(
                 clip,
                 lane.plot,
@@ -649,6 +822,9 @@ impl Viewer {
         }
         let lane = self.lane(rect, self.physical_lanes());
         if !painter.clip_rect().intersects(lane.frame) {
+            if let Some(state) = self.trace_fft.get_mut(&ScopeTrace::Math) {
+                state.suspend();
+            }
             return;
         }
         let calculated = self.calculated();
@@ -662,8 +838,17 @@ impl Viewer {
             Some(_) => "",
             None => " · calculating…",
         };
-        lane.label(painter, &format!("{}{}", self.math, status), MATH_COLOR);
-        if let Some((raw, bounds)) = calculated.filter(|(_, bounds)| bounds.valid()) {
+        let mut heading = lane.heading(ui, "scope-math-lane");
+        let toggle = self.trace_fft_toggle(&mut heading, ScopeTrace::Math);
+        heading.add(
+            egui::Label::new(
+                egui::RichText::new(format!("{}{status}", self.math)).color(MATH_COLOR),
+            )
+            .truncate(),
+        );
+        if self.trace_fft.contains_key(&ScopeTrace::Math) {
+            self.paint_trace_fft(ui, lane.plot, ScopeTrace::Math);
+        } else if let Some((raw, bounds)) = calculated.filter(|(_, bounds)| bounds.valid()) {
             lane.scale(painter, *bounds, &self.math_unit(), MATH_COLOR);
             let (start, samples) = raw.visible(&self.span);
             let stride = samples
@@ -682,9 +867,20 @@ impl Viewer {
                 MATH_COLOR,
             );
         }
+        if toggle {
+            self.toggle_trace_fft(ScopeTrace::Math);
+            ui.ctx().request_repaint();
+        }
     }
 
-    fn paint_marks(&self, ui: &Ui, painter: &egui::Painter, rect: Rect, time_scale: f64) {
+    fn paint_marks(
+        &self,
+        ui: &Ui,
+        painter: &egui::Painter,
+        rect: Rect,
+        time_scale: f64,
+        show_labels: bool,
+    ) {
         let active = self.active_mark();
         let ink = ui.visuals().text_color();
         let fill = ui.visuals().window_fill();
@@ -694,6 +890,9 @@ impl Viewer {
             }
             let color = plot::color(index).gamma_multiply(0.25);
             plot::highlight(painter, rect, &self.span, mark.span.clone(), color);
+            if !show_labels {
+                continue;
+            }
             let length = (mark.span.end - mark.span.start) * time_scale;
             let mut label = format!(
                 "{}  Δt {}  1/Δt {}",

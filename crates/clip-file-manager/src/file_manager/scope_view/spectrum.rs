@@ -11,11 +11,16 @@ use egui::{Button, Ui};
 use std::ops::Range;
 
 impl Viewer {
-    pub(super) fn spectrum_ui(&mut self, ui: &mut Ui, link: Option<&Link>) {
+    pub(super) fn spectrum_ui(
+        &mut self,
+        ui: &mut Ui,
+        link: Option<&Link>,
+        allow_frequency_only: bool,
+    ) {
         if self.spectra.kind == LaneKind::Filtered && !self.filters.has_lane(self.active) {
             self.set_spectrum_kind(LaneKind::Recorded);
         }
-        self.spectrum_controls(ui);
+        self.spectrum_controls(ui, allow_frequency_only);
         if !self.spectrum {
             self.spectra.suspend();
             return;
@@ -29,11 +34,7 @@ impl Viewer {
         self.spectra
             .update(ui.ctx(), input, interval, self.spectrum_window);
         let filterable = self.spectra.kind != LaneKind::Calculated;
-        let height = if self.spectra.only {
-            ui.available_height().clamp(245.0, 440.0)
-        } else {
-            190.0
-        };
+        let height = (ui.available_height() - 5.0).max(195.0);
         spectrum_workspace(ui, filterable, height, |ui, part| match part {
             SpectrumPane::Chart => self.spectrum_chart(ui, link, available),
             SpectrumPane::Filters => self.filter_controls(ui),
@@ -107,7 +108,7 @@ impl Viewer {
         }
     }
 
-    fn spectrum_controls(&mut self, ui: &mut Ui) {
+    fn spectrum_controls(&mut self, ui: &mut Ui, allow_frequency_only: bool) {
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
@@ -130,7 +131,9 @@ impl Viewer {
             ui.separator();
             ui.toggle_value(&mut self.spectrum_db, "dB")
                 .on_hover_text("Amplitude relative to one peak unit");
-            ui.toggle_value(&mut self.spectra.only, "Frequency only");
+            if allow_frequency_only {
+                ui.toggle_value(&mut self.spectra.only, "Frequency only");
+            }
             if ui.button("Fit frequencies").clicked() {
                 self.spectrum_span = None;
             }

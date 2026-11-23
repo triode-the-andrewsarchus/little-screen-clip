@@ -1,4 +1,4 @@
-use super::{CursorSnap, Viewer, display_value, plot, time_span};
+use super::{CursorSnap, ScopeTrace, Viewer, display_value, plot, time_span};
 use egui::{Color32, Painter, Rect, Ui, pos2};
 use std::ops::Range;
 
@@ -10,7 +10,8 @@ impl Viewer {
         } else {
             141.0
         };
-        let group_width = name_width + 52.0 + 2.0 * spacing + 7.0;
+        let offset_width = if self.stacked { 0.0 } else { 146.0 };
+        let group_width = name_width + 52.0 + offset_width + 2.0 * spacing + 7.0;
         let columns = ((ui.available_width() + spacing) / group_width)
             .floor()
             .max(1.0) as usize;
@@ -70,12 +71,53 @@ impl Viewer {
                 .clicked()
             {
                 *visible = !*visible;
+                if !*visible
+                    && let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index))
+                {
+                    spectrum.suspend();
+                }
+            }
+            if !self.stacked {
+                let trace = ScopeTrace::Recorded(index);
+                if !self.trace_fft.contains_key(&trace) {
+                    if self.trace_fft_toggle(ui, trace) {
+                        self.toggle_trace_fft(trace);
+                    }
+                    self.offset_control(ui, index);
+                }
             }
         });
         ui.add_space(7.0);
     }
 
-    fn channel_label(&self, index: usize) -> String {
+    fn offset_control(&mut self, ui: &mut Ui, index: usize) {
+        let bounds = self.channel_bounds(index);
+        let unit = &self.overview.channels[index].unit;
+        let speed = (f64::from(bounds.max) - f64::from(bounds.min)).abs() / 100.0;
+        let offset = &mut self.display_offsets[index];
+        ui.weak("Offset");
+        let response = ui
+            .add(
+                egui::DragValue::new(offset)
+                    .range(-1.0e12..=1.0e12)
+                    .speed(if speed.is_finite() && speed > 0.0 {
+                        speed
+                    } else {
+                        0.01
+                    })
+                    .max_decimals(8)
+                    .suffix(format!(" {unit}")),
+            )
+            .on_hover_text("Vertical offset on the shared overlay scale");
+        response.context_menu(|ui| {
+            if ui.button("Reset vertical offset").clicked() {
+                *offset = 0.0;
+                ui.close();
+            }
+        });
+    }
+
+    pub(super) fn channel_label(&self, index: usize) -> String {
         let channel = &self.overview.channels[index];
         if self.recording.power_recording() {
             return channel.name.clone();
@@ -99,7 +141,7 @@ impl Viewer {
         time_span(std::slice::from_ref(&self.overview.channels[self.active]))
     }
 
-    fn activate_channel(&mut self, index: usize) {
+    pub(super) fn activate_channel(&mut self, index: usize) {
         let previous = self.active;
         if previous != index {
             self.spectra.clear_result();
