@@ -224,7 +224,10 @@ impl Word {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engineering::logic::{Edge, Level};
+    use crate::engineering::{
+        logic::Level,
+        logic_decode::tests::{drive, level},
+    };
 
     #[test]
     fn philips_carries_the_previous_lsb_on_the_word_select_edge() {
@@ -320,10 +323,6 @@ mod tests {
             .map(move |bit| (ws, level(value & (1 << bit) != 0)))
     }
 
-    fn level(high: bool) -> Level {
-        if high { Level::High } else { Level::Low }
-    }
-
     fn capture(cells: &[(bool, Level)], synchronous_ws: bool) -> [Trace; 3] {
         let end = cells.len() as f64 * 4.0 + 2.0;
         let [mut clock, mut select, mut data] =
@@ -340,15 +339,5 @@ mod tests {
             drive(&mut data, time - 1.0, bit);
         }
         [clock, select, data]
-    }
-
-    fn drive(trace: &mut Trace, time_seconds: f64, level: Level) {
-        let previous = trace.edges.last().map(|edge| edge.level).or(trace.initial);
-        if previous != Some(level) {
-            trace.edges.push(Edge {
-                time_seconds,
-                level,
-            });
-        }
     }
 }

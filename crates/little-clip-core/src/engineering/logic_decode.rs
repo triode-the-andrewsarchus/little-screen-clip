@@ -425,7 +425,7 @@ mod tests {
         }
     }
 
-    fn drive(trace: &mut Trace, time_seconds: f64, level: Level) {
+    pub(super) fn drive(trace: &mut Trace, time_seconds: f64, level: Level) {
         let previous = trace.edges.last().map(|edge| edge.level).or(trace.initial);
         if previous != Some(level) {
             trace.edges.push(Edge {
@@ -435,7 +435,7 @@ mod tests {
         }
     }
 
-    fn level(high: bool) -> Level {
+    pub(super) fn level(high: bool) -> Level {
         if high { Level::High } else { Level::Low }
     }
 
