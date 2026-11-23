@@ -1,6 +1,7 @@
 //! Read-only comparison of guarded file snapshots and captured waveform summaries.
 mod facts;
-use super::{preview_job::Task, scope_view, shelf::preview};
+mod tag_memory;
+use super::{preview_job::Task, scope_view, shelf::preview, tags_view};
 use crate::file_source::{FileSource, ReadCheck};
 use clip_studios::binary_diff_view::BinaryDiffViewState;
 use egui::{FontId, Rect, Sense, Ui, pos2, vec2};
@@ -8,7 +9,10 @@ use egui_extras::{Column, TableBuilder};
 use facts::Facts;
 use little_clip_core::{
     BackgroundJobs,
-    engineering::waveforms::{Peak, display_value, time_span},
+    engineering::{
+        tags::{Document, Memory},
+        waveforms::{Peak, display_value, time_span},
+    },
     file_format::{Format, recognize_engineering},
     palette::AppPalette,
 };
@@ -35,6 +39,7 @@ struct Input {
     size: u64,
     file: FileSource,
     waveform: Option<Arc<scope_view::strip::Preview>>,
+    tag: Option<Arc<tags_view::strip::Preview>>,
     facts: Facts,
 }
 
@@ -49,9 +54,17 @@ pub(super) struct Viewer {
     waveform: Range<f64>,
     waveform_end: f64,
     channel: usize,
-    show_fields: bool,
+    mode: Mode,
     show_matches: bool,
     keys: Vec<String>,
+    tags: Option<tag_memory::View>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Sources,
+    Fields,
+    Memory,
 }
 
 enum Action {
@@ -82,6 +95,7 @@ impl Viewer {
             })
             .fold(0.0_f64, f64::max);
         let keys = diff_keys(&sources[0].facts, &sources[1].facts, false);
+        let tags = tag_memory::View::compare([sources[0].memory(), sources[1].memory()]);
         Ok(Self {
             sources: Arc::new(sources),
             other: 1,
@@ -93,9 +107,10 @@ impl Viewer {
             waveform: 0.0..waveform_end,
             waveform_end,
             channel: 0,
-            show_fields: false,
+            mode: Mode::Sources,
             show_matches: false,
             keys,
+            tags,
         })
     }
 
@@ -126,9 +141,12 @@ impl Viewer {
         }
         ui.separator();
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.show_fields, false, "Sources");
-            ui.selectable_value(&mut self.show_fields, true, "Decoded fields");
-            if self.show_fields
+            ui.selectable_value(&mut self.mode, Mode::Sources, "Sources");
+            ui.selectable_value(&mut self.mode, Mode::Fields, "Decoded fields");
+            if self.tags.is_some() {
+                ui.selectable_value(&mut self.mode, Mode::Memory, "Memory map");
+            }
+            if self.mode == Mode::Fields
                 && ui
                     .checkbox(&mut self.show_matches, "Show matching fields")
                     .changed()
@@ -136,10 +154,19 @@ impl Viewer {
                 self.refresh_fields();
             }
         });
-        if self.show_fields {
-            self.fields(ui);
-        } else {
-            self.summaries(ui);
+        match self.mode {
+            Mode::Sources => self.summaries(ui),
+            Mode::Fields => self.fields(ui),
+            Mode::Memory => {
+                if let Some(tags) = &mut self.tags {
+                    let names = [0, self.other].map(|index| self.sources[index].title.as_str());
+                    tags.ui(
+                        ui,
+                        names,
+                        crate::ui_appearance::WorkbenchColors::from_palette(palette),
+                    );
+                }
+            }
         }
     }
 
@@ -160,6 +187,11 @@ impl Viewer {
                     self.scanned_to = 0;
                     self.note = None;
                     self.refresh_fields();
+                    let pair = [0, self.other].map(|index| self.sources[index].memory());
+                    self.tags = tag_memory::View::compare(pair);
+                    if self.tags.is_none() && self.mode == Mode::Memory {
+                        self.mode = Mode::Sources;
+                    }
                 }
             }
             let max = self.sources[0].size.max(self.sources[self.other].size);
@@ -452,8 +484,10 @@ impl Input {
         facts
             .0
             .insert("File size (bytes)".to_owned(), size.to_string());
-        let (detail, waveform) =
-            data.map_or_else(|| (String::new(), None), |data| (data.detail, data.scope));
+        let (detail, waveform, tag) = data.map_or_else(
+            || (String::new(), None, None),
+            |data| (data.detail, data.scope, data.tags),
+        );
         file.check_file(&handle)?;
         file.check()?;
         Ok(Self {
@@ -465,8 +499,16 @@ impl Input {
             size,
             file,
             waveform,
+            tag,
             facts,
         })
+    }
+
+    fn memory(&self) -> Option<&Memory> {
+        match self.tag.as_ref()?.document() {
+            Document::Memory(memory) => Some(memory),
+            _ => None,
+        }
     }
 
     fn open_at(&self, offset: u64, cancel: &AtomicBool) -> Result<File, String> {

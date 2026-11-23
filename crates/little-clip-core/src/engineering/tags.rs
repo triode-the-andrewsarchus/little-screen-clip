@@ -1,11 +1,13 @@
 //! Passive inspection of saved NFC, RFID and 1-Wire data.
 
+mod compare;
 mod flipper;
 mod memory;
 mod signal;
 mod source;
 mod trace;
 
+pub use compare::{Agreement, ComparedRow, MemoryComparison, ObservedByte};
 pub use signal::{SampleBin, SignalIndex, SignalPreview, build_signal_index, read_samples};
 pub use trace::{
     Direction, Frame, FrameInfo, TraceBin, TraceIndex, TracePreview, build_trace_index,
