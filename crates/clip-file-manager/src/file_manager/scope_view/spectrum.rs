@@ -1,5 +1,5 @@
 use super::{Viewer, plot};
-use egui::{Color32, Sense, Stroke, Ui, pos2};
+use egui::{Align2, Color32, FontId, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::engineering::{
     analysis::SpectrumWindow,
     waveforms::{Peak, display_value},
@@ -37,7 +37,7 @@ impl Viewer {
             ),
             Sense::click_and_drag(),
         );
-        let rect = area.shrink2(egui::vec2(4.0, 9.0));
+        let rect = egui::Rect::from_min_max(area.min + vec2(58.0, 9.0), area.max - vec2(8.0, 18.0));
         if response.hovered() {
             let zoom = ui.input(|input| input.smooth_scroll_delta.y);
             if zoom != 0.0
@@ -83,10 +83,27 @@ impl Viewer {
                 value
             })
             .collect::<Vec<_>>();
+        if !bounds.valid() {
+            return;
+        }
+        if bounds.min == bounds.max {
+            let padding = (bounds.min.abs() * 0.02).max(if self.spectrum_db { 1.0 } else { 1e-9 });
+            bounds.min -= padding;
+            bounds.max += padding;
+        }
         let painter = ui.painter_at(area);
+        let ink = ui.visuals().weak_text_color();
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-        plot::draw_raw(
+        plot::labelled_x_axis(&painter, rect, &span, "Hz", ink);
+        amplitude_ticks(
             &painter,
+            rect,
+            bounds,
+            if self.spectrum_db { "dB" } else { unit },
+            ink,
+        );
+        plot::draw_raw(
+            &painter.with_clip_rect(rect),
             rect,
             &span,
             hz(first),
@@ -167,5 +184,50 @@ fn window_name(window: SpectrumWindow) -> &'static str {
         SpectrumWindow::Hann => "Hann",
         SpectrumWindow::Rectangular => "Rectangular",
         SpectrumWindow::BlackmanHarris => "Blackman–Harris",
+    }
+}
+
+fn amplitude_ticks(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    bounds: Peak,
+    unit: &str,
+    ink: Color32,
+) {
+    let divisions = (rect.height() / 27.0).clamp(2.0, 6.0);
+    let raw_step = f64::from(bounds.max - bounds.min) / f64::from(divisions);
+    let order = 10.0_f64.powf(raw_step.log10().floor());
+    let step = [1.0, 2.0, 5.0, 10.0]
+        .into_iter()
+        .find(|&n| n * order >= raw_step)
+        .unwrap_or(10.0)
+        * order;
+    if !step.is_finite() || step <= 0.0 {
+        return;
+    }
+    let mut level = (f64::from(bounds.min) / step).ceil() * step;
+    for _ in 0..=6 {
+        if level > f64::from(bounds.max) {
+            break;
+        }
+        let y = plot::y_at(rect, bounds, level as f32);
+        painter.hline(
+            rect.x_range(),
+            y,
+            Stroke::new(1.0, ink.gamma_multiply(0.21)),
+        );
+        let label = if unit == "dB" && step >= 1.0 {
+            format!("{level:.0} dB")
+        } else {
+            display_value(level, unit)
+        };
+        painter.text(
+            pos2(rect.left() - 5.0, y),
+            Align2::RIGHT_CENTER,
+            label,
+            FontId::monospace(10.0),
+            ink,
+        );
+        level += step;
     }
 }

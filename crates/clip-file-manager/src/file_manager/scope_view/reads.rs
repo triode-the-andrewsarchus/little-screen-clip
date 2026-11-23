@@ -113,7 +113,7 @@ pub(super) struct AnalysisRequest {
     pub span: Range<f64>,
     pub active: usize,
     pub spectrum: Option<analysis::SpectrumWindow>,
-    pub math: Option<Expression>,
+    pub math: Option<(Expression, Range<f64>)>,
 }
 
 pub(super) fn analyze(
@@ -122,24 +122,7 @@ pub(super) fn analyze(
     cancel: &AtomicBool,
 ) -> Result<Measurements, String> {
     recording.checked(cancel, |capture| {
-        let mut limited = false;
-        let data = capture
-            .channels()
-            .iter()
-            .enumerate()
-            .map(|(index, channel)| {
-                let span = sample_span(channel, request.span.clone());
-                let length = span.end.saturating_sub(span.start);
-                let start = if length > ANALYSIS_SAMPLES {
-                    limited = true;
-                    span.start + (length - ANALYSIS_SAMPLES) / 2
-                } else {
-                    span.start
-                };
-                let end = span.end.min(start.saturating_add(ANALYSIS_SAMPLES));
-                read_raw(capture, index, start..end, cancel)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
+        let (data, limited) = analysis_data(capture, &request.span, cancel)?;
 
         let raw = &data[request.active];
         let frequencies = data
@@ -152,7 +135,15 @@ pub(super) fn analyze(
         let math = request
             .math
             .as_ref()
-            .map(|expression| math_trace(expression, &data, request.active));
+            .map(|(expression, span)| {
+                if *span == request.span {
+                    Ok(math_trace(expression, &data, request.active))
+                } else {
+                    let (viewport, _) = analysis_data(capture, span, cancel)?;
+                    Ok::<_, String>(math_trace(expression, &viewport, request.active))
+                }
+            })
+            .transpose()?;
         let mut extrema = Peak::default();
         extrema.add(&raw.samples);
         let raw = data
@@ -170,6 +161,36 @@ pub(super) fn analyze(
             power_totals,
         })
     })
+}
+
+fn analysis_data(
+    capture: &Capture,
+    span: &Range<f64>,
+    cancel: &AtomicBool,
+) -> Result<(Vec<RawChannel>, bool), String> {
+    let mut limited = false;
+    let data = capture
+        .channels()
+        .iter()
+        .enumerate()
+        .map(|(index, channel)| {
+            let span = sample_span(channel, span.clone());
+            let length = span.end.saturating_sub(span.start);
+            let start = if length > ANALYSIS_SAMPLES {
+                limited = true;
+                span.start + (length - ANALYSIS_SAMPLES) / 2
+            } else {
+                span.start
+            };
+            read_raw(
+                capture,
+                index,
+                start..span.end.min(start.saturating_add(ANALYSIS_SAMPLES)),
+                cancel,
+            )
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok((data, limited))
 }
 
 fn math_trace(expression: &Expression, data: &[RawChannel], index: usize) -> (RawChannel, Peak) {

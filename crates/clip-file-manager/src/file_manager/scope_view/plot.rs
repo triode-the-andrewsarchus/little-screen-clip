@@ -12,7 +12,7 @@ const COLORS: [Color32; 4] = [
     Color32::from_rgb(238, 131, 184),
 ];
 
-pub(super) fn color(index: usize) -> Color32 {
+pub(in crate::file_manager) fn color(index: usize) -> Color32 {
     COLORS[index % COLORS.len()]
 }
 
@@ -44,8 +44,19 @@ pub(in crate::file_manager) fn axes(
     span: &Range<f64>,
     foreground: Color32,
 ) {
-    for bin in 0..=6 {
-        let fraction = bin as f32 / 6.0;
+    labelled_x_axis(painter, rect, span, "s", foreground);
+}
+
+pub(super) fn labelled_x_axis(
+    painter: &Painter,
+    rect: Rect,
+    span: &Range<f64>,
+    unit: &str,
+    foreground: Color32,
+) {
+    let divisions = (rect.width() / 90.0).round().clamp(2.0, 6.0) as usize;
+    for bin in 0..=divisions {
+        let fraction = bin as f32 / divisions as f32;
         let x = rect.left() + rect.width() * fraction;
         painter.line_segment(
             [pos2(x, rect.top()), pos2(x, rect.bottom())],
@@ -53,7 +64,7 @@ pub(in crate::file_manager) fn axes(
         );
         let align = match bin {
             0 => Align2::LEFT_TOP,
-            6 => Align2::RIGHT_TOP,
+            bin if bin == divisions => Align2::RIGHT_TOP,
             _ => Align2::CENTER_TOP,
         };
         painter.text(
@@ -61,7 +72,7 @@ pub(in crate::file_manager) fn axes(
             align,
             display_value(
                 span.start + f64::from(fraction) * (span.end - span.start),
-                "s",
+                unit,
             ),
             FontId::monospace(10.0),
             foreground,
@@ -90,7 +101,7 @@ pub(super) fn overview(painter: &Painter, rect: Rect, overview: &Overview) {
     }
 }
 
-pub(super) fn draw_envelope(
+pub(in crate::file_manager) fn draw_envelope(
     painter: &Painter,
     rect: Rect,
     span: &Range<f64>,

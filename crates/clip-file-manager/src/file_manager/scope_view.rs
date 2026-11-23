@@ -2,6 +2,8 @@
 
 #[cfg(test)]
 mod frame_benchmark;
+mod hover;
+mod logic_export;
 mod math;
 pub(super) mod plot;
 mod reads;
@@ -15,7 +17,7 @@ use little_clip_core::{
     BackgroundJobs,
     engineering::{
         analysis::SpectrumWindow,
-        waveforms::{Envelope, Overview, Recording, display_value, time_span},
+        waveforms::{Envelope, Overview, Peak, Recording, display_value, time_span},
     },
     palette::AppPalette,
 };
@@ -30,6 +32,13 @@ use std::{
 
 static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(3, 4));
 
+const MATH_COLOR: Color32 = Color32::from_rgb(215, 153, 246);
+
+struct MarkedRange {
+    span: Range<f64>,
+    peak_to_peak: Option<(f32, String)>,
+}
+
 pub(super) struct Viewer {
     recording: Arc<Recording>,
     overview: Overview,
@@ -37,6 +46,11 @@ pub(super) struct Viewer {
     span: Range<f64>,
     active: usize,
     cursors: [Option<f64>; 2],
+    marks: Vec<MarkedRange>,
+    stacked: bool,
+    visible: Vec<bool>,
+    hover: hover::Hover,
+    conversion: logic_export::Conversion,
     drag: Option<usize>,
     index: Option<Vec<Envelope>>,
     index_job: Option<Task<Result<Vec<Envelope>, String>>>,
@@ -79,6 +93,7 @@ struct AnalysisKey {
     channel: usize,
     fft: Option<SpectrumWindow>,
     expression: String,
+    math_span: Range<f64>,
 }
 
 impl Viewer {
@@ -86,6 +101,7 @@ impl Viewer {
         let recording = Recording::open(path, ReadCheck::default(), cancel)?;
         let overview = recording.overview(cancel)?;
         let domain = time_span(&overview.channels);
+        let visible = vec![true; overview.channels.len()];
         Ok(Self {
             recording: Arc::new(recording),
             overview,
@@ -93,6 +109,11 @@ impl Viewer {
             domain,
             active: 0,
             cursors: [None; 2],
+            marks: Vec::new(),
+            stacked: true,
+            visible,
+            hover: hover::Hover::default(),
+            conversion: logic_export::Conversion::default(),
             drag: None,
             index: None,
             index_job: None,
@@ -135,6 +156,9 @@ impl Viewer {
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette, copies: &mut Copies) {
         self.poll(ui.ctx());
+        if self.logic_subview(ui, palette, copies) {
+            return;
+        }
         let (label, icon) = if self.recording.power_recording() {
             ("Power recording", crate::icons::Icon::Zap)
         } else {
@@ -157,6 +181,7 @@ impl Viewer {
             self.spectrum_ui(ui);
         }
         self.request_detail();
+        self.update_hover(ui.ctx());
         self.math_state
             .request(&self.recording, ui.ctx(), &self.span);
         for snap in &mut self.snaps {
@@ -205,6 +230,24 @@ impl Viewer {
                 self.span = self.domain.clone();
             }
             ui.toggle_value(&mut self.spectrum, "Spectrum");
+            let same_units = self
+                .overview
+                .channels
+                .windows(2)
+                .all(|pair| pair[0].unit == pair[1].unit);
+            if same_units
+                && ui
+                    .button(if self.stacked { "Stacked" } else { "Overlay" })
+                    .on_hover_text("Switch between stacked and overlaid traces")
+                    .clicked()
+            {
+                self.stacked = !self.stacked;
+            }
+            ui.menu_button("Visible channels", |ui| {
+                for (channel, visible) in self.overview.channels.iter().zip(&mut self.visible) {
+                    ui.checkbox(visible, &channel.name);
+                }
+            });
             let range = self.selection();
             if ui
                 .add_enabled(
@@ -222,6 +265,7 @@ impl Viewer {
             }
         });
         self.math_controls(ui);
+        self.logic_menu(ui, copies);
     }
 
     fn math_controls(&mut self, ui: &mut Ui) {
@@ -278,7 +322,7 @@ impl Viewer {
             Sense::click_and_drag(),
         );
         let rect = Rect::from_min_max(
-            outer.min + egui::vec2(56.0, 3.0),
+            outer.min + egui::vec2(56.0, 4.0),
             outer.max - egui::vec2(8.0, 16.0),
         );
         self.navigate(ui, rect, &response);
@@ -288,17 +332,13 @@ impl Viewer {
         let ink = ui.visuals().weak_text_color();
         plot::axes(&painter, rect, &self.span, ink);
         let clipped = painter.with_clip_rect(rect);
-        if let Some(selection) = self.selection() {
-            plot::highlight(
-                &clipped,
-                rect,
-                &self.span,
-                selection,
-                Color32::from_white_alpha(25),
-            );
-        }
+        self.hover.time = response
+            .hover_pos()
+            .filter(|point| rect.contains(*point))
+            .map(|point| plot::at(rect, &self.span, point.x));
         self.draw_channels(&painter, &clipped, rect, ink);
-        self.draw_math(&clipped, rect);
+        self.draw_math(&painter, &clipped, rect, ink);
+        self.paint_marks(ui, &clipped, rect);
         for (label, time) in ["A", "B"]
             .into_iter()
             .zip(self.cursors)
@@ -319,7 +359,13 @@ impl Viewer {
                 );
             }
         }
-        response.on_hover_text("Scroll to zoom at the pointer · Middle drag to pan · Drag A/B to measure · Shift bypasses zero-crossing snap");
+        self.paint_hover(
+            &clipped,
+            rect,
+            ui.visuals().text_color(),
+            ui.visuals().window_fill(),
+        );
+        response.on_hover_text("Scroll to zoom · Middle drag to pan · Drag to add a range · Right-click a range to remove · Shift bypasses zero-crossing snap");
     }
 
     fn draw_channels(
@@ -331,30 +377,24 @@ impl Viewer {
     ) {
         let channels = &self.overview.channels;
         let envelopes = self.index.as_ref().unwrap_or(&self.overview.envelopes);
-        for (index, (channel, envelope)) in channels.iter().zip(envelopes).enumerate() {
-            let lane = plot::lane(rect, index, channels.len()).shrink2(egui::vec2(0.0, 5.0));
-            let bounds = envelope.extrema();
+        for (slot, index) in self.visible_channels().enumerate() {
+            let channel = &channels[index];
+            let envelope = &envelopes[index];
+            let (lane, bounds) = self.channel_lane(rect, slot, index);
             if !bounds.valid() {
                 continue;
             }
             let channel_color = plot::color(index);
-            let axis = lane.left() - 5.0;
-            for (y, value) in [(lane.top(), bounds.max), (lane.bottom(), bounds.min)] {
-                painter.text(
-                    pos2(axis, y),
-                    egui::Align2::RIGHT_CENTER,
-                    display_value(f64::from(value), &channel.unit),
-                    egui::FontId::monospace(10.0),
-                    ink,
-                );
-            }
-            if bounds.min <= 0.0 && bounds.max >= 0.0 {
-                let y = plot::y_at(lane, bounds, 0.0);
-                clipped.hline(
-                    lane.x_range(),
-                    y,
-                    Stroke::new(1.0, ink.gamma_multiply(0.38)),
-                );
+            if self.stacked || slot == 0 {
+                axes_y(painter, lane, bounds, &channel.unit, ink);
+                if bounds.min <= 0.0 && bounds.max >= 0.0 {
+                    let y = plot::y_at(lane, bounds, 0.0);
+                    clipped.hline(
+                        lane.x_range(),
+                        y,
+                        Stroke::new(1.0, ink.gamma_multiply(0.38)),
+                    );
+                }
             }
             let detail = self
                 .detail
@@ -391,45 +431,177 @@ impl Viewer {
         }
     }
 
-    fn draw_math(&self, painter: &egui::Painter, rect: Rect) {
-        let lane = plot::lane(rect, self.active, self.overview.channels.len());
-        self.math_state.paint(
-            painter,
-            lane,
-            &self.span,
-            &self.overview.channels[self.active],
-            self.math_envelope(),
-        );
-        if self
-            .measurement_key
-            .as_ref()
-            .is_none_or(|key| key.expression != self.math || key.channel != self.active)
+    fn visible_channels(&self) -> impl Iterator<Item = usize> + '_ {
+        self.visible
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &show)| show.then_some(index))
+    }
+
+    fn physical_lanes(&self) -> usize {
+        if self.stacked {
+            self.visible_channels().count()
+        } else {
+            usize::from(self.visible.contains(&true))
+        }
+    }
+
+    fn lane_count(&self) -> usize {
+        self.physical_lanes() + usize::from(self.math_state.numeric().is_some())
+    }
+
+    fn channel_lane(&self, rect: Rect, slot: usize, index: usize) -> (Rect, Peak) {
+        let envelopes = self.index.as_ref().unwrap_or(&self.overview.envelopes);
+        let (slot, bounds) = if self.stacked {
+            (slot, envelopes[index].extrema())
+        } else {
+            let mut bounds = Peak::default();
+            for index in self.visible_channels() {
+                bounds.merge(envelopes[index].extrema());
+            }
+            (0, bounds)
+        };
+        (
+            plot::lane(rect, slot, self.lane_count()).shrink2(egui::vec2(0.0, 5.0)),
+            bounds,
+        )
+    }
+
+    fn calculated(&self) -> Option<&(RawChannel, Peak)> {
+        let key = self.measurement_key.as_ref()?;
+        if key.expression != self.math || key.channel != self.active {
+            return None;
+        }
+        self.measurements.as_ref()?.math.as_ref()
+    }
+
+    fn math_unit(&self) -> String {
+        match self
+            .math_state
+            .numeric()
+            .and_then(|expression| expression.voltage_power())
         {
+            Some(1) => "V".into(),
+            Some(0) | None => String::new(),
+            Some(power) => format!("V^{power}"),
+        }
+    }
+
+    fn draw_math(&self, painter: &egui::Painter, clip: &egui::Painter, rect: Rect, ink: Color32) {
+        if let Some(slot) = self
+            .visible_channels()
+            .position(|index| index == self.active)
+        {
+            let (lane, _) = self.channel_lane(rect, slot, self.active);
+            self.math_state.paint(
+                clip,
+                lane,
+                &self.span,
+                &self.overview.channels[self.active],
+                self.math_envelope(),
+            );
+        }
+        if self.math_state.numeric().is_none() {
             return;
         }
-        let Some((raw, bounds)) = self
-            .measurements
-            .as_ref()
-            .and_then(|data| data.math.as_ref())
-        else {
-            return;
-        };
-        let (start, samples) = raw.visible(&self.span);
-        let stride = samples
-            .len()
-            .div_ceil((lane.width() as usize).max(8))
-            .max(1);
-        let display = samples.iter().copied().step_by(stride).collect::<Vec<_>>();
-        plot::draw_raw(
-            painter,
-            lane,
-            &self.span,
-            start,
-            raw.step * stride as f64,
-            &display,
-            *bounds,
-            Color32::from_rgb(235, 242, 125),
+        let lane = plot::lane(rect, self.physical_lanes(), self.lane_count())
+            .shrink2(egui::vec2(0.0, 5.0));
+        clip.hline(
+            lane.x_range(),
+            lane.top(),
+            Stroke::new(1.0, ink.gamma_multiply(0.32)),
         );
+        let calculated = self.calculated();
+        let label = match calculated {
+            Some((raw, _))
+                if raw.start > self.span.start + 2.0 * raw.step
+                    || raw.time(raw.samples.len()) < self.span.end - 2.0 * raw.step =>
+            {
+                "Math · bounded sample window"
+            }
+            Some(_) => "Math",
+            None => "Calculating math…",
+        };
+        painter.text(
+            lane.left_top() + egui::vec2(6.0, 3.0),
+            egui::Align2::LEFT_TOP,
+            label,
+            egui::FontId::monospace(12.0),
+            MATH_COLOR,
+        );
+        if let Some((raw, bounds)) = calculated.filter(|(_, bounds)| bounds.valid()) {
+            axes_y(painter, lane, *bounds, &self.math_unit(), ink);
+            let (start, samples) = raw.visible(&self.span);
+            let stride = samples
+                .len()
+                .div_ceil((lane.width() as usize).max(8))
+                .max(1);
+            let display = samples.iter().copied().step_by(stride).collect::<Vec<_>>();
+            plot::draw_raw(
+                clip,
+                lane,
+                &self.span,
+                start,
+                raw.step * stride as f64,
+                &display,
+                *bounds,
+                MATH_COLOR,
+            );
+        }
+    }
+
+    fn paint_marks(&self, ui: &Ui, painter: &egui::Painter, rect: Rect) {
+        let active = self.active_mark();
+        let ink = ui.visuals().text_color();
+        let fill = ui.visuals().window_fill();
+        for (index, mark) in self.marks.iter().chain(active.iter()).enumerate() {
+            if mark.span.end <= self.span.start || mark.span.start >= self.span.end {
+                continue;
+            }
+            let color = plot::color(index).gamma_multiply(0.25);
+            plot::highlight(painter, rect, &self.span, mark.span.clone(), color);
+            let length = mark.span.end - mark.span.start;
+            let mut label = format!(
+                "{}  Δt {}  1/Δt {}",
+                index + 1,
+                display_value(length, "s"),
+                display_value(length.recip(), "Hz")
+            );
+            if let Some((peak, unit)) = &mark.peak_to_peak {
+                label.push_str(&format!(
+                    "  Pk–Pk {}",
+                    display_value(f64::from(*peak), unit)
+                ));
+            }
+            let x = plot::x_at(rect, &self.span, mark.span.start).max(rect.left());
+            let y = (rect.bottom() - 21.0 - (index % 3) as f32 * 18.0).max(rect.top());
+            hover::selection_label(painter, rect, x, y, &label, ink, fill);
+        }
+    }
+
+    fn active_mark(&self) -> Option<MarkedRange> {
+        let span = self.selection()?;
+        let peak_to_peak = self
+            .measurement_key
+            .as_ref()
+            .filter(|key| key.channel == self.active && key.span == span)
+            .and_then(|_| self.measurements.as_ref())
+            .filter(|data| data.extrema.valid() && !data.limited)
+            .map(|data| {
+                (
+                    data.extrema.max - data.extrema.min,
+                    self.overview.channels[self.active].unit.clone(),
+                )
+            });
+        Some(MarkedRange { span, peak_to_peak })
+    }
+
+    fn archive_mark(&mut self) {
+        if let Some(mark) = self.active_mark() {
+            self.marks.push(mark);
+        }
+        self.cursors = [None; 2];
+        self.snaps.iter_mut().for_each(CursorSnap::clear);
     }
 
     fn overview_ui(&mut self, ui: &mut Ui) {
@@ -564,6 +736,7 @@ impl Viewer {
             || self.detail_job.is_some()
             || self.analysis_job.is_some()
             || self.snaps.iter().any(CursorSnap::pending)
+            || self.hover.pending()
             || self.math_state.pending()
             || self.analysis_key.is_none()
     }
@@ -620,6 +793,22 @@ impl Viewer {
         let time = plot::at(rect, &self.span, point.x);
         let radius = (self.span.end - self.span.start) * 10.0 / f64::from(rect.width().max(1.0));
         let free = ui.input(|input| input.modifiers.shift);
+        if response.secondary_clicked() && rect.contains(point) {
+            if self
+                .selection()
+                .is_some_and(|range| time >= range.start && time <= range.end)
+            {
+                self.cursors = [None; 2];
+                self.snaps.iter_mut().for_each(CursorSnap::clear);
+            } else if let Some(index) = self
+                .marks
+                .iter()
+                .rposition(|mark| time >= mark.span.start && time <= mark.span.end)
+            {
+                self.marks.remove(index);
+            }
+            return;
+        }
         let cursors = self.cursors;
         let near = |t: f64| {
             cursors
@@ -633,6 +822,7 @@ impl Viewer {
             let origin = plot::at(rect, &self.span, origin.x);
             self.snaps.iter_mut().for_each(CursorSnap::clear);
             self.drag = near(origin).or_else(|| {
+                self.archive_mark();
                 self.place_cursor(0, origin, radius, free);
                 Some(1)
             });
@@ -641,7 +831,17 @@ impl Viewer {
             let selected = near(time);
             self.snaps.iter_mut().for_each(CursorSnap::clear);
             if selected.is_none() {
-                self.cursors[1] = None;
+                if let Some(index) = self
+                    .marks
+                    .iter()
+                    .rposition(|mark| mark.span.contains(&time))
+                {
+                    let mark = self.marks.remove(index);
+                    self.archive_mark();
+                    self.cursors = [Some(mark.span.start), Some(mark.span.end)];
+                    return;
+                }
+                self.archive_mark();
             }
             self.place_cursor(selected.unwrap_or(0), time, radius, free);
         } else if let Some(slot) = self.drag {
@@ -760,6 +960,11 @@ impl Viewer {
         let key = AnalysisKey {
             span: self.selection().unwrap_or_else(|| self.span.clone()),
             channel: self.active,
+            math_span: if self.math_state.numeric().is_some() {
+                self.span.clone()
+            } else {
+                0.0..0.0
+            },
             fft: self.spectrum.then_some(self.spectrum_window),
             expression: self
                 .math_state
@@ -782,13 +987,29 @@ impl Viewer {
             span: key.span.clone(),
             active: key.channel,
             spectrum: key.fft,
-            math: self.math_state.numeric().cloned(),
+            math: self
+                .math_state
+                .numeric()
+                .cloned()
+                .map(|expression| (expression, key.math_span.clone())),
         };
         self.analysis_key = Some(key);
         let recording = self.recording.clone();
         self.analysis_job = Some(Task::start(&JOBS, Duration::from_secs(15), move |cancel| {
             reads::analyze(&recording, request, cancel)
         }));
+    }
+}
+
+fn axes_y(painter: &egui::Painter, lane: Rect, bounds: Peak, unit: &str, ink: Color32) {
+    for (y, value) in [(lane.top(), bounds.max), (lane.bottom(), bounds.min)] {
+        painter.text(
+            pos2(lane.left() - 5.0, y),
+            egui::Align2::RIGHT_CENTER,
+            display_value(f64::from(value), unit),
+            egui::FontId::monospace(10.0),
+            ink,
+        );
     }
 }
 

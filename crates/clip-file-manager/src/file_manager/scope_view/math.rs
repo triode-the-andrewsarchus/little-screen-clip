@@ -219,7 +219,7 @@ impl Math {
         }
     }
 
-    fn predicate(&self) -> Option<&Expression> {
+    pub(super) fn predicate(&self) -> Option<&Expression> {
         self.expression
             .as_ref()
             .filter(|expression| expression.is_predicate())
@@ -334,28 +334,11 @@ fn read_predicate(
     expression: &Expression,
     cancel: &AtomicBool,
 ) -> Result<Map, String> {
-    let channel = &capture.channels()[active];
+    let scan = Scan::new(capture, active, expression, cancel);
     let length = rows.end - rows.start;
     let step = bin_step(length);
     let mut matches = vec![false; length.div_ceil(step) as usize];
-    let fastest = capture
-        .channels()
-        .iter()
-        .filter(|channel| channel.unit == "V")
-        .map(|channel| channel.interval_seconds)
-        .fold(channel.interval_seconds, f64::min);
-    let stride =
-        ((READ_ROWS as f64 * fastest / channel.interval_seconds) as u64).clamp(1, READ_ROWS);
-    // Count the highest-rate channel in the exact-pass budget as well.
-    let max_exact = (EXACT_LIMIT as f64 * fastest / channel.interval_seconds) as u64;
-    let sampled = length > max_exact;
-    let scan = Scan {
-        capture,
-        active,
-        expression,
-        cancel,
-        stride,
-    };
+    let sampled = length > scan.exact_limit;
     if sampled {
         for bucket in chunks(rows.clone(), step) {
             let width = (bucket.end - bucket.start).min(SAMPLED_ROWS);
@@ -380,15 +363,56 @@ struct Scan<'a> {
     expression: &'a Expression,
     cancel: &'a AtomicBool,
     stride: u64,
+    exact_limit: u64,
 }
 
 impl Scan<'_> {
+    fn new<'a>(
+        capture: &'a Capture,
+        active: usize,
+        expression: &'a Expression,
+        cancel: &'a AtomicBool,
+    ) -> Scan<'a> {
+        let interval = capture.channels()[active].interval_seconds;
+        let fastest = capture
+            .channels()
+            .iter()
+            .filter(|channel| channel.unit == "V")
+            .map(|channel| channel.interval_seconds)
+            .fold(interval, f64::min);
+        Scan {
+            capture,
+            active,
+            expression,
+            cancel,
+            stride: ((READ_ROWS as f64 * fastest / interval) as u64).clamp(1, READ_ROWS),
+            exact_limit: (EXACT_LIMIT as f64 * fastest / interval) as u64,
+        }
+    }
+
     fn collect(
         &self,
         rows: Range<u64>,
         first: u64,
         step: u64,
         bins: &mut [bool],
+    ) -> Result<(), String> {
+        let active = &self.capture.channels()[self.active];
+        self.visit(rows, |chunk, data| {
+            for row in chunk {
+                let bin = &mut bins[((row - first) / step) as usize];
+                if !*bin {
+                    *bin = matches_row(self.expression, data, active.time_at(row));
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn visit(
+        &self,
+        rows: Range<u64>,
+        mut visit: impl FnMut(Range<u64>, &[Option<RawChannel>]) -> Result<(), String>,
     ) -> Result<(), String> {
         let channels = self.capture.channels();
         let active = &channels[self.active];
@@ -417,15 +441,45 @@ impl Scan<'_> {
                     reads::read_raw(self.capture, index, rows, self.cancel).map(Some)
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            for row in chunk {
-                let bin = &mut bins[((row - first) / step) as usize];
-                if !*bin {
-                    *bin = matches_row(self.expression, &data, active.time_at(row));
-                }
-            }
+            visit(chunk, &data)?;
         }
         Ok(())
     }
+}
+
+pub(super) fn exact_predicate(
+    capture: &Capture,
+    active: usize,
+    span: Range<f64>,
+    expression: &Expression,
+    cancel: &AtomicBool,
+    mut write: impl FnMut(f64, Option<bool>) -> Result<(), String>,
+) -> Result<f64, String> {
+    let channel = &capture.channels()[active];
+    let rows = sample_span(channel, span);
+    let scan = Scan::new(capture, active, expression, cancel);
+    if rows.is_empty() {
+        return Err("The interval contains no samples.".into());
+    }
+    if rows.end - rows.start > scan.exact_limit {
+        return Err("Select or zoom to a smaller interval for exact logic conversion.".into());
+    }
+    let start = channel.time_at(rows.start);
+    let end = channel.time_at(rows.end) - start;
+    scan.visit(rows, |chunk, channels| {
+        for row in chunk {
+            let time = channel.time_at(row);
+            let state = expression
+                .evaluate(|index| channels.get(index)?.as_ref()?.value_at(time).map(f64::from));
+            let high = match state {
+                Some(Value::Predicate(high)) => Some(high),
+                _ => None,
+            };
+            write(time - start, high)?;
+        }
+        Ok(())
+    })?;
+    Ok(end)
 }
 
 fn matches_row(expression: &Expression, channels: &[Option<RawChannel>], time: f64) -> bool {
