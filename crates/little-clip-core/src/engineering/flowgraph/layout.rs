@@ -1,9 +1,13 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::ops::Bound::Excluded;
 
 use super::{Direction, Graph};
 
 /// Saved or derived canvas position of a block's origin.
 pub type Position = [f32; 2];
+
+/// Footprint of a block in full-size canvas coordinates.
+pub const BLOCK_SIZE: Position = [178.0, 52.0];
 
 const COLUMN: f32 = 200.0;
 const ROW: f32 = 90.0;
@@ -54,11 +58,56 @@ pub(super) fn make(graph: &Graph) -> Layout {
             positions.push(position);
         }
     }
+    separate_blocks(&mut positions);
     Layout {
         bounds: bounds(positions.iter().copied()),
         positions,
         saved_positions,
     }
+}
+
+fn separate_blocks(positions: &mut [Position]) {
+    // In top-to-bottom order, raise the occupied bottom edge over each block's
+    // X interval. Each skyline breakpoint is inserted and removed at most once.
+    const GAP: f32 = 8.0;
+    let mut order = (0..positions.len()).collect::<Vec<_>>();
+    order.sort_by(|&a, &b| positions[a][1].total_cmp(&positions[b][1]));
+    let mut edges = positions
+        .iter()
+        .flat_map(|&[x, _]| [x, x + BLOCK_SIZE[0] + GAP])
+        .collect::<Vec<_>>();
+    edges.sort_by(f32::total_cmp);
+    edges.dedup_by(|a, b| a.total_cmp(b).is_eq());
+    let mut bottom = BTreeMap::new();
+    for index in order {
+        let [x, y] = positions[index];
+        let left = edges.binary_search_by(|edge| edge.total_cmp(&x)).unwrap();
+        let right = edges
+            .binary_search_by(|edge| edge.total_cmp(&(x + BLOCK_SIZE[0] + GAP)))
+            .unwrap();
+        let right_y = skyline_at(&bottom, right);
+        let mut next_y = y.max(skyline_at(&bottom, left));
+        let inside = bottom
+            .range((Excluded(left), Excluded(right)))
+            .map(|(&key, &edge)| {
+                next_y = next_y.max(edge);
+                key
+            })
+            .collect::<Vec<_>>();
+        for key in inside {
+            bottom.remove(&key);
+        }
+        positions[index][1] = next_y;
+        bottom.insert(left, next_y + BLOCK_SIZE[1] + GAP);
+        bottom.insert(right, right_y);
+    }
+}
+
+fn skyline_at(edges: &BTreeMap<usize, f32>, at: usize) -> f32 {
+    edges
+        .range(..=at)
+        .next_back()
+        .map_or(f32::NEG_INFINITY, |(_, &y)| y)
 }
 
 fn bounds(positions: impl Iterator<Item = Position>) -> [Position; 2] {
@@ -103,4 +152,31 @@ fn layers(graph: &Graph) -> Vec<usize> {
         }
     }
     depth
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_origins_are_separated_and_disjoint_origins_stay_put() {
+        let mut positions = [
+            [0.0, 0.0],
+            [140.0, 0.0],
+            [250.0, 15.0],
+            [500.0, 10.0],
+            [0.0, 200.0],
+        ];
+        separate_blocks(&mut positions);
+        assert_eq!(
+            positions,
+            [
+                [0.0, 0.0],
+                [140.0, 60.0],
+                [250.0, 120.0],
+                [500.0, 10.0],
+                [0.0, 200.0]
+            ]
+        );
+    }
 }

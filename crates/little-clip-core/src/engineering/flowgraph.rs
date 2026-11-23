@@ -14,7 +14,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-pub use layout::{Layout, Position};
+pub use layout::{BLOCK_SIZE, Layout, Position};
 pub use rates::{BlockRates, NominalRate, RateMeaning, RateOrigin, RateSetting, Rates, StreamRate};
 
 /// Prefix size for identifying a saved flowgraph.

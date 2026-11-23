@@ -1,9 +1,11 @@
 use super::rate_overlay::Overlay;
 use crate::ui_appearance::WorkbenchColors;
 use egui::{Align2, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, pos2, vec2};
-use little_clip_core::engineering::flowgraph::{Connection, Direction, Graph, Layout, State};
+use little_clip_core::engineering::flowgraph::{
+    BLOCK_SIZE, Connection, Direction, Graph, Layout, State,
+};
 
-const NODE: Vec2 = Vec2::new(178.0, 52.0);
+const NODE: Vec2 = Vec2::new(BLOCK_SIZE[0], BLOCK_SIZE[1]);
 const OVERVIEW_EDGES: usize = 700;
 const OVERVIEW_NODES: usize = 425;
 const DETAIL_EDGES: usize = 4400;
