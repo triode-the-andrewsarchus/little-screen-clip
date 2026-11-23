@@ -160,6 +160,16 @@ impl Capture {
         if let Some(filter) = DisplayFilter::compile(input) {
             return Ok(DisplayMatches::Native(filter));
         }
+        self.tshark_frames(input, limit, cancel)
+            .map(DisplayMatches::Frames)
+    }
+
+    fn tshark_frames(
+        &self,
+        input: &str,
+        limit: u64,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<u32>, String> {
         let tshark = little_clip_core::command_available("tshark").ok_or(
             "This expression requires TShark. The built-in filter supports protocol names, IP addresses, TCP/UDP ports, TCP flags, frame lengths, and boolean operators."
         )?;
@@ -191,20 +201,24 @@ impl Capture {
         if output.stdout_truncated {
             return Err("Display filter exceeded the result limit".into());
         }
-        let text = std::str::from_utf8(&output.stdout).map_err(message)?;
-        let mut rows = Vec::new();
-        for number in text.lines() {
-            let number: u32 = number.parse().map_err(message)?;
-            if number == 0
-                || u64::from(number) > limit
-                || rows.last().is_some_and(|&last| last >= number)
-            {
-                return Err("TShark returned inconsistent frame numbers".into());
-            }
-            rows.push(number);
-        }
-        Ok(DisplayMatches::Frames(rows))
+        frame_numbers(&output.stdout, limit)
     }
+}
+
+fn frame_numbers(output: &[u8], limit: u64) -> Result<Vec<u32>, String> {
+    let text = std::str::from_utf8(output).map_err(message)?;
+    let mut rows = Vec::new();
+    for number in text.lines() {
+        let number: u32 = number.parse().map_err(message)?;
+        if number == 0
+            || u64::from(number) > limit
+            || rows.last().is_some_and(|&last| last >= number)
+        {
+            return Err("TShark returned inconsistent frame numbers".into());
+        }
+        rows.push(number);
+    }
+    Ok(rows)
 }
 
 #[derive(Clone, PartialEq, Eq)]

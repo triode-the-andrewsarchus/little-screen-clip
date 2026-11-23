@@ -465,13 +465,7 @@ impl FileManagerApp {
                                     ui.close();
                                 }
                             } else if title == "File" {
-                                if !self.viewers.active()
-                                    && self.browser.can_compare_selection()
-                                    && ui.button("Compare selected files").clicked()
-                                {
-                                    self.browser.compare_selection = true;
-                                    ui.close();
-                                }
+                                self.comparison_menu(ui);
                                 self.constellation_index_menu(ui);
                             } else {
                                 ui.add_enabled(false, egui::Label::new("No actions yet"));
@@ -491,6 +485,34 @@ impl FileManagerApp {
             });
         }
     }
+    fn comparison_menu(&mut self, ui: &mut egui::Ui) {
+        if !self.viewers.active()
+            && self.browser.can_compare_selection()
+            && ui.button("Compare selected files").clicked()
+        {
+            self.browser.compare_selection = true;
+            ui.close();
+        }
+    }
+
+    fn try_open_comparison(&mut self, ctx: &egui::Context) -> bool {
+        if !std::mem::take(&mut self.browser.compare_selection) {
+            return false;
+        }
+        match self.browser.comparison_paths() {
+            Ok(paths) => {
+                self.browser.stop_previews();
+                self.viewers.open_comparison(paths);
+                ctx.request_repaint();
+                true
+            }
+            Err(error) => {
+                self.browser.error = Some(error);
+                false
+            }
+        }
+    }
+
     fn main_content(&mut self, root: &mut egui::Ui) {
         central_panel_mode(root, self.viewers.video_fullscreen(), |ui| {
             let ctx = &ui.ctx().clone();
@@ -507,16 +529,8 @@ impl FileManagerApp {
                 }
             } else {
                 self.browser.ui(ui, &self.palette);
-                if std::mem::take(&mut self.browser.compare_selection) {
-                    match self.browser.comparison_paths() {
-                        Ok(paths) => {
-                            self.browser.stop_previews();
-                            self.viewers.open_comparison(paths);
-                            ui.ctx().request_repaint();
-                            return;
-                        }
-                        Err(error) => self.browser.error = Some(error),
-                    }
+                if self.try_open_comparison(ctx) {
+                    return;
                 }
                 if let Some(request) = self.browser.constellation.studio_request.take() {
                     self.browser.stop_previews();

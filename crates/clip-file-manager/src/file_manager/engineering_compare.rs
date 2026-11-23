@@ -338,7 +338,8 @@ impl Viewer {
                     }
                     previous = Some(index);
                     ui.horizontal_wrapped(|ui| {
-                        ui.strong(&source.title);
+                        ui.strong(&source.title)
+                            .on_hover_text(source.file.path().display().to_string());
                         ui.weak(format!("{} bytes", source.size));
                         ui.label(&source.detail);
                     });
@@ -456,7 +457,10 @@ impl Input {
         file.check_file(&handle)?;
         file.check()?;
         Ok(Self {
-            title: super::display_path(&path),
+            title: path.file_name().map_or_else(
+                || super::display_path(&path),
+                |name| name.to_string_lossy().into_owned(),
+            ),
             detail,
             size,
             file,

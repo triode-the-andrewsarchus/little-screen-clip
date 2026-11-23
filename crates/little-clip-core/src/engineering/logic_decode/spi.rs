@@ -41,43 +41,66 @@ pub fn spi(
         validate_trace(trace, None)?;
         end = end.min(trace.inspected_until);
     }
-    let rising = matches!(config.mode, 0 | 3);
-    let mut clock = Line::new(clock);
-    let mut select = select.map(Line::new);
-    let mut data = data.map(|trace| trace.map(Line::new));
-    let mut armed = select.is_none();
+    let mut bus = Bus {
+        clock: Line::new(clock),
+        select: select.map(Line::new),
+        data: data.map(|trace| trace.map(Line::new)),
+        armed: select.is_none(),
+        config,
+    };
     let mut word = Word::default();
     let mut events = Vec::new();
-    while let Some(time) = next_edge(&clock, select.as_ref(), &data).filter(|&t| t < end) {
-        if let Some(cs) = &mut select {
-            let before = cs.level;
-            cs.advance(time);
-            if before != cs.level {
-                armed = cs.level == Some(config.active_high) && before == Some(!config.active_high);
-                word = Word::default();
-            }
-        }
-        let before = clock.level;
-        clock.advance(time);
-        let bits = data.each_mut().map(|line| {
-            let line = line.as_mut()?;
-            let level = line.level;
-            line.advance(time);
-            (level == line.level).then_some(level).flatten()
-        });
-        if clock.level.is_none() {
+    while let Some(time) =
+        next_edge(&bus.clock, bus.select.as_ref(), &bus.data).filter(|&t| t < end)
+    {
+        let (reset, bits) = bus.advance(time);
+        if reset {
             word = Word::default();
         }
-        if armed
-            && before == Some(!rising)
-            && clock.level == Some(rising)
-            && let Some(kind) = word.sample(config, time, bits)
-        {
+        if let Some(kind) = bits.and_then(|levels| word.sample(config, time, levels)) {
             emit(&mut events, word.start..time, kind)?;
             word = Word::default();
         }
     }
     Ok(events)
+}
+
+struct Bus<'a> {
+    clock: Line<'a>,
+    select: Option<Line<'a>>,
+    data: [Option<Line<'a>>; 2],
+    armed: bool,
+    config: SpiConfig,
+}
+
+impl Bus<'_> {
+    fn advance(&mut self, time: f64) -> (bool, Option<[Option<bool>; 2]>) {
+        let mut select_changed = false;
+        if let Some(cs) = &mut self.select {
+            let before = cs.level;
+            cs.advance(time);
+            select_changed = before != cs.level;
+            if select_changed {
+                self.armed = cs.level == Some(self.config.active_high)
+                    && before == Some(!self.config.active_high);
+            }
+        }
+        let before = self.clock.level;
+        self.clock.advance(time);
+        let bits = self.data.each_mut().map(|line| {
+            let line = line.as_mut()?;
+            let level = line.level;
+            line.advance(time);
+            (level == line.level).then_some(level).flatten()
+        });
+        let rising = matches!(self.config.mode, 0 | 3);
+        let sampled = (self.armed
+            && !select_changed
+            && before == Some(!rising)
+            && self.clock.level == Some(rising))
+        .then_some(bits);
+        (select_changed || self.clock.level.is_none(), sampled)
+    }
 }
 
 fn next_edge(

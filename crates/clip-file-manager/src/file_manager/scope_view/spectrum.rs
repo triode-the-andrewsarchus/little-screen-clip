@@ -66,31 +66,8 @@ impl Viewer {
         let stop = bin(span.end).saturating_add(1);
         let values = &spectrum.peak_amplitude[first..stop];
         let stride = values.len().div_ceil((rect.width() as usize).max(8)).max(1);
-        let amplitude = |value: f32| {
-            if self.spectrum_db {
-                20.0 * value.max(1e-9).log10()
-            } else {
-                value
-            }
-        };
-        let mut bounds = Peak::default();
-        let peaks = values
-            .chunks(stride)
-            .map(|chunk| {
-                let peak = chunk.iter().copied().fold(0.0, f32::max);
-                let value = amplitude(peak);
-                bounds.add(&[value]);
-                value
-            })
-            .collect::<Vec<_>>();
-        if !bounds.valid() {
-            return;
-        }
-        if bounds.min == bounds.max {
-            let padding = (bounds.min.abs() * 0.02).max(if self.spectrum_db { 1.0 } else { 1e-9 });
-            bounds.min -= padding;
-            bounds.max += padding;
-        }
+        let amplitude = |value| amplitude_value(value, self.spectrum_db);
+        let (peaks, bounds) = display_peaks(values, stride, self.spectrum_db);
         let painter = ui.painter_at(area);
         let ink = ui.visuals().weak_text_color();
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
@@ -185,6 +162,32 @@ fn window_name(window: SpectrumWindow) -> &'static str {
         SpectrumWindow::Rectangular => "Rectangular",
         SpectrumWindow::BlackmanHarris => "Blackman–Harris",
     }
+}
+
+fn amplitude_value(value: f32, db: bool) -> f32 {
+    if db {
+        20.0 * value.max(1e-9).log10()
+    } else {
+        value
+    }
+}
+
+fn display_peaks(values: &[f32], stride: usize, db: bool) -> (Vec<f32>, Peak) {
+    let mut bounds = Peak::default();
+    let peaks = values
+        .chunks(stride)
+        .map(|chunk| {
+            let peak = amplitude_value(chunk.iter().copied().fold(0.0, f32::max), db);
+            bounds.add(&[peak]);
+            peak
+        })
+        .collect();
+    if bounds.min == bounds.max {
+        let padding = (bounds.min.abs() * 0.02).max(if db { 1.0 } else { 1e-9 });
+        bounds.min -= padding;
+        bounds.max += padding;
+    }
+    (peaks, bounds)
 }
 
 fn amplitude_ticks(

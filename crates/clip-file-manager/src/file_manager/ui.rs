@@ -1853,6 +1853,25 @@ impl ListActions {
         }
     }
 
+    fn comparison_menu(
+        &mut self,
+        ui: &mut Ui,
+        entry: &super::filesystem::Entry,
+        marked: bool,
+        count: usize,
+    ) {
+        if marked
+            && entry.regular_file
+            && !self.search_results
+            && !self.copy_only
+            && (2..=super::engineering_compare::MAX_SOURCES).contains(&count)
+            && ui.button("Compare selected files").clicked()
+        {
+            self.compare_selection = true;
+            ui.close();
+        }
+    }
+
     fn row_context_menu(
         &mut self,
         response: &egui::Response,
@@ -1891,16 +1910,7 @@ impl ListActions {
             self.video_audio_menu(ui, entry);
             self.raw_iq_menu(ui, entry);
 
-            if marked
-                && entry.regular_file
-                && !self.search_results
-                && !self.copy_only
-                && (2..=super::engineering_compare::MAX_SOURCES).contains(&selection_count)
-                && ui.button("Compare selected files").clicked()
-            {
-                self.compare_selection = true;
-                ui.close();
-            }
+            self.comparison_menu(ui, entry, marked, selection_count);
 
             if entry.is_photo() && ui.button("Find similar photos in canvas").clicked() {
                 self.search_similar = Some(entry.path.clone());
