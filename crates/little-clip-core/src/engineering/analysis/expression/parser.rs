@@ -5,10 +5,16 @@ use super::{
 const MAX_BYTES: usize = 512;
 const MAX_TOKENS: usize = 128;
 const MAX_DEPTH: usize = 24;
+const MAX_DELAY: u16 = 8192;
 
 type Result<T> = std::result::Result<T, ExpressionError>;
 
-pub(super) fn parse(source: &str, channels: &[Binding<'_>], active: usize) -> Result<Expression> {
+pub(super) fn parse(
+    source: &str,
+    channels: &[Binding<'_>],
+    active: usize,
+    history: bool,
+) -> Result<Expression> {
     if source.len() > MAX_BYTES {
         return Err(error(0, "Expression is too long"));
     }
@@ -35,6 +41,7 @@ pub(super) fn parse(source: &str, channels: &[Binding<'_>], active: usize) -> Re
         tokens: &tokens,
         channels,
         active,
+        history,
     };
     let expression = parser.expression(1, 0)?;
     parser.expect(Token::End, "Unexpected text after the expression")?;
@@ -55,6 +62,8 @@ enum Token<'a> {
     Operator(Binary),
     Open,
     Close,
+    IndexOpen,
+    IndexClose,
     Comma,
     Not,
     End,
@@ -129,7 +138,7 @@ impl<'a> Lexer<'a> {
 
     fn symbol(&mut self) -> Option<Token<'a>> {
         use Binary::*;
-        use Token::{Close, Comma, Not, Open, Operator};
+        use Token::{Close, Comma, IndexClose, IndexOpen, Not, Open, Operator};
         for (text, token) in [
             ("&&", Operator(And)),
             ("||", Operator(Or)),
@@ -145,6 +154,8 @@ impl<'a> Lexer<'a> {
             ("/", Operator(Divide)),
             ("(", Open),
             (")", Close),
+            ("[", IndexOpen),
+            ("]", IndexClose),
             (",", Comma),
             ("!", Not),
         ] {
@@ -176,6 +187,7 @@ struct Parser<'a, 'input> {
     tokens: &'a [Lexeme<'input>],
     channels: &'a [Binding<'a>],
     active: usize,
+    history: bool,
 }
 
 impl<'input> Parser<'_, 'input> {
@@ -233,30 +245,69 @@ impl<'input> Parser<'_, 'input> {
             Token::Not => self.unary(true, at, depth),
             Token::Operator(Binary::Subtract) => self.unary(false, at, depth),
             Token::Operator(operator) if operator.precedence() == 3 => {
-                self.binary(operator, self.channel(self.active), at, depth)
+                self.binary(operator, self.channel(self.active, 0), at, depth)
             }
             _ => Err(error(at, "Expected a waveform, number, or expression")),
         }
     }
 
-    fn named_value(&self, name: &str, at: usize) -> Result<Expression> {
-        if name.eq_ignore_ascii_case("x") {
-            return Ok(self.channel(self.active));
-        }
-        self.channels
-            .iter()
-            .position(|candidate| candidate.name.eq_ignore_ascii_case(name))
-            .map(|index| self.channel(index))
-            .ok_or_else(|| error(at, format!("Unknown waveform {name}")))
+    fn named_value(&mut self, name: &str, at: usize) -> Result<Expression> {
+        let index = if name.eq_ignore_ascii_case("x") {
+            self.active
+        } else {
+            self.channels
+                .iter()
+                .position(|candidate| candidate.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| error(at, format!("Unknown waveform {name}")))?
+        };
+        let delay = if self.peek().token == Token::IndexOpen {
+            if !self.history {
+                return Err(error(
+                    at,
+                    "Sample history is available in the Derived lanes editor",
+                ));
+            }
+            self.delay()?
+        } else {
+            0
+        };
+        Ok(self.channel(index, delay))
     }
 
-    fn channel(&self, index: usize) -> Expression {
-        let kind = match self.channels[index].signal_type {
+    fn delay(&mut self) -> Result<u16> {
+        self.take(); // Opening bracket
+        self.expect(Token::Name("n"), "Use n for the current sample")?;
+        let delay = if self.peek().token == Token::Operator(Binary::Subtract) {
+            self.take();
+            let offset = self.take();
+            match offset.token {
+                Token::Number(value, Unit::Implicit)
+                    if value.fract() == 0.0 && (1.0..=f64::from(MAX_DELAY)).contains(&value) =>
+                {
+                    value as u16
+                }
+                _ => {
+                    return Err(error(
+                        offset.at,
+                        format!("Use a delay of 1 to {MAX_DELAY} samples"),
+                    ));
+                }
+            }
+        } else {
+            0
+        };
+        self.expect(Token::IndexClose, "Expected ] after a causal sample index")?;
+        Ok(delay)
+    }
+
+    fn channel(&self, index: usize, delay: u16) -> Expression {
+        let signal_type = self.channels[index].signal_type;
+        let kind = match signal_type {
             SignalType::Analog(unit) => Kind::Numeric(Unit::Explicit(unit)),
             SignalType::Digital => Kind::Predicate,
         };
         Expression {
-            root: Node::Channel(index, self.channels[index].signal_type),
+            root: Node::Channel(index, signal_type, delay),
             kind,
         }
     }

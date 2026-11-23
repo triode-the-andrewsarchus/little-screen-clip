@@ -20,6 +20,7 @@ pub(super) struct Derived {
     rate: Option<f64>,
     program: String,
     program_rate: Option<f64>,
+    history_span: Option<Range<f64>>,
     show_output: bool,
     revision: u64,
     request_after: f64,
@@ -49,7 +50,7 @@ impl Derived {
         }
     }
 
-    pub(super) fn editor(&mut self, ui: &Ui, inputs: &[Input]) {
+    pub(super) fn editor(&mut self, ui: &Ui, inputs: &[Input], span: &Range<f64>) {
         if !self.editor {
             return;
         }
@@ -68,7 +69,7 @@ impl Derived {
                         .desired_rows(5)
                         .char_limit(12_000)
                         .hint_text("name = expression"),
-                );
+                ).on_hover_text("Use [n-1] for the previous sample. Declare the unit for feedback, for example smooth: V = 0.9 * smooth[n-1] + 0.1 * s1_c1");
                 ui.collapsing("Recorded inputs", |ui| {
                     egui::ScrollArea::vertical()
                         .max_height(180.0)
@@ -106,9 +107,15 @@ impl Derived {
                         ui.weak("Highest input rate");
                     }
                     if ui.button("Apply").clicked() {
-                        self.apply(inputs);
+                        self.apply(inputs, span);
                     }
                 });
+                if let Some(history) = &self.history_span {
+                    ui.weak(format!(
+                        "History starts at {} · Declared lanes start at zero",
+                        display_value(history.start, "s")
+                    ));
+                }
                 if let Some(error) = self.draft_error.as_ref().or_else(|| {
                     self.accepted
                         .as_ref()
@@ -120,15 +127,20 @@ impl Derived {
         self.editor = open;
     }
 
-    fn apply(&mut self, inputs: &[Input]) {
+    fn apply(&mut self, inputs: &[Input], span: &Range<f64>) {
         let program = self.draft.trim();
         let bindings = inputs.iter().map(Input::binding).collect::<Vec<_>>();
-        if !program.is_empty()
-            && let Err(error) = SignalGraph::compile(program, &bindings, 0)
-        {
-            self.draft_error = Some(error.to_string());
-            return;
-        }
+        self.history_span = if program.is_empty() {
+            None
+        } else {
+            match SignalGraph::compile(program, &bindings, 0) {
+                Ok(graph) => graph.requires_history().then(|| span.clone()),
+                Err(error) => {
+                    self.draft_error = Some(error.to_string());
+                    return;
+                }
+            }
+        };
         self.draft_error = None;
         self.program = program.to_owned();
         self.program_rate = self.rate;
@@ -145,6 +157,7 @@ impl Derived {
         if !self.active() || self.pending.is_some() {
             return;
         }
+        let span = self.history_span.as_ref().unwrap_or(span);
         let key = Key {
             revision: self.revision,
             inputs: inputs.iter().map(Input::signature).collect(),

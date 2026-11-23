@@ -179,7 +179,7 @@ impl Viewer {
         } else {
             Vec::new()
         };
-        self.derived.editor(ui, &inputs);
+        self.derived.editor(ui, &inputs, &self.span);
         if let [source] = &mut self.sources[..]
             && source.offset == 0.0
             && !self.derived.active()

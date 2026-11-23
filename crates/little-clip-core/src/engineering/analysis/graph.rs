@@ -1,7 +1,10 @@
 //! Compile and evaluate named equations over mixed-signal observations.
 
-use super::{Binding, Expression, SignalType, Value};
-use std::{collections::BTreeSet, fmt};
+use super::{Binding, Dimension, Expression, SignalType, Value};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    fmt,
+};
 
 const MAX_LANES: usize = 32;
 
@@ -29,6 +32,7 @@ pub struct DerivedLane {
     /// Inferred result type.
     pub signal_type: SignalType,
     expression: Expression,
+    initial: Option<Value>,
 }
 
 /// A graph of equations in dependency order.
@@ -39,10 +43,17 @@ pub struct SignalGraph {
     inputs: usize,
     used_inputs: Vec<usize>,
     lanes: Vec<DerivedLane>,
+    history_slots: Vec<(usize, u16)>,
 }
 
 impl SignalGraph {
     /// Compiles one `name = expression` assignment per nonblank line.
+    ///
+    /// Use `name[n-1]` to reference the previous sample. A lane that uses its
+    /// own history declares its unit, for example `filtered: V = 0.9 *
+    /// filtered[n-1] + 0.1 * input`. Declared lanes start at zero or low before
+    /// the calculation interval. Recorded and uninitialized inputs have gaps
+    /// before that interval.
     ///
     /// # Errors
     /// Rejects duplicate or reserved names, expressions referring to
@@ -59,6 +70,7 @@ impl SignalGraph {
             .collect();
         let mut used_inputs = BTreeSet::new();
         let mut lanes = Vec::new();
+        let mut depths = vec![0; inputs.len()];
         for (index, text) in document.lines().enumerate() {
             let line = index + 1;
             let text = text.trim();
@@ -71,35 +83,63 @@ impl SignalGraph {
                     format!("Choose at most {MAX_LANES} equations"),
                 ));
             }
-            let (name, expression) = text
+            let (label, source) = text
                 .split_once('=')
                 .ok_or_else(|| problem(line, "Expected name = expression"))?;
-            let name = name.trim();
+            let (name, declared) = declaration(label, line)?;
             if !valid_name(name) || !names.insert(name.to_lowercase()) {
                 return Err(problem(
                     line,
                     format!("Invalid or duplicate lane name {name}"),
                 ));
             }
-            let expression = Expression::parse_bound(expression, &bindings, active)
+            let output = bindings.len();
+            depths.push(0);
+            if let Some(signal_type) = declared {
+                bindings.push(Binding { name, signal_type });
+            }
+            let expression = Expression::parse_history(source, &bindings, active)
                 .map_err(|error| problem(line, error.to_string()))?;
-            expression.visit_inputs(|index| {
+            let signal_type = expression.signal_type();
+            if declared.is_some_and(|declared| declared != signal_type) {
+                return Err(problem(
+                    line,
+                    "The equation does not produce the declared unit or logic type",
+                ));
+            }
+            let mut instant_feedback = false;
+            expression.visit_inputs(|index, delay| {
+                depths[index] = depths[index].max(delay);
+                instant_feedback |= index == output && delay == 0;
                 if index < inputs.len() {
                     used_inputs.insert(index);
                 }
             });
-            let signal_type = expression.signal_type();
+            if instant_feedback {
+                return Err(problem(
+                    line,
+                    "Use a past sample such as [n-1] for feedback",
+                ));
+            }
             lanes.push(DerivedLane {
                 name: name.to_owned(),
                 signal_type,
                 expression,
+                initial: declared.map(initial_value),
             });
-            bindings.push(Binding { name, signal_type });
+            if declared.is_none() {
+                bindings.push(Binding { name, signal_type });
+            }
         }
         Ok(Self {
             inputs: inputs.len(),
             used_inputs: used_inputs.into_iter().collect(),
             lanes,
+            history_slots: depths
+                .into_iter()
+                .enumerate()
+                .filter(|(_, depth)| *depth > 0)
+                .collect(),
         })
     }
 
@@ -113,11 +153,19 @@ impl SignalGraph {
         &self.used_inputs
     }
 
+    /// Returns whether evaluating a lane depends on past samples.
+    pub fn requires_history(&self) -> bool {
+        !self.history_slots.is_empty()
+    }
+
     /// Creates reusable storage for evaluating one row at a time.
     pub fn evaluator(&self) -> Evaluator<'_> {
+        let count = self.inputs + self.lanes.len();
+        let history = (0..count).map(|_| VecDeque::new()).collect();
         Evaluator {
             graph: self,
-            values: vec![None; self.inputs + self.lanes.len()],
+            values: vec![None; count],
+            history,
         }
     }
 }
@@ -126,21 +174,67 @@ impl SignalGraph {
 pub struct Evaluator<'a> {
     graph: &'a SignalGraph,
     values: Vec<Option<Value>>,
+    history: Vec<VecDeque<Option<Value>>>,
 }
 
 impl Evaluator<'_> {
     /// Evaluates all derived lanes from one aligned instant.
     ///
+    /// Supply rows in chronological order for equations with sample history.
     /// The returned slice is ordered like [`SignalGraph::lanes`].
     pub fn evaluate(&mut self, input: impl Fn(usize) -> Option<Value>) -> &[Option<Value>] {
         for &index in &self.graph.used_inputs {
             self.values[index] = input(index);
         }
         for (index, lane) in self.graph.lanes.iter().enumerate() {
-            let value = lane.expression.evaluate_bound(|index| self.values[index]);
+            let value = lane.expression.evaluate_history(|index, delay| {
+                if delay == 0 {
+                    return self.values[index];
+                }
+                self.history[index]
+                    .get(usize::from(delay) - 1)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        index
+                            .checked_sub(self.graph.inputs)
+                            .and_then(|lane| self.graph.lanes[lane].initial)
+                    })
+            });
             self.values[self.graph.inputs + index] = value;
         }
+        for &(index, depth) in &self.graph.history_slots {
+            let history = &mut self.history[index];
+            if history.len() == usize::from(depth) {
+                history.pop_back();
+            }
+            history.push_front(self.values[index]);
+        }
         &self.values[self.graph.inputs..]
+    }
+}
+
+fn declaration(label: &str, line: usize) -> Result<(&str, Option<SignalType>), GraphError> {
+    let (name, unit) = match label.split_once(':') {
+        Some((name, unit)) => {
+            let unit = unit.trim();
+            let signal_type = if unit.eq_ignore_ascii_case("logic") {
+                SignalType::Digital
+            } else {
+                Dimension::from_unit(unit)
+                    .map(SignalType::Analog)
+                    .ok_or_else(|| problem(line, format!("Unknown output unit {unit}")))?
+            };
+            (name.trim(), Some(signal_type))
+        }
+        None => (label.trim(), None),
+    };
+    Ok((name.strip_suffix("[n]").unwrap_or(name).trim(), unit))
+}
+
+fn initial_value(signal_type: SignalType) -> Value {
+    match signal_type {
+        SignalType::Analog(_) => Value::Numeric(0.0),
+        SignalType::Digital => Value::Predicate(false),
     }
 }
 
@@ -163,7 +257,6 @@ fn problem(line: usize, message: impl Into<String>) -> GraphError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engineering::analysis::Dimension;
 
     #[test]
     fn can_compute_new_lanes_from_prior_derived_values_and_digital_inputs() {
@@ -206,6 +299,53 @@ mod tests {
             evaluator.evaluate(|index| input[index].filter(|_| index != 1)),
             &[None, None]
         );
+    }
+
+    #[test]
+    fn causal_feedback_uses_an_initialized_previous_sample() {
+        let inputs = [Binding {
+            name: "input",
+            signal_type: SignalType::Analog(Dimension::VOLTAGE),
+        }];
+        let graph = SignalGraph::compile(
+            "smooth[n]: V = 0.5 * smooth[n-1] + 0.5 * input[n]\nprevious = smooth[n-2]",
+            &inputs,
+            0,
+        )
+        .unwrap();
+        assert!(graph.requires_history());
+        let mut evaluator = graph.evaluator();
+        for (current, previous) in [(1.0, 0.0), (1.5, 0.0), (1.75, 1.0)] {
+            assert_eq!(
+                evaluator.evaluate(|_| Some(Value::Numeric(2.0))),
+                &[
+                    Some(Value::Numeric(current)),
+                    Some(Value::Numeric(previous))
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn delays_preserve_missing_input_history_and_forbid_future_reads() {
+        let inputs = [Binding {
+            name: "input",
+            signal_type: SignalType::Analog(Dimension::VOLTAGE),
+        }];
+        let graph = SignalGraph::compile("delta = input - input[n-1]", &inputs, 0).unwrap();
+        let mut evaluator = graph.evaluator();
+        assert_eq!(evaluator.evaluate(|_| Some(Value::Numeric(4.0))), &[None]);
+        assert_eq!(
+            evaluator.evaluate(|_| Some(Value::Numeric(6.0))),
+            &[Some(Value::Numeric(2.0))]
+        );
+        for invalid in [
+            "value = input[n+1]",
+            "value: V = value[n]",
+            "value: A = input",
+        ] {
+            assert!(SignalGraph::compile(invalid, &inputs, 0).is_err());
+        }
     }
 
     #[test]

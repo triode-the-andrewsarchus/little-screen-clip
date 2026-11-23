@@ -103,7 +103,15 @@ impl Expression {
         bindings: &[Binding<'_>],
         active: usize,
     ) -> Result<Self, ExpressionError> {
-        parser::parse(input, bindings, active)
+        parser::parse(input, bindings, active, false)
+    }
+
+    pub(super) fn parse_history(
+        input: &str,
+        bindings: &[Binding<'_>],
+        active: usize,
+    ) -> Result<Self, ExpressionError> {
+        parser::parse(input, bindings, active, true)
     }
 
     /// Returns the type of the generated signal.
@@ -138,7 +146,7 @@ impl Expression {
         self.evaluate_bound(|index| numeric(channel_sample(index)?))
     }
 
-    pub(super) fn visit_inputs(&self, mut visit: impl FnMut(usize)) {
+    pub(super) fn visit_inputs(&self, mut visit: impl FnMut(usize, u16)) {
         self.root.visit_inputs(&mut visit);
     }
 
@@ -146,6 +154,13 @@ impl Expression {
     ///
     /// Missing inputs and non-finite results remain gaps.
     pub fn evaluate_bound(&self, sample: impl Fn(usize) -> Option<Value>) -> Option<Value> {
+        self.evaluate_history(|index, delay| if delay == 0 { sample(index) } else { None })
+    }
+
+    pub(super) fn evaluate_history(
+        &self,
+        sample: impl Fn(usize, u16) -> Option<Value>,
+    ) -> Option<Value> {
         self.root.evaluate(&sample)
     }
 }
@@ -191,7 +206,7 @@ enum Kind {
 #[derive(Clone, Debug)]
 enum Node {
     Constant(f64),
-    Channel(usize, SignalType),
+    Channel(usize, SignalType, u16),
     Negate(Box<Node>),
     Not(Box<Node>),
     Binary(Binary, Box<Node>, Box<Node>),
@@ -328,10 +343,10 @@ impl Function {
 }
 
 impl Node {
-    fn visit_inputs(&self, visit: &mut impl FnMut(usize)) {
+    fn visit_inputs(&self, visit: &mut impl FnMut(usize, u16)) {
         match self {
             Self::Constant(_) => {}
-            Self::Channel(index, _) => visit(*index),
+            Self::Channel(index, _, delay) => visit(*index, *delay),
             Self::Negate(node) | Self::Not(node) => node.visit_inputs(visit),
             Self::Binary(_, left, right) => {
                 left.visit_inputs(visit);
@@ -346,14 +361,16 @@ impl Node {
         }
     }
 
-    fn evaluate(&self, sample: &impl Fn(usize) -> Option<Value>) -> Option<Value> {
+    fn evaluate(&self, sample: &impl Fn(usize, u16) -> Option<Value>) -> Option<Value> {
         match self {
             Self::Constant(value) => Some(Value::Numeric(*value)),
-            Self::Channel(index, signal_type) => match (sample(*index)?, signal_type) {
-                (Value::Numeric(value), SignalType::Analog(_)) => numeric(value),
-                (value @ Value::Predicate(_), SignalType::Digital) => Some(value),
-                _ => None,
-            },
+            Self::Channel(index, signal_type, delay) => {
+                match (sample(*index, *delay)?, signal_type) {
+                    (Value::Numeric(value), SignalType::Analog(_)) => numeric(value),
+                    (value @ Value::Predicate(_), SignalType::Digital) => Some(value),
+                    _ => None,
+                }
+            }
             Self::Negate(node) => numeric(-node.evaluate(sample)?.numeric()?),
             Self::Not(node) => Some(Value::Predicate(!node.evaluate(sample)?.predicate()?)),
             Self::Binary(operator, left, right) => {
