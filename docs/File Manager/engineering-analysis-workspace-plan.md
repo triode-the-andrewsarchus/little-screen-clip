@@ -158,6 +158,12 @@ Selecting a decoded event shows its equation inputs above the transaction table.
 
 The desktop walkthrough used two captures with a 4 µs clock correction, reordered channels, a direct data threshold, and a clock threshold retimed through a second equation. Address 0x42 and data 0xA5 both decoded with acknowledgements. Selecting the address at 37 µs showed the input on Clock probe CH1 from 32 to 113 µs, alongside the separate Data probe CH2 input. The unused channels kept their original display. Back restored the address, wiring, full 242 µs viewport, and the independent shared selection from 187 to 212 µs. The same round trip passed at 800 × 620. The recipe closed without a discard prompt in both sizes.
 
+## 16. Select the same transaction in the plot and table
+
+Scope, standalone logic, and equation decoders share the annotation strip interaction. Click a drawn event to select its row without moving the time view. Double-click it to inspect the pulses, then use Back to decoded window to recover the original time range and the selected row. The strip uses the geometry it actually draws. Adjacent events remain individually selectable where they fit, and a table selection stays visible even if that event was covered at the current zoom.
+
+The desktop checks selected I²C address 0x42 from the plot in a Rigol capture, a VCD capture, and a recipe with two clock-aligned recordings. Double-clicking expanded the address pulses and Back restored the full time view with the same event selected. The VCD also passed at 800 × 620. The scope checked a gap between annotations, and the recipe retained its independent 187–212 µs shared range and its links to the recorded input channels. The geometry test covers coincident boundaries, clipped intervals, and a selected event fully covered at the original zoom.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.

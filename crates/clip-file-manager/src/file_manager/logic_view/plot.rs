@@ -1,7 +1,9 @@
+use super::protocols::{EventAction, event_label};
 use crate::file_manager::scope_view::plot::{highlight, lane, x_at};
-use egui::{Color32, Mesh, Painter, Rect, Stroke, pos2};
+use egui::{Color32, Mesh, Painter, Rect, Response, Stroke, Ui, pos2};
 use little_clip_core::engineering::{
     logic::{Envelope, Level, Trace},
+    logic_decode::Event,
     logic_preview::Overview,
 };
 use std::ops::Range;
@@ -148,40 +150,182 @@ pub(in crate::file_manager) fn wire_label(
 }
 
 pub(in crate::file_manager) fn annotations(
+    ui: &Ui,
     painter: &Painter,
-    rect: Rect,
+    response: Response,
     span: &Range<f64>,
-    events: &[little_clip_core::engineering::logic_decode::Event],
-    color: Color32,
-    ink: Color32,
+    events: &[Event],
+    selected: Option<&Event>,
+) -> Option<EventAction> {
+    let band = response.rect;
+    if !ui.is_rect_visible(band) {
+        return None;
+    }
+    let painter = painter.with_clip_rect(band);
+    let pointer = response
+        .hover_pos()
+        .or_else(|| response.interact_pointer_pos());
+    let mut hit = None;
+    let mut keyboard_target = None;
+    for (event, segment, picked) in annotation_segments(band, span, events, selected) {
+        let hovered = pointer.is_some_and(|point| segment.contains(point));
+        if hovered {
+            hit = Some(event);
+        }
+        if keyboard_target.is_none() || picked {
+            keyboard_target = Some(event);
+        }
+        paint_annotation(ui, &painter, segment, event, picked, hovered);
+    }
+    let double_clicked = response.double_clicked();
+    let clicked = response.clicked();
+    if let Some(event) = hit {
+        response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text(format!(
+                "{} · Double-click to show pulses",
+                event_label(event.kind)
+            ));
+    } else if pointer.is_some() {
+        return None;
+    }
+    let event = hit.or(keyboard_target)?;
+    if double_clicked {
+        Some(EventAction::Inspect(event.clone()))
+    } else if clicked {
+        Some(EventAction::Select(event.clone()))
+    } else {
+        None
+    }
+}
+
+fn annotation_segments<'a>(
+    band: Rect,
+    span: &'a Range<f64>,
+    events: &'a [Event],
+    selected: Option<&'a Event>,
+) -> impl Iterator<Item = (&'a Event, Rect, bool)> {
+    let mut represented_until = band.left();
+    let visible = events.iter().filter_map(move |event| {
+        let mut segment = annotation_rect(band, span, event)?;
+        segment.min.x = segment.left().max(represented_until);
+        if segment.width() < 1.0 {
+            return None;
+        }
+        represented_until = segment.right();
+        // Keep the packing stable when a represented event is selected.
+        (!selected.is_some_and(|selected| std::ptr::eq(selected, event)))
+            .then_some((event, segment, false))
+    });
+    // The selected event stays visible even when the unselected overview
+    // skipped its annotation at this zoom. Hit tests follow this paint order.
+    visible.chain(selected.into_iter().filter_map(move |event| {
+        annotation_rect(band, span, event).map(|segment| (event, segment, true))
+    }))
+}
+
+fn annotation_rect(band: Rect, span: &Range<f64>, event: &Event) -> Option<Rect> {
+    if event.time.start >= span.end
+        || (event.time.end <= span.start && event.time.start < span.start)
+    {
+        return None;
+    }
+    let left = x_at(band, span, event.time.start).max(band.left());
+    let right = x_at(band, span, event.time.end)
+        .max(left + 2.0)
+        .min(band.right());
+    (right > left).then(|| {
+        Rect::from_min_max(
+            pos2(left, band.top() + 3.0),
+            pos2(right, band.bottom() - 2.0),
+        )
+    })
+}
+
+fn paint_annotation(
+    ui: &Ui,
+    painter: &Painter,
+    segment: Rect,
+    event: &Event,
+    picked: bool,
+    hovered: bool,
 ) {
-    let painter = painter.with_clip_rect(rect);
-    let mut represented_until = rect.left() - 2.0;
-    for event in events.iter().filter(|event| {
-        event.time.start < span.end
-            && (event.time.end > span.start || event.time.start == span.start)
-    }) {
-        let left = x_at(rect, span, event.time.start).max(rect.left());
-        let right = x_at(rect, span, event.time.end)
-            .max(left + 2.0)
-            .min(rect.right());
-        if left < represented_until || right <= left {
-            continue;
-        }
-        let segment = Rect::from_min_max(
-            pos2(left, rect.top() + 3.0),
-            pos2(right, rect.bottom() - 2.0),
+    let visuals = ui.visuals();
+    let fill = visuals.selection.bg_fill;
+    if picked || hovered {
+        let border = if picked {
+            visuals.selection.stroke.color
+        } else {
+            fill
+        };
+        painter.rect(
+            segment,
+            2.0,
+            fill.gamma_multiply(0.48),
+            Stroke::new(1.0, border),
+            egui::StrokeKind::Inside,
         );
-        painter.rect_filled(segment, 2.0, color.gamma_multiply(0.26));
-        if segment.width() > 65.0 {
-            painter.with_clip_rect(segment).text(
-                segment.left_center() + egui::vec2(3.0, 0.0),
-                egui::Align2::LEFT_CENTER,
-                super::protocols::event_label(event.kind),
-                egui::FontId::monospace(10.0),
-                ink,
-            );
+    } else {
+        painter.rect_filled(segment, 2.0, fill.gamma_multiply(0.26));
+    }
+    if segment.width() > 65.0 {
+        painter.with_clip_rect(segment).text(
+            segment.left_center() + egui::vec2(3.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            event_label(event.kind),
+            egui::FontId::monospace(10.0),
+            visuals.text_color(),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::engineering::logic_decode::Kind;
+
+    fn event(time: Range<f64>, byte: u8) -> Event {
+        Event {
+            time,
+            kind: Kind::UartByte { byte },
         }
-        represented_until = right;
+    }
+
+    #[test]
+    fn zoomed_out_annotations_keep_the_drawn_event_and_restore_a_hidden_selection_on_top() {
+        let band = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 20.0));
+        let span = 1.0..2.0;
+        let events = [
+            event(0.0..0.5, 0),
+            event(0.7..1.1, 1),
+            event(1.5..1.5, 2),
+            event(1.5..1.8, 3),
+            event(1.6..1.7, 4),
+            event(1.9..2.1, 5),
+        ];
+        let represented = annotation_segments(band, &span, &events, None).collect::<Vec<_>>();
+        assert_eq!(
+            represented
+                .iter()
+                .map(|(event, _, _)| event.kind)
+                .collect::<Vec<_>>(),
+            [
+                events[1].kind,
+                events[2].kind,
+                events[3].kind,
+                events[5].kind
+            ]
+        );
+        assert_eq!(represented[0].1.left(), band.left());
+        assert_eq!(represented[1].1.width(), 2.0);
+        assert_eq!(represented[2].1.left(), represented[1].1.right());
+        assert_eq!(represented[3].1.right(), band.right());
+
+        let selected = annotation_segments(band, &span, &events, Some(&events[4]))
+            .filter(|(_, rect, _)| rect.contains(pos2(65.0, 10.0)))
+            .last()
+            .unwrap();
+        assert_eq!(selected.0.kind, events[4].kind);
+        assert!(selected.2);
     }
 }

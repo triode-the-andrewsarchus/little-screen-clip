@@ -573,6 +573,16 @@ impl Panel {
             .cursor_event(self.decode_window(span), cursor)
     }
 
+    pub(super) fn clear_event_pick(&mut self) {
+        if let Some(decoder) = self.current_mut() {
+            decoder.picked = None;
+        }
+    }
+
+    pub(in crate::file_manager) fn selected_index(&self) -> Option<usize> {
+        self.selected
+    }
+
     pub(in crate::file_manager) fn picked_event(&self, span: &Range<f64>) -> Option<&Event> {
         self.events(span).get(self.current()?.picked?)
     }
@@ -652,7 +662,7 @@ struct Decoder {
     request: Option<Key>,
     task: Option<Task<Result<Decoded, String>>>,
     result: Option<Result<Decoded, String>>,
-    follow: Option<f64>,
+    follow: Option<usize>,
     picked: Option<usize>,
     next_request: f64,
 }
@@ -920,12 +930,10 @@ impl Decoder {
                 } else {
                     None
                 };
-                let cursor = picked.map(|index| events[index].time.start).or(cursor);
                 let selected = picked.or(selected);
                 let clicked = event_list(
                     ui,
                     ("logic-protocol-rows", "Decoded event"),
-                    cursor,
                     &mut followed,
                     selected,
                     events.len(),

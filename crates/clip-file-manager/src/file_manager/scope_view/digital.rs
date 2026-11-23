@@ -123,6 +123,13 @@ impl Digital {
         let input = self.input(recording.clone());
         self.panel
             .update_all_materialized(ui.ctx(), span, input.revision(), input.clone());
+        self.update_preview(ui, span, input);
+        self.lanes(ui, recording, span, domain, clock);
+        if let Some((index, action)) = self.annotations(ui, span) {
+            self.panel.select_decoder(Some(index));
+            self.cursor = Some(self.panel.follow_event(action, span, domain, 0.0));
+            ui.ctx().request_repaint();
+        }
         if let Some(event) = self.event(span) {
             let time = clock.workspace_range(&event.time);
             let duration = (event.time.end - event.time.start) * clock.scale();
@@ -135,13 +142,6 @@ impl Digital {
                 ));
                 ui.weak(format!("Duration {}", display_value(duration, "s")));
             });
-        }
-        self.update_preview(ui, span, input);
-        self.lanes(ui, recording, span, domain, clock);
-        if let Some((index, action)) = self.annotations(ui, span) {
-            self.panel.select_decoder(Some(index));
-            self.cursor = Some(self.panel.follow_event(action, span, domain, 0.0));
-            ui.ctx().request_repaint();
         }
     }
 
@@ -316,35 +316,19 @@ impl Digital {
 
     fn annotations(&self, ui: &mut Ui, span: &Range<f64>) -> Option<(usize, EventAction)> {
         let mut picked = None;
+        let selected = self.panel.picked_event(span);
         for (index, name, events) in self.panel.annotation_rows(span) {
-            let (area, rect, response) = row(ui, ("scope-decode", index));
+            let (area, _, response) = row(ui, ("scope-decode", index));
             let painter = ui.painter_at(area);
             label(&painter, area, name, ui.visuals().weak_text_color());
-            logic_plot::annotations(
-                &painter,
-                rect,
-                span,
-                events,
-                ui.visuals().selection.bg_fill,
-                ui.visuals().text_color(),
-            );
-            let Some(point) = response.hover_pos() else {
-                continue;
-            };
-            let within = (span.end - span.start) * 3.0 / f64::from(rect.width().max(1.0));
-            let time = plot::at(rect, span, point.x);
-            let Some(event) = events
-                .iter()
-                .find(|event| event.time.start - within <= time && time <= event.time.end + within)
-            else {
-                continue;
-            };
-            if response.double_clicked() {
-                picked = Some((index, EventAction::Inspect(event.clone())));
-            } else if response.clicked() {
-                picked = Some((index, EventAction::Select(event.clone())));
+            let selected = (self.panel.selected_index() == Some(index))
+                .then_some(selected)
+                .flatten();
+            if let Some(action) =
+                logic_plot::annotations(ui, &painter, response, span, events, selected)
+            {
+                picked = Some((index, action));
             }
-            response.on_hover_text(event_label(event.kind));
         }
         picked
     }

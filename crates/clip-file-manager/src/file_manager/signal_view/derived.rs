@@ -502,13 +502,13 @@ impl Derived {
                 pos2(rect.left(), band.top()),
                 pos2(rect.right(), band.bottom()),
             );
-            self.decoders.paint(
-                ui,
-                ui.painter(),
-                band,
-                plots.iter().map(|plot| plot.rect),
-                span,
-            );
+            if let Some(action) =
+                self.decoders
+                    .paint(ui, band, plots.iter().map(|plot| plot.rect), span)
+            {
+                self.decoders
+                    .follow_event(ui, action, span, domain, frame.step);
+            }
             self.decoders.table(ui, span, domain, pointed, frame.step);
         }
         pointed.or(self.decoders.cursor())

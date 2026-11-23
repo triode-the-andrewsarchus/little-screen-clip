@@ -50,7 +50,7 @@ pub(super) struct Viewer {
     read_job: Option<Task<Result<Frame, String>>>,
     refinement: Option<Task<Result<(bool, Option<Overview>), String>>>,
     refined: bool,
-    followed_cursor: Option<f64>,
+    followed_row: Option<usize>,
     request_after: f64,
     show_transitions: bool,
     evidence_lane: Option<usize>,
@@ -146,7 +146,7 @@ impl Viewer {
             read_job: None,
             refinement: None,
             refined: false,
-            followed_cursor: None,
+            followed_row: None,
             request_after: 0.0,
             show_transitions: false,
             evidence_lane: None,
@@ -283,14 +283,7 @@ impl Viewer {
                 self.selected.as_ref(),
                 Link::clock(link),
             ) {
-                let domain = link.map_or(&self.overview.span, |link| &link.domain);
-                let step = self.interval();
-                self.cursor =
-                    Some(
-                        self.protocols
-                            .follow_event(action, &mut self.span, domain, step),
-                    );
-                ui.ctx().request_repaint();
+                self.follow_event(ui, link, action);
             }
         } else {
             self.protocols.close();
@@ -426,12 +419,23 @@ impl Viewer {
         self.active
     }
 
+    fn follow_event(&mut self, ui: &Ui, link: Option<&Link>, action: protocols::EventAction) {
+        let domain = link.map_or(&self.overview.span, |link| &link.domain);
+        let step = self.interval();
+        self.cursor = Some(
+            self.protocols
+                .follow_event(action, &mut self.span, domain, step),
+        );
+        ui.ctx().request_repaint();
+    }
+
     fn waveforms(&mut self, ui: &mut Ui, height: f32, link: Option<&Link>) -> Option<f64> {
-        let (outer, response) =
-            ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
+        let (outer, frame) =
+            ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
         let annotations = self.show_transitions && !self.protocols.edges();
         let top = if annotations { 25.0 } else { 3.0 };
         let rect = Rect::from_min_max(outer.min + vec2(78.0, top), outer.max - vec2(9.0, 18.0));
+        let response = ui.interact(rect, frame.id.with("waveform"), Sense::click_and_drag());
         if let Some(span) = timeline::navigate(ui.ctx(), rect, &response, &self.span, true) {
             let domain = link.map_or(&self.overview.span, |link| &link.domain);
             self.span = timeline::fit(domain, span, self.interval());
@@ -441,21 +445,16 @@ impl Viewer {
         let ink = ui.visuals().weak_text_color();
         if annotations {
             let band = Rect::from_min_max(pos2(rect.left(), outer.top()), rect.right_top());
-            let events = self.protocols.events(&self.span);
-            plot::annotations(
+            let response = ui.interact(band, frame.id.with("annotations"), Sense::click());
+            if let Some(action) = plot::annotations(
+                ui,
                 &painter,
-                band,
+                response,
                 &self.span,
-                events,
-                ui.visuals().selection.bg_fill,
-                ink,
-            );
-            if response.clicked_by(PointerButton::Primary)
-                && let Some(point) = response
-                    .interact_pointer_pos()
-                    .filter(|point| band.contains(*point))
-            {
-                self.cursor = Some(timing::at(band, &self.span, point.x));
+                self.protocols.events(&self.span),
+                self.protocols.picked_event(&self.span),
+            ) {
+                self.follow_event(ui, link, action);
             }
         }
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
@@ -640,8 +639,7 @@ impl Viewer {
         let destination = event_list(
             ui,
             ("logic-edge-rows", "Level"),
-            self.cursor,
-            &mut self.followed_cursor,
+            &mut self.followed_row,
             selected,
             trace.edges.len(),
             |index| {
@@ -667,6 +665,7 @@ impl Viewer {
         if response.clicked_by(PointerButton::Primary) && rect.contains(pointer) {
             self.selected = None;
             self.cursor = Some(time);
+            self.protocols.clear_event_pick();
         }
         if response.dragged_by(PointerButton::Primary)
             && let Some(origin) = ui
@@ -676,6 +675,7 @@ impl Viewer {
             let start = timing::at(rect, &self.span, origin.x);
             self.selected = (time != start).then(|| time.min(start)..time.max(start));
             self.cursor = Some(time);
+            self.protocols.clear_event_pick();
         }
     }
 
@@ -703,6 +703,7 @@ impl Viewer {
             {
                 Ok(frame) => {
                     self.frame = Some(frame);
+                    self.followed_row = None;
                     self.error = None;
                 }
                 Err(error) => self.error = Some(error),
@@ -776,8 +777,7 @@ impl Viewer {
 fn event_list(
     ui: &mut Ui,
     (id, heading): (&'static str, &'static str),
-    cursor: Option<f64>,
-    followed_cursor: &mut Option<f64>,
+    followed_row: &mut Option<usize>,
     selected: Option<usize>,
     count: usize,
     mut values: impl FnMut(usize) -> (String, String),
@@ -792,11 +792,11 @@ fn event_list(
         .auto_shrink([false, false])
         .column(Column::exact(time_width).clip(true))
         .column(Column::remainder().clip(true));
-    if *followed_cursor != cursor {
+    if *followed_row != selected {
         if let Some(row) = selected {
             table = table.scroll_to_row(row, None);
         }
-        *followed_cursor = cursor;
+        *followed_row = selected;
     }
     let mut clicked = None;
     table

@@ -2,9 +2,9 @@ use super::super::evidence::{TraceTarget, Window};
 use super::compute::{Frame, Lane};
 use crate::file_manager::logic_view::{
     plot,
-    protocols::{Panel, TraceInput, event_label},
+    protocols::{EventAction, Panel, TraceInput, event_label},
 };
-use egui::{Painter, Rect, Ui};
+use egui::{Rect, Sense, Ui};
 use little_clip_core::engineering::{
     analysis::InputHistory, logic::Trace, waveforms::display_value,
 };
@@ -97,11 +97,10 @@ impl Decoders {
     pub(super) fn paint(
         &self,
         ui: &Ui,
-        painter: &Painter,
         band: Rect,
         plots: impl IntoIterator<Item = Rect>,
         span: &Range<f64>,
-    ) {
+    ) -> Option<EventAction> {
         let decode_span = self.decode_span(span);
         if let Some(event) = self.panel.cursor_event(decode_span, self.cursor)
             && let Some(frame) = &self.frame
@@ -111,23 +110,22 @@ impl Decoders {
                 if !wired.contains(&index) {
                     continue;
                 }
-                crate::file_manager::scope_view::plot::highlight(
-                    painter,
-                    rect,
-                    span,
-                    event.time.clone(),
-                    ui.visuals().selection.bg_fill.gamma_multiply(0.24),
-                );
+                plot::highlight_event(ui.painter(), rect, span, event.time.clone());
             }
         }
-        plot::annotations(
-            painter,
+        let response = ui.interact(
             band,
+            ui.make_persistent_id("equation-annotations"),
+            Sense::click(),
+        );
+        plot::annotations(
+            ui,
+            ui.painter(),
+            response,
             span,
             self.panel.events(decode_span),
-            ui.visuals().selection.bg_fill,
-            ui.visuals().text_color(),
-        );
+            self.panel.picked_event(decode_span),
+        )
     }
 
     fn decode_span<'a>(&'a self, span: &'a Range<f64>) -> &'a Range<f64> {
@@ -261,23 +259,30 @@ impl Decoders {
             return;
         }
         self.source_buttons(ui, span, domain);
-        let mut decode_span = self.decode_span(span).clone();
         if let Some(action) = self.panel.table(
             ui,
-            &decode_span,
+            self.visit.as_ref().map_or(span, |visit| &visit.origin),
             probe.or(self.cursor),
             None,
             Default::default(),
         ) {
-            self.cursor = Some(
-                self.panel
-                    .follow_event(action, &mut decode_span, domain, step),
-            );
-            if self.visit.is_none() {
-                *span = decode_span;
-            }
-            ui.ctx().request_repaint();
+            self.follow_event(ui, action, span, domain, step);
         }
+    }
+
+    pub(super) fn follow_event(
+        &mut self,
+        ui: &Ui,
+        action: EventAction,
+        span: &mut Range<f64>,
+        domain: &Range<f64>,
+        step: f64,
+    ) {
+        if let Some(visit) = self.visit.take() {
+            *span = visit.origin;
+        }
+        self.cursor = Some(self.panel.follow_event(action, span, domain, step));
+        ui.ctx().request_repaint();
     }
 }
 
