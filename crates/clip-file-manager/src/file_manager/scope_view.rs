@@ -262,8 +262,9 @@ impl Viewer {
             None
         };
         if self.spectrum {
+            let filter_added = std::mem::take(&mut self.filters.reveal_spectrum);
             let view = ui.scope(|ui| self.spectrum_ui(ui, link));
-            if spectrum_opened {
+            if spectrum_opened || filter_added {
                 view.response.scroll_to_me(None);
             }
         } else {

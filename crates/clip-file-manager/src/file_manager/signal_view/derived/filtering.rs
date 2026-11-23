@@ -1,16 +1,16 @@
 use super::compute::{Frame, Lane, analog};
 use crate::file_manager::{
     preview_job::Task,
-    scope_view::{plot, reads::RawChannel},
+    scope_view::reads::RawChannel,
     signal_view::{
-        filter_editor::{StageList, filter_menu},
+        filter_editor::{StageFocus, StageList},
         take_query_result,
     },
 };
-use egui::{Context, Rect, Response, Ui};
+use egui::Context;
 use little_clip_core::{
     BackgroundJobs,
-    engineering::{analysis::FilterKind, scope::Channel, waveforms::sample_span},
+    engineering::{scope::Channel, waveforms::sample_span},
 };
 use std::{
     collections::BTreeMap,
@@ -25,13 +25,14 @@ pub(super) struct Filters {
     task: Option<(Arc<Vec<Request>>, Task<Result<Vec<Output>, String>>)>,
     accepted: Option<(Arc<Vec<Request>>, Result<Vec<Output>, String>)>,
     retry_at: f64,
-    anchor: Option<f64>,
 }
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct Settings {
     pub stages: StageList,
     pub interval: Option<Range<f64>>,
+    #[serde(skip)]
+    pub editor: StageFocus,
 }
 
 impl Settings {
@@ -128,34 +129,6 @@ impl Filters {
         ctx.request_repaint_after(Duration::from_millis(24));
     }
 
-    pub fn edit_plot(
-        &mut self,
-        ui: &mut Ui,
-        index: usize,
-        rect: Rect,
-        response: &Response,
-        span: &Range<f64>,
-        rate: f64,
-    ) -> Option<(FilterKind, Option<f64>)> {
-        if response.secondary_clicked() {
-            self.anchor = response
-                .interact_pointer_pos()
-                .map(|pointer| plot::at(rect, span, pointer.x));
-        }
-        if let Some(settings) = self.settings.get_mut(&index) {
-            settings.stages.draw(ui, rect, span, rate);
-        }
-        let enabled = self
-            .settings
-            .get(&index)
-            .is_none_or(|settings| settings.stages.can_add());
-        let mut added = None;
-        response.context_menu(|ui| {
-            added = ui.add_enabled_ui(enabled, filter_menu).inner;
-        });
-        added.map(|kind| (kind, self.anchor.take()))
-    }
-
     pub fn lanes(&self) -> &[Output] {
         self.accepted
             .as_ref()
@@ -244,6 +217,7 @@ impl Request {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use little_clip_core::engineering::analysis::FilterKind;
 
     #[test]
     fn filter_lane_keeps_the_start_and_units_of_the_chosen_rows() {

@@ -3,17 +3,22 @@ use super::{
     spectrum_input::{Input, LaneKind},
 };
 use crate::file_manager::signal_view::{
-    filter_editor::filter_menu,
-    frequency_plot::{Display, choose_region, choose_window, spectrum_readout, spectrum_rect},
+    filter_editor::{SpectrumPane, spectrum_workspace},
+    frequency_plot::{
+        Display, choose_region, choose_window, measurement_readout, paint_measurement,
+        spectrum_rect,
+    },
     timeline::{self, Link},
 };
-use egui::{Label, RichText, Ui};
+use egui::{Button, Ui};
 use std::ops::Range;
 
 impl Viewer {
     pub(super) fn spectrum_ui(&mut self, ui: &mut Ui, link: Option<&Link>) {
-        let input = self.spectrum_input();
-        self.spectrum_controls(ui, input.as_ref());
+        if self.spectra.kind == LaneKind::Filtered && !self.filters.has_lane(self.active) {
+            self.set_spectrum_kind(LaneKind::Recorded);
+        }
+        self.spectrum_controls(ui);
         if !self.spectrum {
             self.spectra.suspend();
             return;
@@ -26,53 +31,51 @@ impl Viewer {
         let available = input.is_some();
         self.spectra
             .update(ui.ctx(), input, interval, self.spectrum_window);
-        let (rect, response) = spectrum_rect(ui, 220.0);
-        let ready = match self.spectra.ready() {
-            Some((input, Ok(Some(survey)))) => Ok((input, survey)),
-            Some((_, Ok(None))) => {
-                Err(RichText::new("No contiguous finite samples in this interval").weak())
-            }
-            Some((_, Err(error))) => Err(RichText::new(error).color(ui.visuals().error_fg_color)),
-            None if available => Err(RichText::new("Computing spectrum…").weak()),
-            None => Err(RichText::new("Calculating the selected lane…").weak()),
+        let filterable = self.spectra.kind != LaneKind::Calculated;
+        let height = if self.spectra.only {
+            ui.available_height().clamp(245.0, 440.0)
+        } else {
+            190.0
         };
-        let (input, survey) = match ready {
-            Ok(ready) => ready,
-            Err(status) => {
-                ui.painter()
-                    .rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-                ui.place(rect.shrink(8.0), Label::new(status));
-                return;
-            }
-        };
-        let channel = input.channel();
+        spectrum_workspace(ui, filterable, height, |ui, part| match part {
+            SpectrumPane::Chart => self.spectrum_chart(ui, link, available),
+            SpectrumPane::Filters => self.filter_controls(ui),
+        });
+    }
+
+    fn spectrum_chart(&mut self, ui: &mut Ui, link: Option<&Link>, available: bool) {
+        let (rect, response) = spectrum_rect(ui, 145.0);
+        let ready = self.spectra.ready();
+        let shown = ready.or_else(|| self.spectra.latest());
+        let rate = self.overview.channels[self.active].interval_seconds.recip();
+        let mut span = self.spectrum_span.clone().unwrap_or(0.0..rate * 0.5);
+        let color = plot::color(self.active);
         let mut display = Display {
             span: &mut self.spectrum_span,
             marker: &mut self.spectrum_marker,
             db: self.spectrum_db,
-            color: plot::color(self.active),
+            color: if ready.is_some() {
+                color
+            } else {
+                color.gamma_multiply(0.48)
+            },
         };
-        let span = display.navigate(ui, rect, &response, survey, link.is_some());
-        let bin = display.paint(ui, rect, survey, &span, &channel.unit);
-        let target = bin.and_then(|bin| {
-            spectrum_readout(
-                ui,
-                survey,
-                channel,
-                bin,
-                self.spectrum_db,
-                Link::clock(link),
-            )
-        });
-        if self.spectra.kind == LaneKind::Recorded {
+        let cursor = paint_measurement(ui, rect, &response, &mut span, &mut display, shown);
+        let pending = match (available, self.spectra.kind) {
+            (true, _) => "Computing spectrum…",
+            (false, LaneKind::Filtered) => "Updating filtered spectrum…",
+            (false, _) => "Calculating the selected lane…",
+        };
+        let target = measurement_readout(
+            ui,
+            ready,
+            cursor,
+            self.spectrum_db,
+            Link::clock(link),
+            pending,
+        );
+        if self.spectra.kind != LaneKind::Calculated {
             self.draw_filter_response(ui, rect, &span);
-            let mut add = None;
-            response.context_menu(|ui| {
-                add = ui.add_enabled_ui(self.can_add_filter(), filter_menu).inner;
-            });
-            if let Some(kind) = add {
-                self.add_filter(kind);
-            }
         }
         if let Some(interval) = target {
             self.reveal_peak(interval, link);
@@ -80,6 +83,13 @@ impl Viewer {
         response.on_hover_text(
             "Scroll to zoom in frequency · Middle drag to pan · Click to measure a frequency",
         );
+    }
+
+    pub(super) fn set_spectrum_kind(&mut self, kind: LaneKind) {
+        if self.spectra.kind != kind {
+            self.spectra.kind = kind;
+            self.spectra.clear_result();
+        }
     }
 
     pub(super) fn spectrum_interval(&self) -> Option<Range<f64>> {
@@ -98,33 +108,27 @@ impl Viewer {
         }
     }
 
-    fn spectrum_controls(&mut self, ui: &mut Ui, input: Option<&Input>) {
+    fn spectrum_controls(&mut self, ui: &mut Ui) {
         ui.separator();
         ui.horizontal_wrapped(|ui| {
-            ui.strong(input.map_or("Spectrum", |input| input.channel().name.as_str()));
-            egui::ComboBox::from_id_salt("spectrum_lane")
-                .selected_text(self.spectra.kind.label())
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(
-                        &mut self.spectra.kind,
-                        LaneKind::Recorded,
-                        LaneKind::Recorded.label(),
-                    );
-                    ui.add_enabled_ui(self.math_state.numeric().is_some(), |ui| {
-                        ui.selectable_value(
-                            &mut self.spectra.kind,
-                            LaneKind::Calculated,
-                            LaneKind::Calculated.label(),
-                        );
-                    });
-                    ui.add_enabled_ui(self.filters.has_lane(self.active), |ui| {
-                        ui.selectable_value(
-                            &mut self.spectra.kind,
-                            LaneKind::Filtered,
-                            LaneKind::Filtered.label(),
-                        );
-                    });
-                });
+            let name = if self.spectra.kind == LaneKind::Calculated {
+                "Math"
+            } else {
+                &self.overview.channels[self.active].name
+            };
+            ui.strong(format!("{name} spectrum"));
+            for (kind, available) in [
+                (LaneKind::Recorded, true),
+                (LaneKind::Calculated, self.math_state.numeric().is_some()),
+                (LaneKind::Filtered, self.filters.has_lane(self.active)),
+            ] {
+                let button = Button::new(kind.label()).selected(self.spectra.kind == kind);
+                if ui.add_enabled(available, button).clicked() {
+                    self.set_spectrum_kind(kind);
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
             choose_region(ui, &mut self.spectra.region);
             choose_window(ui, &mut self.spectrum_window);
             ui.toggle_value(&mut self.spectrum_db, "dB")
@@ -137,9 +141,6 @@ impl Viewer {
                 self.spectrum = false;
             }
         });
-        if self.spectra.kind == LaneKind::Recorded {
-            self.filter_controls(ui);
-        }
     }
 
     fn reveal_peak(&mut self, interval: Range<f64>, link: Option<&Link>) {

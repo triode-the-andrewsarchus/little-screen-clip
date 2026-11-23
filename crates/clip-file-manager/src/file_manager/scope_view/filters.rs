@@ -1,6 +1,9 @@
-use super::{JOBS, Task, Viewer, plot, reads, spectrum_input::Input};
+use super::{
+    JOBS, Task, Viewer, plot, reads,
+    spectrum_input::{Input, LaneKind},
+};
 use crate::file_manager::signal_view::{
-    filter_editor::{StageList, filter_menu},
+    filter_editor::{StageFocus, StageList, add_buttons, reveal_frequency},
     take_query_result,
 };
 use egui::{Painter, Rect, Ui};
@@ -38,10 +41,12 @@ pub(super) struct Filters {
     task: Option<(Request, Task<Result<Output, String>>)>,
     retry_at: f64,
     generation: u64,
+    pub(super) reveal_spectrum: bool,
 }
 
 struct Lane {
     settings: LaneSettings,
+    editor: StageFocus,
     output: Option<Output>,
     completed: Option<Request>,
     error: Option<String>,
@@ -76,6 +81,7 @@ impl Lane {
     fn new(settings: LaneSettings) -> Self {
         Self {
             settings,
+            editor: StageFocus::default(),
             output: None,
             completed: None,
             error: None,
@@ -97,58 +103,65 @@ impl Lane {
 
 impl Viewer {
     pub(super) fn filter_controls(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| self.filter_controls_row(ui));
-    }
-
-    fn filter_controls_row(&mut self, ui: &mut Ui) {
         let kind = ui
-            .add_enabled_ui(self.can_add_filter(), |ui| {
-                ui.menu_button("Add filter", filter_menu).inner.flatten()
-            })
+            .horizontal_wrapped(|ui| add_buttons(ui, self.can_add_filter()))
             .inner;
         if let Some(kind) = kind {
             self.add_filter(kind);
         }
         let channel = &self.overview.channels[self.active];
         let rate = channel.interval_seconds.recip();
-        let rows = self
-            .spectrum_interval()
-            .map_or(0..channel.sample_count, |range| sample_span(channel, range));
+        let rows = self.filter_sample_range();
         let Some(lane) = self.filters.lanes.get_mut(&self.active) else {
             return;
         };
-        ui.add(
-            egui::TextEdit::singleline(&mut lane.settings.name)
-                .id_salt(("filtered-lane-name", self.active))
-                .hint_text("Lane name")
-                .desired_width(110.0)
-                .char_limit(48),
-        );
-        if ui
-            .add_enabled(
-                lane.settings.rows != rows,
-                egui::Button::new("Use current range"),
-            )
-            .on_hover_text("Use the interval selected in the spectrum controls")
-            .clicked()
-        {
-            lane.settings.rows = rows;
-        }
-        ui.weak(format!(
-            "{} to {}",
-            display_value(channel.time_at(lane.settings.rows.start), "s"),
-            display_value(channel.time_at(lane.settings.rows.end), "s")
-        ));
-        if let Some(error) = &lane.error {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
-        lane.settings.stages.controls(ui, rate);
+        ui.push_id(("scope-stage-editor", self.active), |ui| {
+            if let Some(frequency) = lane.settings.stages.controls(ui, &mut lane.editor, rate) {
+                reveal_frequency(&mut self.spectrum_span, frequency, rate);
+            }
+        });
         if lane.settings.stages.is_empty() {
             self.filters.lanes.remove(&self.active);
+            if self.spectra.kind == LaneKind::Filtered {
+                self.set_spectrum_kind(LaneKind::Recorded);
+            }
+            return;
         }
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut lane.settings.name)
+                    .id_salt(("filtered-lane-name", self.active))
+                    .hint_text("Lane name")
+                    .desired_width(110.0)
+                    .char_limit(48),
+            );
+            ui.weak(format!(
+                "Filter range  {} to {}",
+                display_value(channel.time_at(lane.settings.rows.start), "s"),
+                display_value(channel.time_at(lane.settings.rows.end), "s")
+            ));
+            if ui
+                .add_enabled(
+                    lane.settings.rows != rows,
+                    egui::Button::new("Use spectrum range").small(),
+                )
+                .clicked()
+            {
+                lane.settings.rows = rows;
+            }
+            if let Some(error) = &lane.error {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+        });
     }
 
-    pub(super) fn can_add_filter(&self) -> bool {
+    fn filter_sample_range(&self) -> Range<u64> {
+        let channel = &self.overview.channels[self.active];
+        self.spectrum_interval()
+            .map_or(0..channel.sample_count, |range| sample_span(channel, range))
+    }
+
+    fn can_add_filter(&self) -> bool {
         self.filters
             .lanes
             .get(&self.active)
@@ -161,9 +174,7 @@ impl Viewer {
         }
         let channel = &self.overview.channels[self.active];
         let rate = channel.interval_seconds.recip();
-        let rows = self
-            .spectrum_interval()
-            .map_or(0..channel.sample_count, |range| sample_span(channel, range));
+        let rows = self.filter_sample_range();
         let lane = self.filters.lanes.entry(self.active).or_insert_with(|| {
             Lane::new(LaneSettings {
                 name: format!("{} filtered", channel.name),
@@ -173,9 +184,14 @@ impl Viewer {
             })
         });
         let span = self.spectrum_span.clone().unwrap_or(0.0..rate * 0.5);
-        lane.settings
+        if let Some(index) = lane
+            .settings
             .stages
-            .add(kind, rate, &span, self.spectrum_marker);
+            .add(kind, rate, &span, self.spectrum_marker)
+        {
+            lane.editor.select(index);
+            self.filters.reveal_spectrum = true;
+        }
     }
 
     pub(super) fn draw_filters(&self, painter: &Painter, clip: &Painter, rect: Rect) {
@@ -215,7 +231,11 @@ impl Viewer {
             return;
         };
         let rate = self.overview.channels[self.active].interval_seconds.recip();
-        lane.settings.stages.draw(ui, rect, span, rate);
+        ui.push_id(("scope-stage-plot", self.active), |ui| {
+            lane.settings
+                .stages
+                .draw(ui, &mut lane.editor, rect, span, rate);
+        });
     }
 }
 

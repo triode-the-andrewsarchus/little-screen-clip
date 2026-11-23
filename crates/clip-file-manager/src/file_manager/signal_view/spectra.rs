@@ -297,7 +297,7 @@ impl Spectra {
         self.requested = None;
     }
 
-    pub(super) fn clear_result(&mut self) {
+    pub(in crate::file_manager) fn clear_result(&mut self) {
         self.suspend();
         self.result = None;
         self.request_after = 0.0;

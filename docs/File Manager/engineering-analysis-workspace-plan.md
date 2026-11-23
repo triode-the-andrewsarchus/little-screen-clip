@@ -62,11 +62,21 @@ Private Files sessions checked 100 and 130 MHz, row jumps, A/B swaps, S21 on one
 
 ## 7. Keep spectrum filters in context
 
-- [ ] Place the four filter actions next to the active trace's spectrum. Initialize a new stage from its marked frequency when available and focus its row.
-- [ ] Give each stage an inline row with its current frequency, Q and remove action. Pair the row with the same stage's plot handles. Retain the selected trace, time range and other stages while editing.
-- [ ] Verify LP, HP, BP and Notch placement and dragging on measured and derived traces, independent stages for two channels, a narrow window, and saving and reopening the existing filter settings.
+- [x] Place the four filter actions next to the active trace's spectrum. Initialize a new stage from its marked frequency when available and focus its row.
+- [x] Give each stage an inline row with its current frequency, Q and remove action. Pair the row with the same stage's plot handles. Retain the selected trace, time range and other stages while editing.
+- [x] Verify LP, HP, BP and Notch placement and dragging on measured and derived traces, independent stages for two channels, a narrow window, and saving and reopening the existing filter settings.
 
-The current scope and linked-recording views share the stage controls. Filter creation and stage edits each open a menu, even when the visible spectrum already shows the matching handles. Use a compact row of direct actions and show stages in the workspace below the spectrum settings. Indicate the selected stage in the list and on the plot when the user focuses either representation. Keep the time interval and raw or filtered spectrum state visible while manipulating the frequency response.
+The four actions are visible beside the chart on wide windows and above it on narrow windows. Each row uses the same number as its plot handle. Selecting the row reveals that stage on the current frequency scale, and interacting with a handle selects its row. The selected band-pass or notch also shows its edge handles. Recorded and filtered views keep their editing controls and show the time range used for the filter.
+
+The scope smoke test placed three stages on CH1, moved its band-pass from about 18.53 to 22.62 kHz, and added a separate high-pass on CH2. The saved recipe retained the four stages and both channel assignments. In the equation spectrum, a 5 kHz notch attenuated the carrier. Dragging the notch to about 25 kHz made the same carrier visible again. The 800 × 620 check included the inline frequency and Q fields.
+
+## 8. Make spectral measurement settings visible
+
+- [ ] Put the available time ranges and window functions in the workspace and make the active settings readable at a glance.
+- [ ] Show the interval used for the current FFT alongside the peak readout. Keep the time selection, cursor and filter interval independently inspectable.
+- [ ] Walk a transient peak from frequency to its measured time window and back on a recorded channel, logic line and equation lane.
+
+Start with a narrow-window review. Use compact button groups for the two sets of choices and retain the chart and peak readout as the primary workspace. Keep the existing spectral survey jobs and sample coverage reporting behind those controls.
 
 ## Review after each addition
 

@@ -101,6 +101,9 @@ impl Viewer {
 
     fn activate_channel(&mut self, index: usize) {
         let previous = self.active;
+        if previous != index {
+            self.spectra.clear_result();
+        }
         if self.recording.triggered_segments() {
             if previous != index {
                 self.archive_mark();

@@ -1,8 +1,11 @@
-use super::{spectra::Region, timeline};
+use super::{
+    spectra::{Region, ResultView},
+    timeline,
+};
 use crate::file_manager::scope_view::plot;
-use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Color32, FontId, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::engineering::{
-    analysis::{SpectralSurvey, SpectrumWindow},
+    analysis::{Clock, SpectralSurvey, SpectrumWindow},
     scope::Channel,
     waveforms::{Peak, display_value},
 };
@@ -117,7 +120,7 @@ pub(in crate::file_manager) fn spectrum_readout(
     channel: &Channel,
     bin: usize,
     db: bool,
-    clock: little_clip_core::engineering::analysis::Clock,
+    clock: Clock,
 ) -> Option<Range<f64>> {
     let measured = survey.peak_interval(bin)?;
     let interval = channel.time_at(measured.start)..channel.time_at(measured.end);
@@ -254,4 +257,51 @@ pub(in crate::file_manager) fn amplitude_ticks(
         );
         level += step;
     }
+}
+
+pub(in crate::file_manager) type Cursor<'a> = (&'a SpectralSurvey, &'a Channel, usize);
+
+pub(in crate::file_manager) fn paint_measurement<'a>(
+    ui: &mut Ui,
+    rect: Rect,
+    response: &Response,
+    span: &mut Range<f64>,
+    display: &mut Display<'_>,
+    shown: Option<ResultView<'a>>,
+) -> Option<Cursor<'a>> {
+    let Some((input, Ok(Some(survey)))) = shown else {
+        ui.painter()
+            .rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+        return None;
+    };
+    let channel = input.channel();
+    *span = display.navigate(ui, rect, response, survey, true);
+    let bin = display.paint(ui, rect, survey, span, &channel.unit)?;
+    Some((survey, channel, bin))
+}
+
+pub(in crate::file_manager) fn measurement_readout(
+    ui: &mut Ui,
+    ready: Option<ResultView<'_>>,
+    cursor: Option<Cursor<'_>>,
+    db: bool,
+    clock: Clock,
+    pending: &str,
+) -> Option<Range<f64>> {
+    match ready {
+        Some((_, Ok(Some(_)))) => {
+            let (survey, channel, bin) = cursor?;
+            return spectrum_readout(ui, survey, channel, bin, db, clock);
+        }
+        Some((_, Ok(None))) => {
+            ui.weak("No contiguous finite samples in this interval");
+        }
+        Some((_, Err(error))) => {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        None => {
+            ui.weak(pending);
+        }
+    }
+    None
 }
