@@ -19,6 +19,10 @@ const PREVIEW_WINDOW: u64 = 48;
 const INDEX_BINS: u64 = 16384;
 const MAX_EXPORT_ROWS: u64 = 1_000_000;
 
+fn sequence_bins(bins: u64, segments: u64) -> u64 {
+    (bins * 4 / segments.max(1)).clamp(bins / 12, bins)
+}
+
 /// One interval's measured extrema in the channel's physical unit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Peak {
@@ -128,6 +132,11 @@ pub fn time_span(channels: &[Channel]) -> Range<f64> {
 
 /// Formats an engineering value using a power-of-1000 SI prefix.
 pub fn display_value(value: f64, unit: &str) -> String {
+    display_axis_value(value, f64::INFINITY, unit)
+}
+
+/// Formats an engineering axis value to at least the displayed tick spacing.
+pub fn display_axis_value(value: f64, spacing: f64, unit: &str) -> String {
     if !value.is_finite() {
         return format!("- {unit}");
     }
@@ -149,7 +158,13 @@ pub fn display_value(value: f64, unit: &str) -> String {
         (1e-12, "p")
     });
     let scaled = value / scale;
-    let decimals = if scaled.abs() >= 100.0 { 1 } else { 3 };
+    let default_decimals = if scaled.abs() >= 100.0 { 1 } else { 3 };
+    let decimals = if spacing.is_finite() && spacing > 0.0 {
+        let tick_decimals = (-(spacing / scale).log10()).ceil() as usize;
+        default_decimals.max(tick_decimals.min(15))
+    } else {
+        default_decimals
+    };
     let number = format!("{scaled:.decimals$}");
     format!(
         "{} {prefix}{unit}",
@@ -354,6 +369,10 @@ impl Recording {
         matches!(self.capture, Capture::Power(_))
     }
 
+    pub fn triggered_segments(&self) -> bool {
+        matches!(&self.capture, Capture::Scope(capture) if capture.triggered_segments())
+    }
+
     pub fn checked<T>(
         &self,
         cancel: &AtomicBool,
@@ -365,18 +384,44 @@ impl Recording {
     }
 
     pub fn overview(&self, cancel: &AtomicBool) -> Result<Overview, String> {
+        let count = self.channels().len();
+        let bins = if self.triggered_segments() {
+            sequence_bins(PREVIEW_BINS, count as u64)
+        } else {
+            PREVIEW_BINS
+        };
+        self.overview_lanes(count, bins, cancel)
+    }
+
+    /// The first available trigger segment defines the strip's sample domain.
+    pub fn preview(&self, cancel: &AtomicBool) -> Result<Overview, String> {
+        if !self.triggered_segments() {
+            return self.overview(cancel);
+        }
+        let mut overview = self.overview_lanes(1, PREVIEW_BINS, cancel)?;
+        let count = self.channels().len();
+        overview.model = format!("{} · {count} segments", overview.model);
+        Ok(overview)
+    }
+
+    fn overview_lanes(
+        &self,
+        count: usize,
+        bins: u64,
+        cancel: &AtomicBool,
+    ) -> Result<Overview, String> {
         self.checked(cancel, |capture| {
-            let envelopes = capture
-                .channels()
+            let channels = &capture.channels()[..count];
+            let envelopes = channels
                 .iter()
                 .enumerate()
                 .map(|(index, channel)| {
-                    capture.envelope(index, 0..channel.sample_count, PREVIEW_BINS, false, cancel)
+                    capture.envelope(index, 0..channel.sample_count, bins, false, cancel)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(Overview {
                 model: capture.model().to_owned(),
-                channels: capture.channels().to_vec(),
+                channels: channels.to_vec(),
                 envelopes,
             })
         })
@@ -384,13 +429,19 @@ impl Recording {
 
     /// Refined overview from stored summaries or a bounded working set.
     pub fn index(&self, cancel: &AtomicBool) -> Result<Vec<Envelope>, String> {
+        let sequence = self.triggered_segments();
+        let bins = if sequence {
+            sequence_bins(INDEX_BINS, self.channels().len() as u64)
+        } else {
+            INDEX_BINS
+        };
         self.checked(cancel, |capture| {
             capture
                 .channels()
                 .iter()
                 .enumerate()
                 .map(|(index, channel)| {
-                    capture.envelope(index, 0..channel.sample_count, INDEX_BINS, true, cancel)
+                    capture.envelope(index, 0..channel.sample_count, bins, !sequence, cancel)
                 })
                 .collect()
         })
@@ -531,6 +582,21 @@ fn boundary(length: u64, index: u64, n: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn axis_labels_resolve_narrow_spans_at_large_offsets() {
+        assert_eq!(display_value(0.007458033, "s"), "7.458 ms");
+        assert_eq!(display_axis_value(0.007458033, 83e-9, "s"), "7.45803 ms");
+        assert_eq!(display_axis_value(0.007458116, 83e-9, "s"), "7.45812 ms");
+        assert_eq!(
+            display_axis_value(5800001000.0, 2000.0, "Hz"),
+            "5.800001 GHz"
+        );
+        assert_eq!(
+            display_axis_value(5800003000.0, 2000.0, "Hz"),
+            "5.800003 GHz"
+        );
+    }
 
     #[test]
     fn sample_grid_boundaries_survive_round_tripping_through_time() {

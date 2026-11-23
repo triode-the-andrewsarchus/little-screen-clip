@@ -1,7 +1,7 @@
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, pos2};
 use little_clip_core::engineering::{
     scope::Channel,
-    waveforms::{Envelope, Overview, Peak, display_value, sample_span, time_span},
+    waveforms::{Envelope, Overview, Peak, display_axis_value, sample_span, time_span},
 };
 use std::ops::Range;
 
@@ -55,6 +55,7 @@ pub(in crate::file_manager) fn labelled_x_axis(
     foreground: Color32,
 ) {
     let divisions = (rect.width() / 90.0).round().clamp(2.0, 6.0) as usize;
+    let spacing = (span.end - span.start) / divisions as f64;
     for bin in 0..=divisions {
         let fraction = bin as f32 / divisions as f32;
         let x = rect.left() + rect.width() * fraction;
@@ -70,10 +71,7 @@ pub(in crate::file_manager) fn labelled_x_axis(
         painter.text(
             pos2(x, rect.bottom() + 2.0),
             align,
-            display_value(
-                span.start + f64::from(fraction) * (span.end - span.start),
-                unit,
-            ),
+            display_axis_value((bin as f64).mul_add(spacing, span.start), spacing, unit),
             FontId::monospace(10.0),
             foreground,
         );

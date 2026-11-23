@@ -83,6 +83,7 @@ struct Layout {
     model: String,
     channels: Vec<Channel>,
     samples: Samples,
+    triggered_segments: bool,
 }
 
 impl Layout {
@@ -91,6 +92,7 @@ impl Layout {
             model,
             channels,
             samples: Samples::Binary(lanes),
+            triggered_segments: false,
         }
     }
 
@@ -112,10 +114,11 @@ impl Layout {
                 model: "Rigol CSV".into(),
                 channels,
                 samples: Samples::Csv(rows),
+                triggered_segments: false,
             });
         }
         if lecroy::matches_header(prefix) {
-            return lecroy::parse(prefix, file_len);
+            return lecroy::parse(file, prefix, file_len);
         }
         if keysight::matches_header(prefix) {
             return keysight::parse(file, prefix, file_len);
@@ -137,9 +140,9 @@ pub struct Capture {
 impl Capture {
     /// Opens an already guarded, readable capture handle.
     ///
-    /// The binary readers only read the header. CSV also reads a bounded part
-    /// of its first and last data rows to establish the sample extent. The
-    /// caller should retain [crate::file_source::ReadCheck] for deferred jobs.
+    /// Binary readers use bounded headers and, for sequences, timing tables.
+    /// CSV reads bounded portions of its first and last rows to establish the
+    /// sample extent. Retain [crate::file_source::ReadCheck] for deferred jobs.
     ///
     /// # Errors
     /// Returns an error for an unreadable, truncated, or unsupported capture.
@@ -164,6 +167,11 @@ impl Capture {
     /// Returns the saved analog channels in instrument order.
     pub fn channels(&self) -> &[Channel] {
         &self.layout.channels
+    }
+
+    /// Whether the displayed lanes are separate trigger acquisitions.
+    pub fn triggered_segments(&self) -> bool {
+        self.layout.triggered_segments
     }
 
     /// Reads a half-open sample interval in the channel's measurement unit.

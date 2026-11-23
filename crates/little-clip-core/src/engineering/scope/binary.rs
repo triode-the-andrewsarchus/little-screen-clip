@@ -70,7 +70,7 @@ impl Encoding {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Lane {
     pub(super) offset: u64,
     pub(super) stride: usize,

@@ -4,7 +4,9 @@ use super::{
     Channel, Layout,
     binary::{ByteOrder, Encoding, Lane, fixed_text},
 };
-use std::ops::Range;
+use std::{fs::File, ops::Range};
+
+mod sequence;
 
 const DESCRIPTOR_BYTES: usize = 346;
 const SIGNATURE: &[u8] = b"WAVEDESC\0";
@@ -27,43 +29,29 @@ fn descriptor(prefix: &[u8]) -> Option<(usize, &[u8])> {
     .then_some((offset, header))
 }
 
-pub(super) fn parse(prefix: &[u8], file_len: u64) -> Result<Layout, String> {
+pub(super) fn parse(file: &File, prefix: &[u8], file_len: u64) -> Result<Layout, String> {
     let (start, header) = descriptor(prefix).ok_or("Missing legacy LeCroy waveform descriptor")?;
     if header.len() < DESCRIPTOR_BYTES {
         return Err("Incomplete LeCroy waveform descriptor".into());
     }
     let (order, encoding) = sample_encoding(header)?;
     let blocks = Blocks::read(header, order, start as u64, file_len)?;
-    if blocks.timing || order.u32(header, 144) > 1 {
-        return Err("This LeCroy file contains segmented or interleaved acquisitions".into());
-    }
-    if order.u32(header, 132) != 0 || order.u32(header, 136) > 1 {
-        return Err("This LeCroy file stores a partial or sparse waveform".into());
-    }
-    let window = sample_window(header, order, &blocks, encoding)?;
-    let scale = Calibration::read(header, order, &window)?;
+    let (segments, triggered) = blocks.windows(file, header, order, encoding)?;
+    let scale = Calibration::read(header, order)?;
 
-    let name = fixed_text(&header[96..112]);
+    let trace = match fixed_text(&header[96..112]) {
+        name if name.is_empty() => "Trace".into(),
+        name => name,
+    };
     let instrument = fixed_text(&header[76..92]);
     let unit = match fixed_text(&header[196..244]).as_str() {
         "Volt" | "Volts" | "volts" => "V".into(),
         "Amp" | "Amps" | "amps" => "A".into(),
         unit => unit.to_owned(),
     };
-    let channel = Channel {
-        name: if name.is_empty() {
-            "Trace".into()
-        } else {
-            name
-        },
-        unit,
-        sample_count: window.end - window.start,
-        start_seconds: scale.first,
-        interval_seconds: scale.interval,
-    };
     let stride = encoding.width();
-    let lane = Lane {
-        offset: blocks.first_data + window.start * stride as u64,
+    let mut lane = Lane {
+        offset: blocks.first_data,
         stride,
         column: 0,
         order,
@@ -77,7 +65,29 @@ pub(super) fn parse(prefix: &[u8], file_len: u64) -> Result<Layout, String> {
     } else {
         format!("LeCroy TRC · {instrument}")
     };
-    Ok(Layout::binary(model, vec![channel], vec![lane]))
+    let mut channels = Vec::with_capacity(segments.len());
+    let mut lanes = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let count = segment.data.end - segment.data.start;
+        let start_seconds = scale.start(&segment, count)?;
+        let name = if triggered {
+            format!("Segment {}", segment.index + 1)
+        } else {
+            trace.clone()
+        };
+        channels.push(Channel {
+            name,
+            unit: unit.clone(),
+            sample_count: count,
+            start_seconds,
+            interval_seconds: scale.interval,
+        });
+        lane.offset = blocks.first_data + segment.data.start * stride as u64;
+        lanes.push(lane.clone());
+    }
+    let mut layout = Layout::binary(model, channels, lanes);
+    layout.triggered_segments = triggered;
+    Ok(layout)
 }
 
 fn sample_encoding(header: &[u8]) -> Result<(ByteOrder, Encoding), String> {
@@ -99,11 +109,10 @@ struct Calibration {
     gain: f64,
     bias: f64,
     interval: f64,
-    first: f64,
 }
 
 impl Calibration {
-    fn read(header: &[u8], order: ByteOrder, window: &Range<u64>) -> Result<Self, String> {
+    fn read(header: &[u8], order: ByteOrder) -> Result<Self, String> {
         let horizontal = fixed_text(&header[244..292]);
         if !matches!(
             horizontal.to_ascii_lowercase().as_str(),
@@ -115,16 +124,11 @@ impl Calibration {
         let gain = measure(156);
         let bias = -measure(160);
         let interval = measure(176);
-        let origin = order.f64(header, 180);
-        let first = (window.start as f64).mul_add(interval, origin);
-        let end = (window.end as f64).mul_add(interval, origin);
         if !gain.is_finite()
             || gain == 0.0
             || !bias.is_finite()
+            || !interval.is_finite()
             || interval <= 0.0
-            || !first.is_finite()
-            || !end.is_finite()
-            || end <= first
         {
             return Err("Invalid LeCroy waveform calibration".into());
         }
@@ -132,15 +136,28 @@ impl Calibration {
             gain,
             bias,
             interval,
-            first,
         })
+    }
+
+    fn start(&self, segment: &sequence::Segment, count: u64) -> Result<f64, String> {
+        let first = (segment.local_first as f64).mul_add(self.interval, segment.origin);
+        let end = (count as f64).mul_add(self.interval, first);
+        if !first.is_finite()
+            || !end.is_finite()
+            || first + self.interval <= first
+            || (count.saturating_sub(1) as f64).mul_add(self.interval, first) >= end
+        {
+            return Err("Invalid LeCroy sample time extent".into());
+        }
+        Ok(first)
     }
 }
 
 struct Blocks {
     first_data: u64,
     data_bytes: u64,
-    timing: bool,
+    triggers: Range<u64>,
+    ris_timing: bool,
 }
 
 impl Blocks {
@@ -153,11 +170,45 @@ impl Blocks {
         if sizes[0] < DESCRIPTOR_BYTES as u64 || start + sizes.iter().sum::<u64>() > file_len {
             return Err("LeCroy waveform blocks exceed the available data".into());
         }
+        let triggers_at = start + sizes[..3].iter().sum::<u64>();
         Ok(Self {
             first_data: start + sizes[..6].iter().sum::<u64>(),
             data_bytes: sizes[6],
-            timing: sizes[3] != 0 || sizes[4] != 0,
+            triggers: triggers_at..triggers_at + sizes[3],
+            ris_timing: sizes[4] != 0,
         })
+    }
+
+    fn windows(
+        &self,
+        file: &File,
+        header: &[u8],
+        order: ByteOrder,
+        encoding: Encoding,
+    ) -> Result<(Vec<sequence::Segment>, bool), String> {
+        if self.ris_timing {
+            return Err("This LeCroy file uses interleaved RIS timing".into());
+        }
+        if order.u32(header, 132) != 0 || order.u32(header, 136) > 1 {
+            return Err("This LeCroy file stores a partial or sparse waveform".into());
+        }
+        let count = u64::from(order.u32(header, 116));
+        let window = sample_window(header, order, self, encoding, count)?;
+        let segments = u64::from(order.u32(header, 144)).max(1);
+        if segments > 1 || !self.triggers.is_empty() {
+            let records =
+                sequence::read(file, order, self.triggers.clone(), segments, count, window)?;
+            return Ok((records, true));
+        }
+        Ok((
+            vec![sequence::Segment {
+                index: 0,
+                local_first: window.start,
+                data: window,
+                origin: order.f64(header, 180),
+            }],
+            false,
+        ))
     }
 }
 
@@ -166,8 +217,8 @@ fn sample_window(
     order: ByteOrder,
     blocks: &Blocks,
     encoding: Encoding,
+    count: u64,
 ) -> Result<Range<u64>, String> {
-    let count = u64::from(order.u32(header, 116));
     if count == 0 || count * encoding.width() as u64 != blocks.data_bytes {
         return Err("LeCroy sample count disagrees with its data block".into());
     }
@@ -212,18 +263,53 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_truncated_sample_array_and_a_segmented_time_axis() {
+    fn rejects_truncated_sample_and_trigger_arrays() {
         let mut data = trace();
-        assert!(parse(&data, data.len() as u64 - 1).is_err());
+        let file = tempfile::tempfile().unwrap();
+        assert!(parse(&file, &data, data.len() as u64 - 1).is_err());
         let start = data
             .windows(SIGNATURE.len())
             .position(|bytes| bytes == SIGNATURE)
             .unwrap();
         data[start + 144..start + 148].copy_from_slice(&2_u32.to_be_bytes());
         assert!(
-            parse(&data, data.len() as u64)
+            parse(&file, &data, data.len() as u64)
                 .unwrap_err()
-                .contains("segmented")
+                .contains("sequence timing")
+        );
+    }
+
+    #[test]
+    fn preserves_sequence_spacing_and_trimmed_samples_per_trigger() {
+        let cancel = AtomicBool::new(false);
+        let mut bytes = trace();
+        let start = bytes
+            .windows(SIGNATURE.len())
+            .position(|bytes| bytes == SIGNATURE)
+            .unwrap();
+        let samples = bytes.split_off(start + DESCRIPTOR_BYTES);
+        for (offset, value) in [(48, 32), (60, 20), (116, 10), (128, 8), (144, 2)] {
+            bytes[start + offset..start + offset + 4].copy_from_slice(&u32::to_be_bytes(value));
+        }
+        for timing in [0.0_f64, -0.25, 2.0, -0.25] {
+            bytes.extend(timing.to_be_bytes());
+        }
+        bytes.extend_from_slice(&samples);
+        bytes.extend_from_slice(&samples);
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&bytes).unwrap();
+        let capture = Capture::open(file).unwrap();
+        assert!(capture.triggered_segments());
+        let channels = capture.channels();
+        assert_eq!(channels.len(), 2);
+        assert_eq!(channels[0].start_seconds, -0.125);
+        assert_eq!(channels[1].start_seconds, 1.75);
+        assert_eq!(channels[0].sample_count, 4);
+        assert_eq!(channels[1].sample_count, 4);
+        assert_eq!(capture.read_samples(0, 0..2, &cancel).unwrap(), [-2.0, 1.0]);
+        assert_eq!(
+            capture.read_samples(1, 0..2, &cancel).unwrap(),
+            [-101.0, -2.0]
         );
     }
 

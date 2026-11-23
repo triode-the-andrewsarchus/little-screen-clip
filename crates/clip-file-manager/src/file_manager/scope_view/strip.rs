@@ -94,7 +94,7 @@ pub(in crate::file_manager) fn load(path: &Path, cancel: &AtomicBool) -> Data {
         },
     );
     let preview = Recording::open(path, ReadCheck::default(), cancel).and_then(|recording| {
-        let overview = recording.overview(cancel)?;
+        let overview = recording.preview(cancel)?;
         Ok(Preview {
             source: recording.source().clone(),
             overview,

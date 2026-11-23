@@ -1,5 +1,6 @@
 //! File-backed oscilloscope plots with one timeline shared by cursors and analysis.
 
+mod channels;
 mod filters;
 pub(super) use filters::{FilterSamples, FilteredChannel};
 #[cfg(test)]
@@ -115,11 +116,18 @@ impl Viewer {
         let recording = Recording::open(path, ReadCheck::default(), cancel)?;
         let overview = recording.overview(cancel)?;
         let domain = time_span(&overview.channels);
-        let visible = vec![true; overview.channels.len()];
+        let segmented = recording.triggered_segments();
+        let mut visible = vec![!segmented; overview.channels.len()];
+        visible[0] = true;
+        let span = if segmented {
+            time_span(&overview.channels[..1])
+        } else {
+            domain.clone()
+        };
         Ok(Self {
             recording: Arc::new(recording),
             overview,
-            span: domain.clone(),
+            span,
             domain,
             active: 0,
             cursors: [None; 2],
@@ -247,36 +255,12 @@ impl Viewer {
             ui.strong(&self.overview.model);
             ui.weak(display_value(self.overview.duration_seconds(), "s"));
             ui.separator();
-            for (index, channel) in self.overview.channels.iter().enumerate() {
-                let frequency = self
-                    .measurements
-                    .as_ref()
-                    .and_then(|measured| measured.frequencies.get(index).copied().flatten());
-                let text = if self.recording.power_recording() {
-                    channel.name.clone()
-                } else {
-                    format!(
-                        "{} · {}",
-                        channel.name,
-                        display_value(frequency.unwrap_or(f64::NAN), "Hz")
-                    )
-                };
-                let selected = self.active == index;
-                let label = egui::RichText::new(text);
-                let label = if selected {
-                    label
-                } else {
-                    label.color(plot::color(index))
-                };
-                if ui.selectable_label(selected, label).clicked() {
-                    if index != self.active {
-                        self.snaps.iter_mut().for_each(CursorSnap::clear);
-                    }
-                    self.active = index;
-                }
-            }
+            self.channel_picker(ui);
             if ui.button("Fit").clicked() {
                 self.span = self.domain.clone();
+            }
+            if self.recording.triggered_segments() && ui.button("Fit segment").clicked() {
+                self.fit_active();
             }
             ui.toggle_value(&mut self.spectrum, "Spectrum");
             let same_units = self
@@ -687,18 +671,22 @@ impl Viewer {
         );
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-        let channel = &self.overview.channels[self.active];
-        let envelope = self.index.as_ref().unwrap_or(&self.overview.envelopes);
-        let envelope = &envelope[self.active];
-        plot::draw_envelope(
-            &painter,
-            rect.shrink(2.0),
-            &self.domain,
-            channel,
-            envelope,
-            envelope.extrema(),
-            plot::color(self.active),
-        );
+        let segmented = self.recording.triggered_segments();
+        if segmented {
+            self.paint_segment_rail(&painter, rect);
+        } else {
+            let channel = &self.overview.channels[self.active];
+            let envelope = &self.index.as_ref().unwrap_or(&self.overview.envelopes)[self.active];
+            plot::draw_envelope(
+                &painter,
+                rect.shrink(2.0),
+                &self.domain,
+                channel,
+                envelope,
+                envelope.extrema(),
+                plot::color(self.active),
+            );
+        }
         plot::highlight(
             &painter,
             rect,
@@ -710,10 +698,18 @@ impl Viewer {
             && let Some(pointer) = response.interact_pointer_pos()
         {
             let center = plot::at(rect, &self.domain, pointer.x);
-            let half = (self.span.end - self.span.start) / 2.0;
-            self.span = self.clamp_span(center - half..center + half);
+            if segmented && response.clicked() {
+                self.open_segment_near(center);
+            } else {
+                let half = (self.span.end - self.span.start) / 2.0;
+                self.span = self.clamp_span(center - half..center + half);
+            }
         }
-        response.on_hover_text("Navigate the full capture");
+        response.on_hover_text(if segmented {
+            "Click a trigger segment to open it. Drag to pan across the capture."
+        } else {
+            "Navigate the full capture"
+        });
     }
 
     fn cursor_readout(&self, ui: &mut Ui) {

@@ -14,7 +14,7 @@ pub(super) fn load(path: &Path, format: Format, cancel: &AtomicBool) -> Option<P
     match format {
         Format::Oscilloscope | Format::PowerRecording => {
             let recording = waveforms::Recording::open(path, ReadCheck::default(), cancel).ok()?;
-            recording.overview(cancel).ok().map(Preview::Scope)
+            recording.preview(cancel).ok().map(Preview::Scope)
         }
         Format::LogicCapture => {
             let recording = logic_preview::Recording::open(path, cancel).ok()?;
