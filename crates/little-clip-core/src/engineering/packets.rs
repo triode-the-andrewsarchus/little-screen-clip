@@ -10,9 +10,11 @@ mod protocol;
 pub use conversations::{Conversation, ConversationKey, Conversations, Direction};
 pub use details::{Field, Layer};
 mod source;
+mod tcp_flow;
 
 pub use index::{ActivityBin, Index};
 pub use protocol::{Endpoint, Protocol, ProtocolFields, TcpSegment};
+pub use tcp_flow::{SequencePosition, TcpPoint, TcpTracker};
 
 use source::{Source, cancelled};
 use std::{

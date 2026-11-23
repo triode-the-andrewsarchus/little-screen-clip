@@ -7,6 +7,7 @@ mod display_filter;
 mod inspect;
 pub(super) mod strip;
 mod table;
+mod tcp_flow;
 
 use super::{
     capture_browse::{
@@ -65,6 +66,7 @@ pub(super) struct Viewer {
     filter_job: Option<Job<Filtered>>,
     conversation_panel: conversations::Panel,
     conversation: Option<ConversationSelection>,
+    tcp_flow: tcp_flow::View,
     error: Option<String>,
 }
 
@@ -102,6 +104,7 @@ impl Viewer {
             filter_job: None,
             conversation_panel: conversations::Panel::default(),
             conversation: None,
+            tcp_flow: tcp_flow::View::default(),
             error: None,
         })
     }
@@ -130,6 +133,7 @@ impl Viewer {
         self.controls(ui, copies);
         self.timeline(ui, colors);
         self.conversations(ui, colors, copies);
+        self.draw_tcp_flow(ui, colors, copies);
         self.navigation(ui);
         self.browser(ui, colors);
         self.request_index(ui.ctx());
@@ -302,6 +306,14 @@ impl Viewer {
                     if selection.scope.time.is_some() {
                         ui.weak("Selected time range");
                     }
+                    if key.protocol() == Protocol::Tcp
+                        && ui
+                            .toggle_value(&mut self.tcp_flow.open, "TCP graph")
+                            .changed()
+                        && self.tcp_flow.open
+                    {
+                        self.conversation_panel.close();
+                    }
                     ui.small_button("Remove conversation filter").clicked()
                 })
                 .inner;
@@ -324,6 +336,30 @@ impl Viewer {
             }
             None if self.conversation_panel.empty() => self.read_conversations(ui.ctx(), false),
             None => {}
+        }
+    }
+
+    fn draw_tcp_flow(&mut self, ui: &mut Ui, colors: WorkbenchColors, copies: &mut Copies) {
+        let active = self
+            .conversation
+            .as_ref()
+            .filter(|selection| selection.key.protocol() == Protocol::Tcp);
+        let Some((selection, index)) = active
+            .zip(self.index.as_ref())
+            .filter(|_| self.tcp_flow.open)
+        else {
+            self.tcp_flow.suspend();
+            return;
+        };
+        let origin = self.origin();
+        self.tcp_flow
+            .request(ui.ctx(), &self.capture, index, selection);
+        if let Some(frame) =
+            self.tcp_flow
+                .show(ui, selection, self.selected, origin, colors, copies)
+        {
+            self.focus_packet(frame);
+            ui.ctx().request_repaint();
         }
     }
 
@@ -776,6 +812,7 @@ impl Viewer {
             }
         }
         self.conversation_panel.poll(self.conversation.as_mut());
+        self.tcp_flow.poll();
         if let Some(filtered) = poll(&mut self.filter_job) {
             match filtered {
                 Ok(filtered) => {
@@ -811,5 +848,6 @@ impl Viewer {
             || self.packet_job.is_some()
             || self.filter_job.is_some()
             || self.conversation_panel.pending()
+            || self.tcp_flow.pending()
     }
 }

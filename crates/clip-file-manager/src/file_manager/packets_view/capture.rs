@@ -2,7 +2,7 @@ use super::display_filter::{self, DisplayFilter};
 use crate::file_source::{FileSource, ReadCheck};
 use little_clip_core::engineering::packets::{
     self, Conversation, ConversationKey, Conversations, Format, Index, Packet, PacketRow, Protocol,
-    Reader, Summary,
+    Reader, Summary, TcpPoint, TcpTracker,
 };
 use std::{
     fs::File,
@@ -19,6 +19,7 @@ const MATCH_LIMIT: usize = 64_000;
 const SCAN_PAGE: u64 = 512;
 const CONVERSATION_SCAN_LIMIT: u64 = 1_000_000;
 const CONVERSATION_LIMIT: usize = 32_768;
+const TCP_FLOW_LIMIT: usize = 8_192;
 
 pub(super) struct Capture {
     path: PathBuf,
@@ -167,6 +168,28 @@ impl Capture {
                 unclassified: groups.unclassified_packets,
                 groups: groups.ranked(),
             })
+        })
+    }
+
+    pub fn tcp_flow(
+        &self,
+        index: &Index,
+        flow: &TcpFlowQuery,
+        cancel: &AtomicBool,
+    ) -> Result<TcpFlow, String> {
+        self.read(cancel, |reader| {
+            let mut tracker = TcpTracker::new(flow.key);
+            let mut points = Vec::new();
+            let scope = &flow.scope;
+            let scanned = visit_rows(reader, index, scope.rows.clone(), cancel, |row| {
+                if scope.contains(&row)
+                    && let Some(point) = tracker.observe(&row)
+                {
+                    points.push(point);
+                }
+                points.len() < TCP_FLOW_LIMIT
+            })?;
+            Ok(TcpFlow { points, scanned })
         })
     }
 
@@ -423,6 +446,17 @@ pub(super) struct ConversationSummary {
     pub scanned: u64,
     pub omitted: u64,
     pub unclassified: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TcpFlowQuery {
+    pub key: ConversationKey,
+    pub scope: ConversationScope,
+}
+
+pub(super) struct TcpFlow {
+    pub points: Vec<TcpPoint>,
+    pub scanned: u64,
 }
 
 pub(super) fn name(format: Format) -> &'static str {
