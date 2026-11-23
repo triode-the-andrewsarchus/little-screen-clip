@@ -5,9 +5,11 @@ use std::ops::Range;
 
 mod i2s;
 mod pcm;
+mod pwm;
 mod spi;
 pub use i2s::{I2sChannel, I2sConfig, I2sFormat, i2s};
 pub use pcm::PcmLane;
+pub use pwm::{PwmCycle, pwm};
 pub use spi::{SpiConfig, spi};
 
 const MAX_EVENTS: usize = 16_384;
@@ -22,7 +24,7 @@ pub struct Event {
 }
 
 /// Supported serial bus symbols.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
     I2cStart {
         repeated: bool,
@@ -56,6 +58,7 @@ pub enum Kind {
         received: u8,
         bits: u8,
     },
+    PwmCycle(PwmCycle),
 }
 
 /// Decodes I²C START, STOP, address, and byte events.

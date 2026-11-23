@@ -58,6 +58,7 @@ enum Mode {
     Spi,
     Uart,
     I2s,
+    Pwm,
 }
 
 impl Mode {
@@ -67,6 +68,7 @@ impl Mode {
             Self::Spi => "SPI",
             Self::Uart => "UART",
             Self::I2s => "I²S",
+            Self::Pwm => "PWM",
         }
     }
 }
@@ -130,6 +132,7 @@ enum Inputs {
     Uart { data: usize, baud: f64 },
     Spi(SpiInputs),
     I2s(I2sInputs),
+    Pwm { data: usize, active_high: bool },
 }
 
 #[derive(Clone, PartialEq)]
@@ -175,7 +178,7 @@ impl Panel {
     pub fn add_menu(&mut self, ui: &mut Ui, lanes: &[Lane]) -> bool {
         let mut added = false;
         ui.menu_button("Add decoder", |ui| {
-            for mode in [Mode::Spi, Mode::I2c, Mode::Uart, Mode::I2s] {
+            for mode in [Mode::Spi, Mode::I2c, Mode::Uart, Mode::I2s, Mode::Pwm] {
                 if ui
                     .add_enabled(self.decoders.len() < 12, egui::Button::new(mode.label()))
                     .clicked()
@@ -300,6 +303,8 @@ struct Decoder {
     clock: usize,
     data: usize,
     uart: usize,
+    pwm: usize,
+    pwm_active_high: bool,
     baud: String,
     request: Option<Key>,
     task: Option<Task<Result<Decoded, String>>>,
@@ -336,6 +341,8 @@ impl Decoder {
             clock,
             data,
             uart,
+            pwm: named_lane(lanes, &["PWM", "DUTY"]).unwrap_or(0),
+            pwm_active_high: true,
             baud: String::new(),
             request: None,
             task: None,
@@ -351,6 +358,7 @@ impl Decoder {
             Mode::Uart => Some(self.uart),
             Mode::Spi => self.spi.data.into_iter().flatten().next(),
             Mode::I2s => Some(self.i2s.channels[2]),
+            Mode::Pwm => Some(self.pwm),
         }
     }
 
@@ -360,6 +368,7 @@ impl Decoder {
             Mode::Uart => vec![self.uart],
             Mode::Spi => self.spi.channels().collect(),
             Mode::I2s => self.i2s.channels.to_vec(),
+            Mode::Pwm => vec![self.pwm],
         };
         channels.sort_unstable();
         channels.dedup();
@@ -370,6 +379,11 @@ impl Decoder {
         ui.horizontal_wrapped(|ui| match self.mode {
             Mode::Spi => self.spi.controls(ui, lanes),
             Mode::I2s => self.i2s.controls(ui, lanes),
+            Mode::Pwm => {
+                lane_picker(ui, "pwm-data", "Signal", &mut self.pwm, lanes);
+                ui.selectable_value(&mut self.pwm_active_high, true, "Active high");
+                ui.selectable_value(&mut self.pwm_active_high, false, "Active low");
+            }
             Mode::I2c => {
                 lane_picker(ui, "i2c-scl", "Clock", &mut self.clock, lanes);
                 lane_picker(ui, "i2c-sda", "Data", &mut self.data, lanes);
@@ -393,6 +407,10 @@ impl Decoder {
         match self.mode {
             Mode::Spi => self.spi.validate(),
             Mode::I2s => self.i2s.validate(),
+            Mode::Pwm => Ok(Inputs::Pwm {
+                data: self.pwm,
+                active_high: self.pwm_active_high,
+            }),
             Mode::I2c if self.clock != self.data => Ok(Inputs::I2c {
                 clock: self.clock,
                 data: self.data,
@@ -511,8 +529,10 @@ impl Decoder {
                     selection.unwrap_or(span),
                 );
                 coverage(ui, output, span);
-                let picked = if self.mode == Mode::I2s && show_samples && !events.is_empty() {
-                    samples::plot(ui, span, cursor, events)
+                let plot = enabled_plot(self.mode);
+                let picked = if let Some(plot) = plot.filter(|_| show_samples && !events.is_empty())
+                {
+                    samples::plot(ui, span, cursor, events, plot)
                 } else {
                     None
                 };
@@ -575,22 +595,32 @@ fn decoded_controls(
             }
             ui.ctx().copy_text(text);
         }
-        if mode == Mode::I2s {
-            if ui.button("Copy sample TSV").clicked() {
-                ui.ctx().copy_text(samples::tsv(events));
+        if let Some(plot) = enabled_plot(mode) {
+            if ui.button(plot.copy_label()).clicked() {
+                ui.ctx().copy_text(plot.tsv(events));
             }
-            ui.toggle_value(show_samples, "Sample plot");
-            if let Some(pcm) = pcm {
+            ui.toggle_value(show_samples, plot.label());
+            if mode == Mode::I2s
+                && let Some(pcm) = pcm
+            {
                 pcm.controls(ui, events, selection);
             }
         }
     });
 }
 
+fn enabled_plot(mode: Mode) -> Option<samples::Measure> {
+    match mode {
+        Mode::I2s => Some(samples::Measure::Pcm),
+        Mode::Pwm => Some(samples::Measure::Duty),
+        _ => None,
+    }
+}
+
 fn decode(capture: &dyn TraceInput, request: &Key, cancel: &AtomicBool) -> Result<Decoded, String> {
-    let (window, inspected_until, events) = match request.inputs {
-        Inputs::Spi(inputs) => return read_spi(capture, request.span.clone(), inputs, cancel),
-        Inputs::I2s(inputs) => return inputs.read(capture, request.span.clone(), cancel),
+    match request.inputs {
+        Inputs::Spi(inputs) => read_spi(capture, request.span.clone(), inputs, cancel),
+        Inputs::I2s(inputs) => inputs.read(capture, request.span.clone(), cancel),
         Inputs::I2c { clock, data } => {
             let window = lane_window(
                 capture,
@@ -599,19 +629,40 @@ fn decode(capture: &dyn TraceInput, request: &Key, cancel: &AtomicBool) -> Resul
             )?;
             let scl = capture.read_edges(clock, window.clone(), DECODE_EDGES, cancel)?;
             let sda = capture.read_edges(data, window.clone(), DECODE_EDGES, cancel)?;
-            let inspected = scl.inspected_until.min(sda.inspected_until);
-            (window, inspected, logic_decode::i2c(&scl, &sda)?)
+            Ok(Decoded {
+                window,
+                inspected_until: scl.inspected_until.min(sda.inspected_until),
+                events: logic_decode::i2c(&scl, &sda)?,
+            })
         }
-        Inputs::Uart { data, baud } => {
-            let window = lane_window(capture, data, request.span.clone())?;
-            let trace = capture.read_edges(data, window.clone(), DECODE_EDGES, cancel)?;
-            let events = logic_decode::uart(&trace, window.start, baud)?;
-            (window, trace.inspected_until, events)
+        Inputs::Uart { data, baud } => read_single(
+            capture,
+            request.span.clone(),
+            data,
+            cancel,
+            |trace, start| logic_decode::uart(trace, start, baud),
+        ),
+        Inputs::Pwm { data, active_high } => {
+            read_single(capture, request.span.clone(), data, cancel, |trace, _| {
+                logic_decode::pwm(trace, active_high)
+            })
         }
-    };
+    }
+}
+
+fn read_single(
+    capture: &dyn TraceInput,
+    span: Range<f64>,
+    lane: usize,
+    cancel: &AtomicBool,
+    decode: impl FnOnce(&Trace, f64) -> Result<Vec<Event>, String>,
+) -> Result<Decoded, String> {
+    let window = lane_window(capture, lane, span)?;
+    let trace = capture.read_edges(lane, window.clone(), DECODE_EDGES, cancel)?;
+    let events = decode(&trace, window.start)?;
     Ok(Decoded {
         window,
-        inspected_until,
+        inspected_until: trace.inspected_until,
         events,
     })
 }
@@ -775,6 +826,12 @@ pub(super) fn event_label(kind: Kind) -> String {
             received,
             bits,
         } => format!("{}  Short word ({received}/{bits} bits)", channel.label()),
+        Kind::PwmCycle(cycle) => format!(
+            "{:.2}% active · {} · {} pulse",
+            cycle.duty() * 100.0,
+            display_value(cycle.frequency(), "Hz"),
+            display_value(cycle.active_seconds, "s"),
+        ),
     }
 }
 
