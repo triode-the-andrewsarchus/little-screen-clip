@@ -124,7 +124,6 @@ pub(super) struct Request {
     pub traces: TraceKeys,
     pub viewport: Band,
     pub marker: f64,
-    pub antenna: bool,
     pub thresholds: Option<(Band, Cutoff)>,
     pub aperture: Option<Band>,
 }
@@ -148,16 +147,41 @@ impl Reads {
                 })
             },
         );
+        let ready = self.ready(sources, traces);
+        self.read_points(ctx, ready, request);
+    }
+
+    fn ready(&self, sources: &[Source; 2], traces: TraceKeys) -> [Option<Ready>; 2] {
         let indexed = self.index.value(&traces);
-        let ready = std::array::from_fn(|source| {
+        std::array::from_fn(|source| {
             let side = indexed?.get(source)?.as_ref()?.as_ref().ok()?;
             Some(Ready {
                 capture: sources[source].capture.clone(),
                 index: side.index.clone(),
                 trace: traces[source]?,
             })
-        });
-        self.read_points(ctx, ready, request);
+        })
+    }
+
+    pub(super) fn update_best(
+        &mut self,
+        ctx: &Context,
+        sources: &[Source; 2],
+        traces: TraceKeys,
+        band: Option<Band>,
+    ) {
+        let ready = self.ready(sources, traces);
+        let key = band
+            .filter(|_| ready.iter().any(Option::is_some))
+            .map(|band| (traces, band));
+        self.best
+            .update(ctx, key, Duration::from_secs(45), 0.15, move |cancel| {
+                let band = band.expect("match band");
+                run(ready, |side| {
+                    side.capture
+                        .best_match(&side.index, band, side.trace, cancel)
+                })
+            });
     }
 
     fn read_points(&mut self, ctx: &Context, ready: [Option<Ready>; 2], request: Request) {
@@ -187,20 +211,6 @@ impl Reads {
             move |cancel| {
                 run(markers, |side| {
                     side.capture.sample(&side.index, hz, side.trace, cancel)
-                })
-            },
-        );
-
-        let best = ready.clone();
-        self.best.update(
-            ctx,
-            (available && request.antenna).then_some((traces, viewport)),
-            Duration::from_secs(45),
-            0.15,
-            move |cancel| {
-                run(best, |side| {
-                    side.capture
-                        .best_match(&side.index, viewport, side.trace, cancel)
                 })
             },
         );

@@ -530,7 +530,10 @@ impl Viewer {
             .collect();
         let interaction = antenna::companions(
             ui,
-            self.viewport,
+            antenna::Window {
+                visible: self.viewport,
+                selected: self.markers.band(self.draft),
+            },
             height,
             &[antenna::Sweep {
                 points: self.current_trace(),

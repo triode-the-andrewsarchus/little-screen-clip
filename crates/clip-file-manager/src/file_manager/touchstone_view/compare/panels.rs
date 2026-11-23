@@ -318,9 +318,18 @@ pub(super) fn best_match(
     ui: &mut Ui,
     order: [usize; 2],
     best: Outcome<'_, Option<TracePoint>>,
+    band: Band,
+    selected: bool,
+    measured: [Option<Band>; 2],
 ) -> Option<f64> {
     ui.horizontal_wrapped(|ui| {
-        ui.weak("Best observed · visible band");
+        let scope = if selected {
+            "match band"
+        } else {
+            "visible band"
+        };
+        ui.weak(format!("Best observed · {scope}"))
+            .on_hover_text(span(band));
         let result = response(ui, best, "Finding minimum VSWR…")?;
         let colors = sweep_colors(ui);
         let mut jump = None;
@@ -329,21 +338,42 @@ pub(super) fn best_match(
                 continue;
             };
             ui.colored_label(colors[slot], letter(slot));
-            match candidate {
-                Ok(Some(point)) => {
-                    if antenna::best_button(ui, *point).clicked() {
-                        jump = Some(point.frequency_hz);
-                    }
-                }
-                Ok(None) => {
-                    ui.weak("No finite VSWR");
-                }
-                Err(error) => read_error(ui, error),
-            }
+            let coverage = measured[side].filter(|_| selected);
+            jump = band_match(ui, candidate, band, coverage).or(jump);
         }
         jump
     })
     .inner
+}
+
+fn band_match(
+    ui: &mut Ui,
+    candidate: &Result<Option<TracePoint>, String>,
+    band: Band,
+    measured: Option<Band>,
+) -> Option<f64> {
+    if let Some(measured) = measured {
+        let Some(covered) = super::overlap([Some(band), Some(measured)]) else {
+            ui.weak("Outside sweep coverage");
+            return None;
+        };
+        if covered != band {
+            ui.weak("Partial coverage").on_hover_text(span(covered));
+        }
+    }
+    match candidate {
+        Ok(Some(point)) => antenna::best_button(ui, *point)
+            .clicked()
+            .then_some(point.frequency_hz),
+        Ok(None) => {
+            ui.weak("No measured match");
+            None
+        }
+        Err(error) => {
+            read_error(ui, error);
+            None
+        }
+    }
 }
 
 pub(super) fn selected_band(search: &BandSearch, marker: f64) -> Option<ThresholdBand> {

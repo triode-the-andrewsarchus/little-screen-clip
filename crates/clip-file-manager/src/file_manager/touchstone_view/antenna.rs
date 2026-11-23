@@ -103,9 +103,14 @@ pub(super) fn best_button(ui: &mut Ui, point: TracePoint) -> Response {
     ))
 }
 
+pub(super) struct Window {
+    pub visible: Band,
+    pub selected: Option<Band>,
+}
+
 pub(super) fn companions(
     ui: &mut Ui,
-    band: Band,
+    window: Window,
     height: f32,
     sweeps: &[Sweep<'_>],
     markers: &[Marker<'_>],
@@ -142,12 +147,18 @@ pub(super) fn companions(
         Sense::click_and_drag(),
     );
     let smith_pick = smith_chart(
-        &painter, smith_rect, smith_hit, band, sweeps, markers, colors,
+        &painter,
+        smith_rect,
+        smith_hit,
+        window.visible,
+        sweeps,
+        markers,
+        colors,
     );
     impedance_plot(
         &painter,
         impedance_rect,
-        band,
+        window,
         sweeps,
         markers,
         guides,
@@ -210,13 +221,19 @@ fn smith_chart(
 fn impedance_plot(
     painter: &egui::Painter,
     rect: Rect,
-    band: Band,
+    Window {
+        visible: band,
+        selected,
+    }: Window,
     sweeps: &[Sweep<'_>],
     markers: &[Marker<'_>],
     guides: &[Guide<'_>],
     colors: WorkbenchColors,
 ) {
     painter.rect_filled(rect, 3.0, colors.recessed);
+    if let Some(selected) = selected {
+        plot::highlight(painter, rect, band, selected, colors.accent);
+    }
     plot::axes(painter, rect, band, colors.text_muted);
     let curves: Vec<_> = sweeps
         .iter()

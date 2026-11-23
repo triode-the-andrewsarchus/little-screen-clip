@@ -178,6 +178,12 @@ Clicking a plotted value opens its exact recorded frame, selects the matching DB
 
 The two-signal walkthrough filtered to the two 0x123 command frames and brushed 0–580 ms. Two 0x124 response frames shared 580 ms. Clicking the upper point selected Frame 5 at 12 A and highlighted the second byte in `CD 30`. Back restored Frame 1, its selected voltage field and the two matches with the brush intact. Clicking 24 V on the command plot selected Frame 3 and highlighted the first byte in `30 53`. At 800 × 620, clicking the command plot brought Frame 3 and its decoded fields into view.
 
+## 19. Compare antenna matches in a fixed frequency band
+
+Shift-drag either frequency plot or keep the visible range with Use visible match band. Both frequency plots shade the band. The endpoints can be edited in MHz, and Fit band brings the selected frequencies back into view. Best observed stays beside the endpoints. It searches the same interval in both recordings and identifies partial or missing sweep coverage. Click either minimum to place the shared marker at that measured row. Clear band returns the search to the visible frequencies.
+
+The desktop walkthrough used two antenna sweeps with offset frequency grids and 50 Ω and 75 Ω references. B’s visible-band minimum was 436.775 MHz. Brushing about 429.907–434.962 MHz found 433.500 MHz for A and 434.925 MHz for B. Selecting B’s result showed the exact B measurement and the interpolated A value. Zooming past the band kept both match results visible. Clicking B again brought its frequency back into view. Brushing the impedance plot changed the search interval while the marker stayed at 434.925 MHz. Entering 420.000–420.010 MHz found A’s 420 MHz row and showed B outside coverage. At 800 × 620, the band, both results, and all three linked plots fit together.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.

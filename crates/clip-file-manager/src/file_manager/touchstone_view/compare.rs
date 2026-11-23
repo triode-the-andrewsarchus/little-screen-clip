@@ -1,5 +1,6 @@
 //! Compare two measurements on a shared frequency axis with exact record links.
 
+mod band;
 mod data;
 mod panels;
 
@@ -10,6 +11,7 @@ use super::{
     plot::{self, Projection},
 };
 use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
+use band::MatchBand;
 use data::{Element, Reads, Request, Source, TraceKeys};
 use egui::{Button, Color32, PointerButton, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::{
@@ -50,6 +52,7 @@ pub(in crate::file_manager) struct Viewer {
     marker: f64,
     projection: Projection,
     antenna: bool,
+    match_band: MatchBand,
 }
 
 impl Viewer {
@@ -87,6 +90,7 @@ impl Viewer {
             marker,
             projection: preferred(selected.parameter),
             antenna,
+            match_band: MatchBand::default(),
         })
     }
 
@@ -129,12 +133,15 @@ impl Viewer {
         let common = overlap(measured);
         let compatible = self.compatible();
         self.frequency_controls(ui, common, compatible);
+        self.match_readout(ui, measured);
         let enough = compatible && common.is_some_and(|band| band[1] > band[0]);
-        self.tools.controls(
-            ui,
-            enough && self.selected.parameter == Parameter::S,
-            enough,
-        );
+        if enough || !self.antenna_open() || self.tools.active() {
+            self.tools.controls(
+                ui,
+                enough && self.selected.parameter == Parameter::S,
+                enough,
+            );
+        }
         let available_height = ui.available_height();
         egui::ScrollArea::vertical()
             .id_salt("RF comparison")
@@ -158,6 +165,7 @@ impl Viewer {
                         colors,
                     );
                 }
+                self.match_band.finish_frame(ui);
                 self.details(ui, common, compatible);
             });
     }
@@ -174,6 +182,21 @@ impl Viewer {
             }
             if ui.button("Swap A/B").clicked() {
                 self.order.swap(0, 1);
+            }
+            let mut mhz = self.marker * 1e-6;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut mhz)
+                        .range(self.full[0] * 1e-6..=self.full[1] * 1e-6)
+                        .max_decimals(9)
+                        .speed(0.5)
+                        .prefix("Marker ")
+                        .suffix(" MHz")
+                        .update_while_editing(false),
+                )
+                .changed()
+            {
+                self.jump(mhz * 1e6);
             }
         });
     }
@@ -339,23 +362,11 @@ impl Viewer {
             {
                 self.viewport = plot::fit_band(plot::pad_single(band), self.full);
             }
-            ui.label("Marker");
-            let mut mhz = self.marker * 1e-6;
-            if ui
-                .add(
-                    egui::DragValue::new(&mut mhz)
-                        .range(self.full[0] * 1e-6..=self.full[1] * 1e-6)
-                        .max_decimals(9)
-                        .speed(0.5)
-                        .suffix(" MHz")
-                        .update_while_editing(false),
-                )
-                .changed()
-            {
-                self.jump(mhz * 1e6);
-            }
         });
         self.coverage(ui, common, compatible);
+        if self.antenna_open() {
+            self.match_band.controls(ui, &mut self.viewport, self.full);
+        }
     }
 
     fn decibel_label(&self, has_antenna: bool) -> String {
@@ -416,6 +427,25 @@ impl Viewer {
         });
     }
 
+    fn match_readout(&mut self, ui: &mut Ui, measured: [Option<Band>; 2]) {
+        let linked = self.antenna_open();
+        let band = self.match_band.selected.unwrap_or(self.viewport);
+        self.reads
+            .update_best(ui.ctx(), &self.sources, self.traces, linked.then_some(band));
+        if linked
+            && let Some(hz) = panels::best_match(
+                ui,
+                self.order,
+                self.reads.best(self.traces, band),
+                band,
+                self.match_band.selected.is_some(),
+                measured,
+            )
+        {
+            self.jump(hz);
+        }
+    }
+
     fn details(&mut self, ui: &mut Ui, common: Option<Band>, compatible: bool) {
         let matched = common.filter(|_| compatible);
         let linked = self.antenna_open();
@@ -432,7 +462,6 @@ impl Viewer {
                 traces: self.traces,
                 viewport: self.viewport,
                 marker: self.marker,
-                antenna: linked,
                 thresholds: threshold,
                 aperture,
             },
@@ -464,12 +493,7 @@ impl Viewer {
             self.projection,
             linked,
         );
-        let best_jump = linked
-            .then(|| {
-                panels::best_match(ui, self.order, self.reads.best(self.traces, self.viewport))
-            })
-            .flatten();
-        if let Some(hz) = metric_jump.or(marker_jump).or(best_jump) {
+        if let Some(hz) = metric_jump.or(marker_jump) {
             self.jump(hz);
             ui.ctx().request_repaint();
         }
@@ -521,7 +545,10 @@ impl Viewer {
         }
         let interaction = antenna::companions(
             ui,
-            self.viewport,
+            antenna::Window {
+                visible: self.viewport,
+                selected: self.match_band.visible_selection(),
+            },
             height,
             &sweeps,
             &markers,
@@ -618,6 +645,11 @@ impl Viewer {
                 colors.text_muted.gamma_multiply(0.37),
             );
         }
+        if self.antenna_open()
+            && let Some(band) = self.match_band.visible_selection()
+        {
+            plot::highlight(&painter, rect, self.viewport, band, colors.accent);
+        }
         let matched = common.filter(|_| only.is_none() && self.compatible());
         if let Some(aperture) = self.tools.aperture(matched, self.marker) {
             plot::highlight(&painter, rect, self.viewport, aperture, colors.warning);
@@ -668,8 +700,11 @@ impl Viewer {
             colors.text_primary,
         );
         self.paint_marker_dots(&painter, rect, values, only, sweep_colors(ui));
-        response
-            .on_hover_text("Click or drag the shared marker · Scroll to zoom · Middle-drag to pan");
+        response.on_hover_text(if self.antenna_open() {
+            "Shift-drag to select a match band · Click or drag the shared marker · Scroll to zoom · Middle-drag to pan"
+        } else {
+            "Click or drag the shared marker · Scroll to zoom · Middle-drag to pan"
+        });
     }
 
     fn paint_marker_dots(
@@ -711,7 +746,14 @@ impl Viewer {
     }
 
     fn navigate(&mut self, ui: &Ui, rect: Rect, response: &Response) {
-        self.viewport = plot::navigate(ui, rect, response, self.viewport, self.full, true);
+        let viewport = plot::navigate(ui, rect, response, self.viewport, self.full, true);
+        if self.viewport != viewport {
+            self.viewport = viewport;
+            ui.ctx().request_repaint();
+        }
+        if self.antenna_open() && self.match_band.drag(ui, rect, response, self.viewport) {
+            return;
+        }
         if (response.clicked_by(PointerButton::Primary)
             || response.dragged_by(PointerButton::Primary))
             && let Some(pos) = response.interact_pointer_pos()
