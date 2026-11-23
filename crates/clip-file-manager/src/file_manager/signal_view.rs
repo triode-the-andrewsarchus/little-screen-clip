@@ -5,6 +5,7 @@ mod derived;
 pub(super) mod filter_editor;
 pub(super) mod frequency_plot;
 mod inputs;
+mod interval;
 pub(super) mod session;
 pub(super) mod spectra;
 pub(super) mod timeline;
@@ -24,7 +25,7 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
 };
-use timeline::Link;
+use timeline::{Interaction, Link};
 
 pub(super) const MAX_SOURCES: usize = 8;
 
@@ -36,6 +37,7 @@ pub(super) struct Viewer {
     span: Range<f64>,
     probe: Option<f64>,
     reference: Option<Reference>,
+    shared: interval::Shared,
     reveal_source: Option<u64>,
     session: session::Session,
     error: Option<String>,
@@ -56,6 +58,7 @@ struct Reference {
 
 enum SourceAction {
     Pin(f64),
+    Share(Range<f64>),
     Align(Clock),
     ClearReference,
     Remove,
@@ -127,6 +130,7 @@ impl Viewer {
             domain,
             probe: None,
             reference: None,
+            shared: interval::Shared::default(),
             reveal_source: None,
             session: session::Session::default(),
             error: None,
@@ -187,6 +191,7 @@ impl Viewer {
             && source.clock == Clock::default()
             && !self.derived.open()
             && self.reference.is_none()
+            && self.shared.pin.is_none()
             && !matches!(source.capture, Capture::Unavailable(_))
         {
             if self.session.file.is_some() {
@@ -295,6 +300,9 @@ impl Viewer {
             self.span = domain.clone();
         }
         self.domain = domain;
+        let shared = self
+            .shared
+            .controls(ui, &self.sources, preview, &mut self.span, &self.domain);
         let mut next_probe = None;
         let mut action = None;
         let reference_time = self.reference_time_on(preview);
@@ -328,6 +336,14 @@ impl Viewer {
                         action = Some((index, request));
                     }
                     let clock = source.display_clock(preview);
+                    let native = self.shared.source(
+                        ui,
+                        source,
+                        shared.as_ref(),
+                        clock,
+                        &mut self.span,
+                        &self.domain,
+                    );
                     let previous = clock.native_range(&self.span);
                     *source.capture.span() = previous.clone();
                     let link = Link {
@@ -336,13 +352,18 @@ impl Viewer {
                         probe: self.probe.map(|probe| clock.to_native(probe)),
                         reference: reference_time.map(|time| clock.to_native(time)),
                         landmark: self.alignment.marker(source.id),
+                        shared: native,
+                        share_selection: may_remove,
                     };
                     let height = height.max(source.capture.min_height());
                     ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
-                        if let Some(probe) =
-                            source.capture.content(ui, palette, copies, Some(&link))
-                        {
-                            next_probe = Some(clock.to_workspace(probe));
+                        let interaction = source.capture.content(ui, palette, copies, Some(&link));
+                        next_probe = interaction
+                            .probe
+                            .map(|probe| clock.to_workspace(probe))
+                            .or(next_probe);
+                        if let Some(range) = interaction.share {
+                            action = Some((index, SourceAction::Share(range)));
                         }
                     });
                     if self.reveal_source.take_if(|id| *id == source.id).is_some() {
@@ -376,6 +397,7 @@ impl Viewer {
                     &inputs,
                     self.probe,
                     reference_time,
+                    shared.as_ref(),
                 )
                 .or(next_probe);
         });
@@ -417,6 +439,10 @@ impl Viewer {
                     native_time,
                 });
             }
+            SourceAction::Share(native) => self.shared.set(Some(interval::Pin {
+                source: self.sources[index].id,
+                native,
+            })),
             SourceAction::Align(clock) => {
                 if !self.sources[index].set_clock(clock) {
                     self.error =
@@ -428,6 +454,7 @@ impl Viewer {
             SourceAction::Remove => {
                 let removed = self.sources.remove(index);
                 self.alignment.forget(removed.id);
+                self.shared.remove_source(removed.id);
                 if self
                     .reference
                     .as_ref()
@@ -670,11 +697,11 @@ impl Capture {
         palette: &AppPalette,
         copies: &mut Copies,
         link: Option<&Link>,
-    ) -> Option<f64> {
+    ) -> Interaction {
         match self {
             Self::Analog(view) => view.content(ui, palette, copies, link),
             Self::Digital(view) => view.content(ui, copies, link),
-            Self::Unavailable(_) => None,
+            Self::Unavailable(_) => Interaction::default(),
         }
     }
 }

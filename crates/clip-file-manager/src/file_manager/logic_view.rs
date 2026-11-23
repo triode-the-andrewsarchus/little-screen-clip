@@ -9,7 +9,7 @@ use super::{
     preview_copy::Copies,
     preview_job::Task,
     scope_view::plot as timing,
-    signal_view::timeline::{self, Link},
+    signal_view::timeline::{self, Interaction, Link},
 };
 use crate::file_source::ReadCheck;
 use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2, vec2};
@@ -182,6 +182,14 @@ impl Viewer {
         self.protocols.pins()
     }
 
+    pub(super) fn measurement_channel(&self) -> (usize, Option<bool>, bool) {
+        let (lane, polarity) = self.protocols.active_pwm().map_or_else(
+            || (self.focused_lane(), None),
+            |(lane, active_high)| (lane, Some(active_high)),
+        );
+        (lane, polarity, self.refined)
+    }
+
     pub(super) fn cursor(&self) -> Option<f64> {
         self.cursor
     }
@@ -195,10 +203,10 @@ impl Viewer {
         ui: &mut Ui,
         copies: &mut Copies,
         link: Option<&Link>,
-    ) -> Option<f64> {
+    ) -> Interaction {
         self.poll(ui.ctx());
         self.refine(ui.ctx(), link.is_none());
-        self.toolbar(ui, copies, Link::clock(link));
+        let share = self.toolbar(ui, copies, link);
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
             ui.weak(message);
         }
@@ -211,7 +219,7 @@ impl Viewer {
         if self.frequency.visible && self.frequency.spectra.origin().is_none() {
             self.protocols.close();
             self.frequency(ui, link);
-            return None;
+            return Interaction { probe: None, share };
         }
         if self.show_transitions {
             self.protocols.controls(ui, &self.overview.lanes);
@@ -237,15 +245,16 @@ impl Viewer {
                 self.transitions(ui);
             }
         }
-        probe
+        Interaction { probe, share }
     }
 
     fn toolbar(
         &mut self,
         ui: &mut Ui,
         copies: &mut Copies,
-        clock: little_clip_core::engineering::analysis::Clock,
-    ) {
+        link: Option<&Link>,
+    ) -> Option<Range<f64>> {
+        let clock = Link::clock(link);
         ui.horizontal_wrapped(|ui| {
             ui.strong(self.overview.label);
             ui.weak(format!("{} channels", self.overview.lanes.len()));
@@ -303,7 +312,9 @@ impl Viewer {
                     display_value((range.end - range.start) * clock.scale(), "s")
                 ));
             }
-        });
+            Link::share_button(link, ui, self.selected.as_ref())
+        })
+        .inner
     }
 
     fn visible_lanes(&self) -> Vec<usize> {

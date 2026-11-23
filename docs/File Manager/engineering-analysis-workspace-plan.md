@@ -92,11 +92,23 @@ The sample file in Engineering has 15,000 missing CH1 values, a continuous zero 
 
 ## 10. Measure the same interval across recordings
 
-- [ ] Pin an existing A/B selection to the analysis workspace from the source that produced it. Agree on the same times across the aligned recordings and show each source's actual coverage.
-- [ ] Show results beside the source that produced them. Select a result to focus its contributing data at the right scale. Preserve independent local cursors, selections and decoder settings.
-- [ ] Verify a PWM duty change alongside an analog response, including a trimmed recording, a sampled gap, and a changed clock correction.
+- [x] Pin an existing A/B selection to the analysis workspace from the source that produced it. Agree on the same times across the aligned recordings and show each source's actual coverage.
+- [x] Show results beside the source that produced them. Select a result to focus its contributing data at the right scale. Preserve independent local cursors, selections and decoder settings.
+- [x] Verify a PWM duty change alongside an analog response, including a trimmed recording, a sampled gap, and a changed clock correction.
 
-Put the pin action beside the A/B readout in multi-recording analysis. Take the interval from the recording's native times and draw its aligned edges on the linked tracks. A source that starts partway through the interval should show its covered portion and identify which values can be measured there. Let the user return from a focused result to the shared interval in one action. Begin by reusing the scope and power statistics and decoded PWM cycles.
+Share range is beside the local selection. A purple bracket marks the shared interval on recorded and equation traces, and the header names the source that owns its endpoints. Each recording reports its covered time and the measurements for its active channel. The scope reports present samples and links the minimum and maximum to their original sample neighborhoods. Logic reports observed edges or the extrema of complete PWM cycles when a PWM decoder is selected. The PWM buttons bring the matching cycle and its decoder into view. Show shared range returns to the comparison.
+
+The paired example under Oscilloscope captures spans about 19.46 to 89.37 ms. The analog report found 1,338 of 1,398 samples and a 2 V peak-to-peak difference. The logic recording ended at 75.001 ms and contributed ten complete cycles, with duty values of 25% and 75%. Clicking 75% opened the cycle at 50 ms. Returning kept the original A/B cursors. After a 10 ms logic clock correction, coverage extended to 85.001 ms and the range contained twelve complete cycles. The saved recipe kept the native pin and clock correction. Reopening it at 800 × 620 in the light theme restored both local scope cursors, the shared interval, the selected PWM decoder, and the corrected coverage.
+
+The sample scan is capped at 65,536 readings and the edge scan at 8,192 transitions. Bounded scans identify the actual window used for the readings.
+
+## 11. Add and wire logic decoders in place
+
+- [ ] Replace the Add decoder popup with visible protocol actions in the recording and equation workspaces.
+- [ ] Put the signal assignments where a user can see the participating lanes and inspect the effect of a wiring change. Keep the current assignments and invalid combinations legible in a narrow window.
+- [ ] Walk from an undecoded SPI or I²C capture to usable annotations, then follow a surprising decoded value to its source pulses. Confirm that saved decoder settings still reopen.
+
+A multi-recording workspace uses vertical space to show timing relationships. Put the five protocol actions together near the decoder row so adding a decoder uses the same space as editing it. Present signal assignments inline. For a capture with many lanes, let the user choose from the named lane list with the current assignment in view.
 
 ## Review after each addition
 

@@ -20,7 +20,7 @@ use super::signal_view::spectra as spectrum_input;
 use super::{
     preview_copy::Copies,
     preview_job::Task,
-    signal_view::timeline::{self, Link},
+    signal_view::timeline::{self, Interaction, Link},
 };
 use crate::file_source::ReadCheck;
 use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2};
@@ -211,6 +211,10 @@ impl Viewer {
         &self.recording
     }
 
+    pub(super) fn measurement_channel(&self) -> usize {
+        self.active
+    }
+
     pub(super) fn cursor(&self) -> Option<f64> {
         self.cursors[0].or(self.cursors[1])
     }
@@ -225,7 +229,7 @@ impl Viewer {
         palette: &AppPalette,
         copies: &mut Copies,
         link: Option<&Link>,
-    ) -> Option<f64> {
+    ) -> Interaction {
         if link.is_none() {
             return egui::ScrollArea::vertical()
                 .id_salt("scope-content")
@@ -242,10 +246,10 @@ impl Viewer {
         palette: &AppPalette,
         copies: &mut Copies,
         link: Option<&Link>,
-    ) -> Option<f64> {
+    ) -> Interaction {
         self.poll(ui.ctx());
         if self.logic_subview(ui, palette, copies) {
-            return None;
+            return Interaction::default();
         }
         let spectrum_opened = self.toolbar(ui, copies);
         self.power_totals(ui);
@@ -257,7 +261,7 @@ impl Viewer {
         );
         let showing_spectrum = self.spectrum && self.spectra.origin().is_none();
         let show_time = !showing_spectrum || !self.spectra.only;
-        let probe = if show_time {
+        let interaction = if show_time {
             let height = if showing_spectrum {
                 (ui.available_height() * 0.32).max(68.0)
             } else {
@@ -265,15 +269,17 @@ impl Viewer {
             };
             let probe = self.waveform(ui, height, link);
             self.overview_ui(ui);
-            ui.scope(|ui| {
-                ui.spacing_mut().interact_size.y = 24.0;
-                ui.spacing_mut().button_padding.y = 2.0;
-                self.cursor_readout(ui, link);
-            });
-            probe
+            let share = ui
+                .scope(|ui| {
+                    ui.spacing_mut().interact_size.y = 24.0;
+                    ui.spacing_mut().button_padding.y = 2.0;
+                    self.cursor_readout(ui, link)
+                })
+                .inner;
+            Interaction { probe, share }
         } else {
             self.hover.time = None;
-            None
+            Interaction::default()
         };
         if showing_spectrum {
             let filter_added = std::mem::take(&mut self.filters.reveal_spectrum);
@@ -296,7 +302,7 @@ impl Viewer {
         if self.pending() {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
-        probe
+        interaction
     }
 
     fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) -> bool {
@@ -786,7 +792,7 @@ impl Viewer {
         (key.channel == self.active && key.span == *range).then_some(self.measurements.as_ref()?)
     }
 
-    fn cursor_readout(&mut self, ui: &mut Ui, link: Option<&Link>) {
+    fn cursor_readout(&mut self, ui: &mut Ui, link: Option<&Link>) -> Option<Range<f64>> {
         let clock = Link::clock(link);
         let mut center = None;
         let channel = &self.overview.channels[self.active];
@@ -822,48 +828,57 @@ impl Viewer {
                 ui.weak("Scroll to zoom · Middle-drag to pan · Drag to measure");
             }
         });
-        ui.horizontal_wrapped(|ui| {
-            if let Some(range) = &selection {
-                let width = (range.end - range.start) * clock.scale();
-                ui.label(format!(
-                    "Δt  {}    1/Δt  {}",
-                    display_value(width, "s"),
-                    display_value(width.recip(), "Hz")
-                ));
-                let rows = sample_span(channel, range.clone());
-                ui.weak(format!("{} samples in range", rows.end - rows.start));
-            }
-            if let Some(measured) = self.measurements_for(selection.as_ref().unwrap_or(&self.span))
-            {
-                let missing = measured.raw.samples.len() - measured.valid_samples;
-                if missing > 0 {
-                    ui.weak(format!(
-                        "{missing} missing samples{}",
-                        if measured.limited { " in window" } else { "" }
+        let share = ui
+            .horizontal_wrapped(|ui| {
+                let ready = selection
+                    .as_ref()
+                    .filter(|_| self.snaps.iter().all(|snap| !snap.pending()));
+                let share = Link::share_button(link, ui, ready);
+                if let Some(range) = &selection {
+                    let width = (range.end - range.start) * clock.scale();
+                    ui.label(format!(
+                        "Δt  {}    1/Δt  {}",
+                        display_value(width, "s"),
+                        display_value(width.recip(), "Hz")
                     ));
+                    let rows = sample_span(channel, range.clone());
+                    ui.weak(format!("{} samples in range", rows.end - rows.start));
                 }
-                if measured.extrema.valid() {
-                    let reading = display_value(
-                        f64::from(measured.extrema.max - measured.extrema.min),
-                        &channel.unit,
-                    );
-                    if missing > 0 || measured.limited {
-                        ui.weak(format!("Observed Pk–Pk  {reading}"));
-                    } else {
-                        ui.weak(format!("Pk–Pk  {reading}"));
+                if let Some(measured) =
+                    self.measurements_for(selection.as_ref().unwrap_or(&self.span))
+                {
+                    let missing = measured.raw.samples.len() - measured.valid_samples;
+                    if missing > 0 {
+                        ui.weak(format!(
+                            "{missing} missing samples{}",
+                            if measured.limited { " in window" } else { "" }
+                        ));
+                    }
+                    if measured.extrema.valid() {
+                        let reading = display_value(
+                            f64::from(measured.extrema.max - measured.extrema.min),
+                            &channel.unit,
+                        );
+                        if missing > 0 || measured.limited {
+                            ui.weak(format!("Observed Pk–Pk  {reading}"));
+                        } else {
+                            ui.weak(format!("Pk–Pk  {reading}"));
+                        }
+                    }
+                    if measured.limited {
+                        ui.weak("Waveform measurements use a 65k-sample window");
                     }
                 }
-                if measured.limited {
-                    ui.weak("Waveform measurements use a 65k-sample window");
-                }
-            }
-        });
+                share
+            })
+            .inner;
         if let Some(time) = center {
             let half = (self.span.end - self.span.start) / 2.0;
             let domain = link.map_or(&self.domain, |link| &link.domain);
             let step = self.overview.channels[self.active].interval_seconds;
             self.span = timeline::fit(domain, time - half..time + half, step);
         }
+        share
     }
 
     fn power_totals(&self, ui: &mut Ui) {

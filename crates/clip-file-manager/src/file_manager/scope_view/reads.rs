@@ -9,7 +9,7 @@ use std::{
 };
 
 pub(super) const DETAIL_SAMPLES: u64 = 4096;
-const ANALYSIS_SAMPLES: u64 = 65_536;
+pub(in crate::file_manager) const ANALYSIS_SAMPLES: u64 = 65_536;
 const MATH_SAMPLES: u64 = 262_144;
 
 pub(in crate::file_manager) struct RawChannel {
@@ -149,12 +149,7 @@ pub(super) fn analyze(
                 }
             })
             .transpose()?;
-        let mut extrema = Peak::default();
-        let mut valid_samples = 0;
-        for &value in raw.samples.iter().filter(|value| value.is_finite()) {
-            valid_samples += 1;
-            extrema.add(std::slice::from_ref(&value));
-        }
+        let stats = sample_extrema(&raw.samples);
         let raw = data
             .into_iter()
             .nth(request.active)
@@ -163,13 +158,50 @@ pub(super) fn analyze(
         Ok(Measurements {
             frequencies,
             raw,
-            extrema,
-            valid_samples,
+            extrema: stats.peak,
+            valid_samples: stats.valid,
             math,
             limited,
             power_totals,
         })
     })
+}
+
+pub(in crate::file_manager) struct SampleStats {
+    pub peak: Peak,
+    pub valid: usize,
+    pub extrema: [usize; 2],
+}
+
+pub(in crate::file_manager) fn sample_extrema(samples: &[f32]) -> SampleStats {
+    let mut stats = SampleStats {
+        peak: Peak::default(),
+        valid: 0,
+        extrema: [0; 2],
+    };
+    for (index, &sample) in samples
+        .iter()
+        .enumerate()
+        .filter(|(_, sample)| sample.is_finite())
+    {
+        if sample < stats.peak.min {
+            stats.peak.min = sample;
+            stats.extrema[0] = index;
+        }
+        if sample > stats.peak.max {
+            stats.peak.max = sample;
+            stats.extrema[1] = index;
+        }
+        stats.valid += 1;
+    }
+    stats
+}
+
+pub(in crate::file_manager) fn centered_rows(rows: Range<u64>, limit: u64) -> Range<u64> {
+    let count = rows.end.saturating_sub(rows.start);
+    let excess = count.saturating_sub(limit);
+    let start = rows.start + excess / 2;
+    start..start + count.min(limit)
 }
 
 fn analysis_data(
@@ -185,19 +217,9 @@ fn analysis_data(
         .enumerate()
         .map(|(index, channel)| {
             let span = sample_span(channel, span.clone());
-            let length = span.end.saturating_sub(span.start);
-            let start = if length > limit {
-                limited = true;
-                span.start + (length - limit) / 2
-            } else {
-                span.start
-            };
-            read_raw(
-                capture,
-                index,
-                start..span.end.min(start.saturating_add(limit)),
-                cancel,
-            )
+            let rows = centered_rows(span.clone(), limit);
+            limited |= span != rows;
+            read_raw(capture, index, rows, cancel)
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok((data, limited))

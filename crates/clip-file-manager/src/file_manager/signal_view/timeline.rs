@@ -10,6 +10,14 @@ pub(in crate::file_manager) struct Link {
     pub probe: Option<f64>,
     pub reference: Option<f64>,
     pub landmark: Option<LandmarkMarker>,
+    pub shared: Option<Range<f64>>,
+    pub share_selection: bool,
+}
+
+#[derive(Default)]
+pub(in crate::file_manager) struct Interaction {
+    pub probe: Option<f64>,
+    pub share: Option<Range<f64>>,
 }
 
 #[derive(Clone, Copy)]
@@ -23,7 +31,25 @@ impl Link {
         link.map(|link| link.clock).unwrap_or_default()
     }
 
+    pub fn share_button(
+        link: Option<&Self>,
+        ui: &mut egui::Ui,
+        selection: Option<&Range<f64>>,
+    ) -> Option<Range<f64>> {
+        link.filter(|link| link.share_selection)?;
+        let share = ui
+            .add_enabled(selection.is_some(), egui::Button::new("Share range"))
+            .on_hover_text("Compare this interval across recordings")
+            .on_disabled_hover_text("Drag across the trace to select a time range");
+        if share.clicked() {
+            selection.cloned()
+        } else {
+            None
+        }
+    }
+
     pub fn paint_markers(&self, painter: &egui::Painter, rect: Rect, span: &Range<f64>) {
+        paint_shared(painter, rect, span, self.shared.as_ref());
         if let Some(landmark) = self.landmark.filter(|mark| span.contains(&mark.time)) {
             let (label, color) = if landmark.reference {
                 ("Reference landmark", egui::Color32::from_rgb(85, 181, 235))
@@ -37,6 +63,45 @@ impl Link {
             .is_none_or(|mark| Some(mark.time) != self.reference)
         {
             paint_reference(painter, rect, span, self.reference);
+        }
+    }
+}
+
+pub(super) fn shared_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_rgb(196, 158, 237)
+    } else {
+        egui::Color32::from_rgb(107, 53, 155)
+    }
+}
+
+pub(super) fn paint_shared(
+    painter: &egui::Painter,
+    rect: Rect,
+    visible: &Range<f64>,
+    shared: Option<&Range<f64>>,
+) {
+    let Some(shared) = shared else { return };
+    let first = shared.start.max(visible.start);
+    let last = shared.end.min(visible.end);
+    if first >= last {
+        return;
+    }
+    let color = shared_color(&painter.ctx().global_style().visuals);
+    let left = plot::x_at(rect, visible, first);
+    let right = plot::x_at(rect, visible, last);
+    painter.hline(
+        left..=right,
+        rect.top() + 1.0,
+        egui::Stroke::new(2.5, color),
+    );
+    for time in [shared.start, shared.end] {
+        if visible.start <= time && time <= visible.end {
+            painter.vline(
+                plot::x_at(rect, visible, time),
+                rect.y_range(),
+                egui::Stroke::new(1.2, color.gamma_multiply(0.70)),
+            );
         }
     }
 }

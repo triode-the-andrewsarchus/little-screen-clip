@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-const DECODE_EDGES: usize = 8192;
+pub(in crate::file_manager) const DECODE_EDGES: usize = 8192;
 
 mod i2s;
 mod samples;
@@ -302,6 +302,13 @@ impl Panel {
 
     pub fn data_lane(&self) -> Option<usize> {
         self.current().and_then(Decoder::data_lane)
+    }
+
+    pub(super) fn active_pwm(&self) -> Option<(usize, bool)> {
+        match self.current()?.inputs().ok()? {
+            Inputs::Pwm { data, active_high } => Some((data, active_high)),
+            _ => None,
+        }
     }
 
     pub fn channels(&self) -> Option<Vec<usize>> {

@@ -228,6 +228,7 @@ impl Derived {
         inputs: &[Input],
         probe: Option<f64>,
         reference: Option<f64>,
+        shared: Option<&Range<f64>>,
     ) -> Option<f64> {
         if !self.open() {
             return None;
@@ -262,7 +263,9 @@ impl Derived {
             ui.ctx().request_repaint();
         }
         let frame = frame?;
-        let pointed = self.time_plot(ui, &mut plots, &frame, span, domain, probe, reference, band);
+        let pointed = self.time_plot(
+            ui, &mut plots, &frame, span, domain, probe, reference, band, shared,
+        );
         let reveal = self.frequency.take_reveal();
         let spectrum = ui.scope(|ui| {
             self.frequency
@@ -368,6 +371,7 @@ impl Derived {
         probe: Option<f64>,
         reference: Option<f64>,
         annotations: Option<Rect>,
+        shared: Option<&Range<f64>>,
     ) -> Option<f64> {
         if self.frequency.only() || plots.is_empty() {
             return None;
@@ -403,6 +407,7 @@ impl Derived {
         );
         for plot in plots.iter().filter(|plot| ui.is_rect_visible(plot.rect)) {
             self.measurements.paint(ui.painter(), plot.rect, span);
+            timeline::paint_shared(ui.painter(), plot.rect, span, shared);
         }
         if let Some(index) = self.frequency.origin_lane()
             && let Some(plot) = plots.get(index)

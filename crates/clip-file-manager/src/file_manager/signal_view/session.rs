@@ -59,6 +59,8 @@ struct Recipe {
     #[serde(default)]
     scroll_offset: f32,
     reference: Option<Reference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shared: Option<super::interval::Pin>,
     derived: derived::SessionSettings,
     #[serde(default)]
     alignment: super::alignment::Settings,
@@ -214,6 +216,13 @@ impl Recipe {
         }) {
             return Err("Invalid analysis reference marker".into());
         }
+        if recipe
+            .shared
+            .as_ref()
+            .is_some_and(|shared| !ids.contains(&shared.source) || !valid_span(&shared.native))
+        {
+            return Err("Invalid shared analysis range".into());
+        }
         Ok((recipe, file))
     }
 
@@ -224,6 +233,7 @@ impl Recipe {
             span: viewer.span.clone(),
             scroll_offset: viewer.session.scroll.offset,
             reference: viewer.reference.clone(),
+            shared: viewer.shared.pin.clone(),
             derived: viewer.derived.session_settings(),
             alignment: viewer.alignment.save(),
         }
@@ -533,6 +543,7 @@ impl Viewer {
             domain,
             span: recipe.span,
             reference: recipe.reference,
+            shared: super::interval::Shared::restore(recipe.shared),
             reveal_source: None,
             derived: derived::Derived::default(),
             alignment: super::alignment::Alignment::default(),
@@ -720,6 +731,10 @@ mod tests {
             source: 3,
             native_time: 0.001,
         });
+        viewer.shared.set(Some(super::super::interval::Pin {
+            source: 2,
+            native: 0.001..0.002,
+        }));
         let path = root.join("bench.clip-analysis");
         Recipe::take(&viewer)
             .write(Target::New(path.clone()))
@@ -748,6 +763,16 @@ mod tests {
         assert_eq!(loaded.span, 0.0..0.125);
         assert_eq!(loaded.session.scroll.restore, Some(240.0));
         assert_eq!(loaded.reference_time(), Some(0.001));
+        let pin = loaded.shared.pin.as_ref().unwrap();
+        assert_eq!(pin.source, 2);
+        assert_eq!(pin.native, 0.001..0.002);
+        assert_eq!(
+            pin.project(&loaded.sources[0], None),
+            Some(clock.workspace_range(&pin.native))
+        );
+        let workspace = clock.workspace_range(&pin.native);
+        assert_eq!(pin.native_for(2, clock, &workspace), pin.native);
+        assert_eq!(pin.native_for(3, Clock::default(), &workspace), workspace);
         assert_eq!(loaded.sources[0].inputs()[0].alias, "s2_c1");
     }
 
