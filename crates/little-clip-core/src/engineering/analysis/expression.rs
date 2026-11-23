@@ -4,7 +4,7 @@ mod dimension;
 mod parser;
 
 pub use dimension::Dimension;
-pub(super) use parser::rename_reference;
+pub(super) use parser::{rename_reference, rewrite_references};
 
 use std::fmt;
 

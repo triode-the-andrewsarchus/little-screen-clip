@@ -1,6 +1,6 @@
 //! Compile and evaluate named equations over mixed-signal observations.
 
-use super::expression::rename_reference;
+use super::expression::{rename_reference, rewrite_references};
 use super::{Binding, Dimension, Expression, SignalType, Value};
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -81,20 +81,42 @@ impl SignalGraph {
         if name == previous {
             return Ok(document.to_owned());
         }
-        let mut program = String::with_capacity(document.len());
-        for (index, line) in document.split_inclusive('\n').enumerate() {
-            if let Some((declaration, source)) = line.split_once('=').filter(|_| index >= row) {
-                program.push_str(declaration);
-                program.push('=');
-                program.push_str(
-                    &rename_reference(source, previous, name)
-                        .map_err(|error| problem(index + 1, error.to_string()))?,
-                );
+        rewrite_program(document, |index, source| {
+            if index >= row {
+                rename_reference(source, previous, name)
             } else {
-                program.push_str(line);
+                Ok(source.to_owned())
             }
-        }
-        Ok(program)
+        })
+    }
+
+    /// Resolves shorthand input names to persistent input identifiers.
+    ///
+    /// Declarations take precedence over shorthand names. Rewriting an equation
+    /// makes its input bindings stable if other sources are later removed.
+    ///
+    /// # Errors
+    /// Returns a lexical error with its equation line number.
+    pub fn resolve_input_names(
+        document: &str,
+        aliases: &std::collections::HashMap<String, &str>,
+    ) -> Result<String, GraphError> {
+        let names = document
+            .lines()
+            .filter_map(|line| {
+                let (label, _) = line.split_once('=')?;
+                Some(label.split(':').next()?.trim().to_lowercase())
+            })
+            .collect::<BTreeSet<_>>();
+        rewrite_program(document, |_, source| {
+            rewrite_references(source, |name| {
+                let name = name.to_lowercase();
+                aliases
+                    .get(&name)
+                    .copied()
+                    .filter(|_| !names.contains(&name))
+            })
+        })
     }
 
     /// Compiles one `name = expression` assignment per nonblank line.
@@ -304,6 +326,25 @@ fn valid_name(name: &str) -> bool {
         && !["x", "and", "or", "not"]
             .iter()
             .any(|reserved| reserved.eq_ignore_ascii_case(name))
+}
+
+fn rewrite_program(
+    document: &str,
+    replace: impl Fn(usize, &str) -> Result<String, super::ExpressionError>,
+) -> Result<String, GraphError> {
+    let mut program = String::with_capacity(document.len());
+    for (index, line) in document.split_inclusive('\n').enumerate() {
+        if let Some((label, source)) = line.split_once('=') {
+            program.push_str(label);
+            program.push('=');
+            program.push_str(
+                &replace(index, source).map_err(|error| problem(index + 1, error.to_string()))?,
+            );
+        } else {
+            program.push_str(line);
+        }
+    }
+    Ok(program)
 }
 
 fn problem(line: usize, message: impl Into<String>) -> GraphError {

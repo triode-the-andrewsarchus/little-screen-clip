@@ -119,6 +119,15 @@ pub(in crate::engineering::analysis) fn rename_reference(
     previous: &str,
     renamed: &str,
 ) -> Result<String> {
+    rewrite_references(source, |name| {
+        name.eq_ignore_ascii_case(previous).then_some(renamed)
+    })
+}
+
+pub(in crate::engineering::analysis) fn rewrite_references<'a>(
+    source: &str,
+    replacement: impl Fn(&str) -> Option<&'a str>,
+) -> Result<String> {
     let mut lexer = Lexer {
         rest: source,
         source_len: source.len(),
@@ -132,14 +141,12 @@ pub(in crate::engineering::analysis) fn rename_reference(
             Token::End => break,
             Token::IndexOpen => subscript = true,
             Token::IndexClose => subscript = false,
-            Token::Name(name)
-                if !subscript
-                    && name.eq_ignore_ascii_case(previous)
-                    && !lexer.rest.trim_start().starts_with('(') =>
-            {
-                output.push_str(&source[copied..at]);
-                output.push_str(renamed);
-                copied = at + name.len();
+            Token::Name(name) if !subscript && !lexer.rest.trim_start().starts_with('(') => {
+                if let Some(name_replacement) = replacement(name) {
+                    output.push_str(&source[copied..at]);
+                    output.push_str(name_replacement);
+                    copied = at + name.len();
+                }
             }
             _ => {}
         }

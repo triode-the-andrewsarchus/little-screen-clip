@@ -148,7 +148,10 @@ impl Derived {
 
     fn apply(&mut self, action: equations::Action, inputs: &[Input], span: &Range<f64>) -> bool {
         let bindings = inputs.iter().map(Input::binding).collect::<Vec<_>>();
-        let Some(change) = self.equations.apply(action, &bindings) else {
+        let Some(change) = self
+            .equations
+            .apply(action, &bindings, &Input::channel_names(inputs))
+        else {
             return false;
         };
         self.program = change.program;

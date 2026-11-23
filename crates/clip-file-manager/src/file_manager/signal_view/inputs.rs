@@ -287,6 +287,26 @@ impl Input {
         matches!(self.source, Source::Missing { .. })
     }
 
+    pub(super) fn channel_names(inputs: &[Self]) -> std::collections::HashMap<String, &str> {
+        let mut names = std::collections::HashMap::new();
+        for input in inputs {
+            if let Source::Analog { reader, index } = &input.source {
+                let name = reader.channels()[*index].name.to_lowercase();
+                names
+                    .entry(name)
+                    .and_modify(|alias| *alias = None)
+                    .or_insert(Some(input.alias.as_str()));
+            }
+        }
+        for input in inputs {
+            names.remove(&input.alias);
+        }
+        names
+            .into_iter()
+            .filter_map(|(name, alias)| Some((name, alias?)))
+            .collect()
+    }
+
     pub(super) fn binding(&self) -> Binding<'_> {
         let signal_type = match &self.source {
             Source::Missing { kind, .. } => *kind,

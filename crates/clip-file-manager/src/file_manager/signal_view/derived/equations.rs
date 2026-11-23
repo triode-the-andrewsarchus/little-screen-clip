@@ -134,7 +134,12 @@ impl Book {
         None
     }
 
-    pub fn apply(&mut self, action: Action, bindings: &[Binding<'_>]) -> Option<Change> {
+    pub fn apply(
+        &mut self,
+        action: Action,
+        bindings: &[Binding<'_>],
+        aliases: &std::collections::HashMap<String, &str>,
+    ) -> Option<Change> {
         let reveal = self
             .edit
             .as_ref()
@@ -157,6 +162,11 @@ impl Book {
             Ok(program)
         };
         let graph = program.and_then(|program| {
+            let program = if aliases.is_empty() {
+                program
+            } else {
+                SignalGraph::resolve_input_names(&program, aliases)?
+            };
             SignalGraph::compile(&program, bindings, 0).map(|graph| (program, graph))
         });
         let (program, graph) = match graph {
@@ -359,13 +369,37 @@ mod tests {
     }];
 
     #[test]
+    fn resolves_channel_names_to_stable_recording_inputs() {
+        let signal_type = INPUTS[0].signal_type;
+        let bindings = [
+            Binding {
+                name: "s1_c1",
+                signal_type,
+            },
+            Binding {
+                name: "s1_c2",
+                signal_type,
+            },
+        ];
+        let aliases = [("ch1".into(), "s1_c1"), ("ch2".into(), "s1_c2")].into();
+        let mut book = Book::default();
+        book.add();
+        book.edit.as_mut().unwrap().text = "M1 = CH1 - ch2".into();
+        let change = book.apply(Action::Apply, &bindings, &aliases).unwrap();
+        assert_eq!(change.program, "M1 = s1_c1 - s1_c2");
+    }
+
+    #[test]
     fn adding_and_removing_lanes_keeps_surviving_channel_identities() {
         let mut book = Book::default();
         book.add();
         book.edit.as_mut().unwrap().text = "A = 1V\nB = 1V > 2V\nC = 2V".into();
-        book.apply(Action::Apply, INPUTS).unwrap();
+        book.apply(Action::Apply, INPUTS, &Default::default())
+            .unwrap();
         let ids: Vec<_> = book.rows.iter().map(|row| row.id).collect();
-        let change = book.apply(Action::Remove(ids[0]), INPUTS).unwrap();
+        let change = book
+            .apply(Action::Remove(ids[0]), INPUTS, &Default::default())
+            .unwrap();
         assert_eq!(change.lanes, [None, Some(0), Some(1)]);
         assert_eq!(change.digital, [Some(0)]);
         assert_eq!(
@@ -379,10 +413,14 @@ mod tests {
         let mut book = Book::default();
         book.add();
         book.edit.as_mut().unwrap().text = "A = 1V\nB = A * 2".into();
-        book.apply(Action::Apply, INPUTS).unwrap();
+        book.apply(Action::Apply, INPUTS, &Default::default())
+            .unwrap();
         book.edit(0);
         book.edit.as_mut().unwrap().text = "A = missing".into();
-        assert!(book.apply(Action::Apply, INPUTS).is_none());
+        assert!(
+            book.apply(Action::Apply, INPUTS, &Default::default())
+                .is_none()
+        );
         assert_eq!(book.rows[0].text, "A = 1V");
         let draft = book.edit.as_ref().unwrap();
         assert_eq!(draft.text, "A = missing");
@@ -394,11 +432,14 @@ mod tests {
         let mut book = Book::default();
         book.add();
         book.edit.as_mut().unwrap().text = "signal = input\nscaled = signal * 2".into();
-        book.apply(Action::Apply, INPUTS).unwrap();
+        book.apply(Action::Apply, INPUTS, &Default::default())
+            .unwrap();
         let identity = book.rows[0].id;
         book.edit(0);
         book.edit.as_mut().unwrap().text = "reference = input".into();
-        let change = book.apply(Action::Apply, INPUTS).unwrap();
+        let change = book
+            .apply(Action::Apply, INPUTS, &Default::default())
+            .unwrap();
         assert_eq!(change.lanes, [Some(0), Some(1)]);
         assert_eq!(book.rows[0].id, identity);
         assert_eq!(book.rows[1].text, "scaled = reference * 2");
