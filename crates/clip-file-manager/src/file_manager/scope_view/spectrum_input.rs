@@ -1,4 +1,5 @@
 use super::{JOBS, Task, reads::RawChannel};
+use crate::file_manager::signal_view::take_query_result;
 use egui::Context;
 use little_clip_core::engineering::{
     analysis::{SpectralSurvey, SpectrumWindow, spectral_survey},
@@ -190,21 +191,9 @@ impl Spectra {
     }
 
     fn poll(&mut self) {
-        let Some((query, task)) = &self.task else {
-            return;
-        };
-        let Some(result) = task.poll() else { return };
-        if matches!(result, Err(little_clip_core::JobError::QueueFull)) {
-            self.task = None;
-            return;
+        if let Some(result) = take_query_result(&mut self.task) {
+            self.result = Some(result);
         }
-        self.result = Some((
-            query.clone(),
-            result
-                .map_err(|error| error.to_string())
-                .and_then(|result| result),
-        ));
-        self.task = None;
     }
 
     pub(super) fn suspend(&mut self) {

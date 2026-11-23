@@ -149,7 +149,7 @@ pub(in crate::file_manager) fn draw_envelope(
     }
 }
 
-pub(super) fn draw_raw(
+pub(in crate::file_manager) fn draw_raw(
     painter: &Painter,
     rect: Rect,
     span: &Range<f64>,

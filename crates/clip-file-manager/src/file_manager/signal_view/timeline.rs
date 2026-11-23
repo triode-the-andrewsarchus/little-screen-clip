@@ -16,25 +16,23 @@ pub(in crate::file_manager) struct Link {
     pub reference: Option<f64>,
 }
 
-impl Link {
-    pub(in crate::file_manager) fn paint_reference(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        span: &Range<f64>,
-    ) {
-        if let Some(time) = self.reference.filter(|time| span.contains(time)) {
-            let x = plot::x_at(rect, span, time);
-            let color = egui::Color32::from_rgb(222, 175, 247);
-            painter.vline(x, rect.y_range(), egui::Stroke::new(1.3, color));
-            painter.text(
-                egui::pos2(x + 4.0, rect.top() + 3.0),
-                egui::Align2::LEFT_TOP,
-                "Reference",
-                egui::FontId::monospace(10.0),
-                color,
-            );
-        }
+pub(in crate::file_manager) fn paint_reference(
+    painter: &egui::Painter,
+    rect: Rect,
+    span: &Range<f64>,
+    reference: Option<f64>,
+) {
+    if let Some(time) = reference.filter(|time| span.contains(time)) {
+        let x = plot::x_at(rect, span, time);
+        let color = egui::Color32::from_rgb(222, 175, 247);
+        painter.vline(x, rect.y_range(), egui::Stroke::new(1.3, color));
+        painter.text(
+            egui::pos2(x + 4.0, rect.top() + 3.0),
+            egui::Align2::LEFT_TOP,
+            "Reference",
+            egui::FontId::monospace(10.0),
+            color,
+        );
     }
 }
 

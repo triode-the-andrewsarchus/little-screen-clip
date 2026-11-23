@@ -7,7 +7,7 @@ use egui::{Color32, Context, Painter, Rect};
 use little_clip_core::{
     BackgroundJobs,
     engineering::{
-        analysis::{Expression, Value},
+        analysis::{Binding, Dimension, Expression, SignalType, Value},
         scope::Channel,
         waveforms::{Capture, Envelope, Recording, sample_span},
     },
@@ -64,21 +64,21 @@ impl Math {
         if input.trim().is_empty() {
             return;
         }
-        if channels[active].unit != "V" {
-            self.error = Some("Voltage expressions require an active voltage channel".into());
+        if Dimension::from_unit(&channels[active].unit).is_none() {
+            self.error = Some("This channel's unit is unavailable for arithmetic".into());
             return;
         }
-        let names: Vec<_> = channels
+        let bindings: Vec<_> = channels
             .iter()
             .map(|channel| {
-                if channel.unit == "V" {
-                    channel.name.as_str()
-                } else {
-                    ""
+                let dimension = Dimension::from_unit(&channel.unit);
+                Binding {
+                    name: dimension.map_or("", |_| channel.name.as_str()),
+                    signal_type: SignalType::Analog(dimension.unwrap_or(Dimension::SCALAR)),
                 }
             })
             .collect();
-        match Expression::parse(input, &names, active) {
+        match Expression::parse_bound(input, &bindings, active) {
             Ok(expression) => {
                 self.simple = expression.is_predicate() && monotone_shorthand(input);
                 self.expression = Some(expression);

@@ -1,6 +1,6 @@
 //! Offline logic timing and transition inspection.
 
-mod plot;
+pub(super) mod plot;
 mod protocols;
 pub(super) mod strip;
 
@@ -120,6 +120,15 @@ impl Viewer {
 
     pub(super) fn span(&mut self) -> &mut Range<f64> {
         &mut self.span
+    }
+
+    pub(super) fn recording(
+        &self,
+    ) -> (
+        &Arc<Recording>,
+        &[little_clip_core::engineering::logic::Lane],
+    ) {
+        (&self.recording, &self.overview.lanes)
     }
 
     pub(super) fn cursor(&self) -> Option<f64> {
@@ -275,7 +284,7 @@ impl Viewer {
         let clipped = painter.with_clip_rect(rect);
         self.draw_channels(&painter, &clipped, rect, ink);
         if let Some(link) = link {
-            link.paint_reference(&clipped, rect, &self.span);
+            timeline::paint_reference(&clipped, rect, &self.span, link.reference);
         }
         if let Some(selected) = &self.selected {
             timing::highlight(
@@ -670,7 +679,7 @@ fn read_frame(recording: &Recording, key: WindowKey, cancel: &AtomicBool) -> Res
     })
 }
 
-fn level_label(level: Level) -> &'static str {
+pub(super) fn level_label(level: Level) -> &'static str {
     match level {
         Level::Low => "0",
         Level::High => "1",

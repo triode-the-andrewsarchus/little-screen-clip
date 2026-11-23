@@ -19,7 +19,7 @@ pub(super) fn draw_overview(painter: &Painter, rect: Rect, overview: &Overview, 
     }
 }
 
-pub(super) fn draw_envelope(
+pub(in crate::file_manager) fn draw_envelope(
     painter: &Painter,
     rect: Rect,
     visible: &Range<f64>,
@@ -66,7 +66,7 @@ pub(super) fn draw_envelope(
     painter.add(mesh);
 }
 
-pub(super) fn draw_trace(
+pub(in crate::file_manager) fn draw_trace(
     painter: &Painter,
     rect: Rect,
     visible: &Range<f64>,

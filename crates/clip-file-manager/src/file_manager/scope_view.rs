@@ -22,7 +22,7 @@ use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2};
 use little_clip_core::{
     BackgroundJobs,
     engineering::{
-        analysis::SpectrumWindow,
+        analysis::{Dimension, SignalType, SpectrumWindow},
         waveforms::{Envelope, Overview, Peak, Recording, display_value, time_span},
     },
     palette::AppPalette,
@@ -177,6 +177,10 @@ impl Viewer {
         &mut self.span
     }
 
+    pub(super) fn recording(&self) -> &Arc<Recording> {
+        &self.recording
+    }
+
     pub(super) fn cursor(&self) -> Option<f64> {
         self.cursors[0].or(self.cursors[1])
     }
@@ -311,16 +315,17 @@ impl Viewer {
 
     fn math_controls(&mut self, ui: &mut Ui) {
         let channel = &self.overview.channels[self.active];
-        if channel.unit == "V" {
+        if Dimension::from_unit(&channel.unit).is_some() {
             let status = self
                 .math_state
                 .status(channel, &self.span, self.math_envelope());
             ui.horizontal(|ui| {
                 ui.label("Math");
-                let hint = if self.recording.power_recording() {
-                    "> 1V"
-                } else {
-                    "> 1V or CH1 - CH2"
+                let hint: String = match channel.unit.as_str() {
+                    "V" if !self.recording.power_recording() => "> 1V or CH1 - CH2".into(),
+                    "FS" => "abs(x) > 0.1 FS".into(),
+                    "" => "abs(x) > 0.1".into(),
+                    unit => format!("x > 1{unit}"),
                 };
                 ui.add(
                     egui::TextEdit::singleline(&mut self.math)
@@ -394,7 +399,7 @@ impl Viewer {
         self.draw_filters(&painter, &clipped, rect, ink);
         self.paint_marks(ui, &clipped, rect);
         if let Some(link) = link {
-            link.paint_reference(&clipped, rect, &self.span);
+            timeline::paint_reference(&clipped, rect, &self.span, link.reference);
         }
         for (label, time) in ["A", "B"]
             .into_iter()
@@ -546,11 +551,10 @@ impl Viewer {
         match self
             .math_state
             .numeric()
-            .and_then(|expression| expression.voltage_power())
+            .map(|expression| expression.signal_type())
         {
-            Some(1) => "V".into(),
-            Some(0) | None => String::new(),
-            Some(power) => format!("V^{power}"),
+            Some(SignalType::Analog(dimension)) => dimension.to_string(),
+            _ => String::new(),
         }
     }
 

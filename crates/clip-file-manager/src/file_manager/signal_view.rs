@@ -1,5 +1,7 @@
 //! Mixed-signal analysis on a shared timeline with native source clocks.
 
+mod derived;
+mod inputs;
 pub(super) mod timeline;
 
 use super::{
@@ -23,6 +25,8 @@ pub(super) const MAX_SOURCES: usize = 8;
 
 pub(super) struct Viewer {
     sources: Vec<Source>,
+    next_source: u64,
+    derived: derived::Derived,
     domain: Range<f64>,
     span: Range<f64>,
     probe: Option<f64>,
@@ -35,6 +39,7 @@ pub(super) struct Viewer {
 }
 
 struct Source {
+    id: u64,
     path: PathBuf,
     offset: f64,
     capture: Capture,
@@ -68,6 +73,21 @@ pub(super) fn supports_path(path: &Path) -> bool {
     })
 }
 
+// A saturated read queue is retried by the caller with its current query.
+pub(super) fn take_query_result<K, T: Send + 'static>(
+    pending: &mut Option<(K, Task<Result<T, String>>)>,
+) -> Option<(K, Result<T, String>)> {
+    let result = pending.as_ref()?.1.poll()?;
+    let (key, _) = pending.take()?;
+    if matches!(result, Err(little_clip_core::JobError::QueueFull)) {
+        return None;
+    }
+    let result = result
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+    Some((key, result))
+}
+
 impl Viewer {
     pub(super) fn load(path: &Path, format: Format, cancel: &AtomicBool) -> Result<Self, String> {
         let source = Source::load(path.to_owned(), Some(format), cancel)?;
@@ -85,10 +105,16 @@ impl Viewer {
             .map(Self::new)
     }
 
-    fn new(sources: Vec<Source>) -> Self {
+    fn new(mut sources: Vec<Source>) -> Self {
+        for (index, source) in sources.iter_mut().enumerate() {
+            source.id = index as u64 + 1;
+        }
         let domain = extent(&sources);
+        let next_source = sources.len() as u64 + 1;
         Self {
             sources,
+            next_source,
+            derived: derived::Derived::default(),
             span: domain.clone(),
             domain,
             probe: None,
@@ -148,14 +174,21 @@ impl Viewer {
         );
         shell.render_header(ui, |_| {});
         self.controls(ui);
+        let inputs = if self.derived.needs_inputs() {
+            self.sources.iter().flat_map(Source::inputs).collect()
+        } else {
+            Vec::new()
+        };
+        self.derived.editor(ui, &inputs);
         if let [source] = &mut self.sources[..]
             && source.offset == 0.0
+            && !self.derived.active()
         {
             source.capture.content(ui, palette, copies, None);
             self.span = source.capture.span().clone();
             self.domain = source.capture.domain();
         } else {
-            self.linked(ui, palette, copies);
+            self.linked(ui, palette, copies, &inputs);
         }
         if self.add_open {
             self.add_dialog(ui.ctx());
@@ -174,6 +207,7 @@ impl Viewer {
                 self.add_open = true;
                 self.add_focus = true;
             }
+            self.derived.button(ui);
             if self.adding.is_some() {
                 ui.spinner();
                 ui.weak("Opening recording…");
@@ -260,7 +294,9 @@ impl Viewer {
                 .map_err(|error| error.to_string())
                 .and_then(|source| source)
             {
-                Ok(source) => {
+                Ok(mut source) => {
+                    source.id = self.next_source;
+                    self.next_source = self.next_source.saturating_add(1);
                     self.sources.push(source);
                     self.add_path.clear();
                 }
@@ -271,7 +307,13 @@ impl Viewer {
         }
     }
 
-    fn linked(&mut self, ui: &mut Ui, palette: &AppPalette, copies: &mut Copies) {
+    fn linked(
+        &mut self,
+        ui: &mut Ui,
+        palette: &AppPalette,
+        copies: &mut Copies,
+        inputs: &[inputs::Input],
+    ) {
         let domain = extent(&self.sources);
         if self.span == self.domain {
             self.span = domain.clone();
@@ -321,6 +363,17 @@ impl Viewer {
                         ui.separator();
                     });
                 }
+                next_probe = self
+                    .derived
+                    .content(
+                        ui,
+                        &mut self.span,
+                        &self.domain,
+                        inputs,
+                        self.probe,
+                        reference_time,
+                    )
+                    .or(next_probe);
             });
         if next_probe != self.probe {
             self.probe = next_probe;
@@ -398,10 +451,28 @@ impl Source {
             }
         };
         Ok(Self {
+            id: 0,
             path,
             offset: 0.0,
             capture,
         })
+    }
+
+    fn inputs(&self) -> Vec<inputs::Input> {
+        let label = self
+            .path
+            .file_name()
+            .unwrap_or(self.path.as_os_str())
+            .to_string_lossy();
+        match &self.capture {
+            Capture::Analog(view) => {
+                inputs::Input::analog(self.id, self.offset, &label, view.recording())
+            }
+            Capture::Digital(view) => {
+                let (recording, lanes) = view.recording();
+                inputs::Input::digital(self.id, self.offset, &label, recording, lanes)
+            }
+        }
     }
 
     fn controls(

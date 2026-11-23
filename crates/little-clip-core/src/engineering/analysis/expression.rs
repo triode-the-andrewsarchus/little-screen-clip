@@ -1,6 +1,9 @@
-//! Sample-by-sample arithmetic and predicate evaluation for voltage captures.
+//! Dimensioned arithmetic and predicates for captured signals.
 
+mod dimension;
 mod parser;
+
+pub use dimension::Dimension;
 
 use std::fmt;
 
@@ -14,6 +17,24 @@ use std::fmt;
 pub struct Expression {
     root: Node,
     kind: Kind,
+}
+
+/// Type of a source or an intermediate signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignalType {
+    /// Equally or unevenly sampled values in a physical unit.
+    Analog(Dimension),
+    /// Digital levels. Unknown and high-impedance observations are gaps.
+    Digital,
+}
+
+/// Name and type supplied by the signal graph when compiling an expression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Binding<'a> {
+    /// Case-insensitive variable in the expression.
+    pub name: &'a str,
+    /// Kind of value supplied for this binding.
+    pub signal_type: SignalType,
 }
 
 /// Value produced at a single sample time.
@@ -60,7 +81,37 @@ impl Expression {
         channel_names: &[&str],
         active_channel: usize,
     ) -> Result<Self, ExpressionError> {
-        parser::parse(input, channel_names, active_channel)
+        let bindings: Vec<_> = channel_names
+            .iter()
+            .map(|&name| Binding {
+                name,
+                signal_type: SignalType::Analog(Dimension::VOLTAGE),
+            })
+            .collect();
+        Self::parse_bound(input, &bindings, active_channel)
+    }
+
+    /// Compiles an expression against named analog and digital inputs.
+    ///
+    /// The active binding handles the `x` alias and comparison shorthand.
+    /// Samples and numeric literals use base units internally.
+    ///
+    /// # Errors
+    /// Reports invalid syntax, incompatible units, or missing bindings.
+    pub fn parse_bound(
+        input: &str,
+        bindings: &[Binding<'_>],
+        active: usize,
+    ) -> Result<Self, ExpressionError> {
+        parser::parse(input, bindings, active)
+    }
+
+    /// Returns the type of the generated signal.
+    pub fn signal_type(&self) -> SignalType {
+        match self.kind {
+            Kind::Numeric(unit) => SignalType::Analog(unit.dimension()),
+            Kind::Predicate => SignalType::Digital,
+        }
     }
 
     /// Returns whether results are suitable for highlighting matching regions.
@@ -74,7 +125,7 @@ impl Expression {
     /// results return `None`.
     pub fn voltage_power(&self) -> Option<i8> {
         match self.kind {
-            Kind::Numeric(unit) => Some(unit.exponent()),
+            Kind::Numeric(unit) => unit.dimension().voltage_power(),
             Kind::Predicate => None,
         }
     }
@@ -84,21 +135,32 @@ impl Expression {
     /// Supply a closure that returns a sample in volts for its zero-based
     /// channel index. Missing samples and non-finite results return `None`.
     pub fn evaluate(&self, channel_sample: impl Fn(usize) -> Option<f64>) -> Option<Value> {
-        self.root.evaluate(&channel_sample)
+        self.evaluate_bound(|index| numeric(channel_sample(index)?))
+    }
+
+    pub(super) fn visit_inputs(&self, mut visit: impl FnMut(usize)) {
+        self.root.visit_inputs(&mut visit);
+    }
+
+    /// Evaluates a row of analog and digital inputs.
+    ///
+    /// Missing inputs and non-finite results remain gaps.
+    pub fn evaluate_bound(&self, sample: impl Fn(usize) -> Option<Value>) -> Option<Value> {
+        self.root.evaluate(&sample)
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Unit {
     Implicit,
-    Volts(i8),
+    Explicit(Dimension),
 }
 
 impl Unit {
-    fn exponent(self) -> i8 {
+    fn dimension(self) -> Dimension {
         match self {
-            Self::Implicit => 0,
-            Self::Volts(power) => power,
+            Self::Implicit => Dimension::SCALAR,
+            Self::Explicit(dimension) => dimension,
         }
     }
 
@@ -114,12 +176,9 @@ impl Unit {
         if self == Self::Implicit && other == Self::Implicit {
             return Some(Self::Implicit);
         }
-        let power = if divide {
-            self.exponent().checked_sub(other.exponent())?
-        } else {
-            self.exponent().checked_add(other.exponent())?
-        };
-        Some(Self::Volts(power))
+        self.dimension()
+            .combine(other.dimension(), divide)
+            .map(Self::Explicit)
     }
 }
 
@@ -132,7 +191,7 @@ enum Kind {
 #[derive(Clone, Debug)]
 enum Node {
     Constant(f64),
-    Channel(usize),
+    Channel(usize, SignalType),
     Negate(Box<Node>),
     Not(Box<Node>),
     Binary(Binary, Box<Node>, Box<Node>),
@@ -247,9 +306,10 @@ impl Function {
         };
         match (self, right) {
             (Self::Abs, None) => Some(Kind::Numeric(left)),
-            (Self::SquareRoot, None) if left.exponent() % 2 == 0 => {
-                Some(Kind::Numeric(Unit::Volts(left.exponent() / 2)))
-            }
+            (Self::SquareRoot, None) => left
+                .dimension()
+                .square_root()
+                .map(|dimension| Kind::Numeric(Unit::Explicit(dimension))),
             (Self::Min | Self::Max, Some(Kind::Numeric(right))) => {
                 left.common(right).map(Kind::Numeric)
             }
@@ -268,10 +328,32 @@ impl Function {
 }
 
 impl Node {
-    fn evaluate(&self, sample: &impl Fn(usize) -> Option<f64>) -> Option<Value> {
+    fn visit_inputs(&self, visit: &mut impl FnMut(usize)) {
+        match self {
+            Self::Constant(_) => {}
+            Self::Channel(index, _) => visit(*index),
+            Self::Negate(node) | Self::Not(node) => node.visit_inputs(visit),
+            Self::Binary(_, left, right) => {
+                left.visit_inputs(visit);
+                right.visit_inputs(visit);
+            }
+            Self::Function(_, left, right) => {
+                left.visit_inputs(visit);
+                if let Some(right) = right {
+                    right.visit_inputs(visit);
+                }
+            }
+        }
+    }
+
+    fn evaluate(&self, sample: &impl Fn(usize) -> Option<Value>) -> Option<Value> {
         match self {
             Self::Constant(value) => Some(Value::Numeric(*value)),
-            Self::Channel(index) => numeric(sample(*index)?),
+            Self::Channel(index, signal_type) => match (sample(*index)?, signal_type) {
+                (Value::Numeric(value), SignalType::Analog(_)) => numeric(value),
+                (value @ Value::Predicate(_), SignalType::Digital) => Some(value),
+                _ => None,
+            },
             Self::Negate(node) => numeric(-node.evaluate(sample)?.numeric()?),
             Self::Not(node) => Some(Value::Predicate(!node.evaluate(sample)?.predicate()?)),
             Self::Binary(operator, left, right) => {
@@ -365,6 +447,43 @@ mod tests {
             measure("CH1 > 1V && CH2 > 1V", &[0.0], 0),
             Some(Value::Predicate(false))
         );
+    }
+
+    #[test]
+    fn mixed_volts_current_and_digital_levels_keep_their_types() {
+        let inputs = [
+            Binding {
+                name: "supply",
+                signal_type: SignalType::Analog(Dimension::VOLTAGE),
+            },
+            Binding {
+                name: "load",
+                signal_type: SignalType::Analog(Dimension::CURRENT),
+            },
+            Binding {
+                name: "enable",
+                signal_type: SignalType::Digital,
+            },
+        ];
+        let values = [
+            Value::Numeric(4.0),
+            Value::Numeric(0.03),
+            Value::Predicate(true),
+        ];
+        let wave = Expression::parse_bound("supply * load", &inputs, 0).unwrap();
+        assert_eq!(wave.signal_type(), SignalType::Analog(Dimension::POWER));
+        assert_eq!(
+            wave.evaluate_bound(|index| values.get(index).copied()),
+            Some(Value::Numeric(0.12))
+        );
+        let active =
+            Expression::parse_bound("enable && supply * load > 100mW", &inputs, 0).unwrap();
+        assert_eq!(active.signal_type(), SignalType::Digital);
+        assert_eq!(
+            active.evaluate_bound(|index| values.get(index).copied()),
+            Some(Value::Predicate(true))
+        );
+        assert!(Expression::parse_bound("supply + load", &inputs, 0).is_err());
     }
 
     #[test]

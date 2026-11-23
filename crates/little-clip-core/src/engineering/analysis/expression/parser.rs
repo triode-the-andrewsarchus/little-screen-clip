@@ -1,4 +1,6 @@
-use super::{Binary, Expression, ExpressionError, Function, Kind, Node, Unit};
+use super::{
+    Binary, Binding, Dimension, Expression, ExpressionError, Function, Kind, Node, SignalType, Unit,
+};
 
 const MAX_BYTES: usize = 512;
 const MAX_TOKENS: usize = 128;
@@ -6,7 +8,7 @@ const MAX_DEPTH: usize = 24;
 
 type Result<T> = std::result::Result<T, ExpressionError>;
 
-pub(super) fn parse(source: &str, channels: &[&str], active: usize) -> Result<Expression> {
+pub(super) fn parse(source: &str, channels: &[Binding<'_>], active: usize) -> Result<Expression> {
     if source.len() > MAX_BYTES {
         return Err(error(0, "Expression is too long"));
     }
@@ -92,10 +94,14 @@ impl<'a> Lexer<'a> {
             .find(|c: char| !c.is_alphabetic())
             .unwrap_or(without_space.len());
         let suffix = &without_space[..suffix_len];
-        let (scaled, unit, rest) = if let Some(factor) = voltage_factor(suffix) {
-            (value * factor, Unit::Volts(1), &without_space[suffix_len..])
+        let (scaled, unit, rest) = if let Some((dimension, factor)) = Dimension::literal(suffix) {
+            (
+                value * factor,
+                Unit::Explicit(dimension),
+                &without_space[suffix_len..],
+            )
         } else if !suffix.is_empty() && rest.as_ptr() == without_space.as_ptr() {
-            return Err(error(position, format!("Unknown voltage unit {suffix}")));
+            return Err(error(position, format!("Unknown sample unit {suffix}")));
         } else {
             (value, Unit::Implicit, rest)
         };
@@ -166,22 +172,9 @@ fn number_value(mut text: &str) -> Option<(f64, &str)> {
     Some((number, text))
 }
 
-fn voltage_factor(unit: &str) -> Option<f64> {
-    Some(match unit {
-        "V" | "v" => 1.0,
-        "kV" | "kv" => 1e3,
-        "MV" => 1e6,
-        "mV" | "mv" => 1e-3,
-        "µV" | "µv" | "μV" | "μv" | "uV" | "uv" => 1e-6,
-        "nV" | "nv" => 1e-9,
-        "pV" | "pv" => 1e-12,
-        _ => return None,
-    })
-}
-
 struct Parser<'a, 'input> {
     tokens: &'a [Lexeme<'input>],
-    channels: &'a [&'a str],
+    channels: &'a [Binding<'a>],
     active: usize,
 }
 
@@ -240,7 +233,7 @@ impl<'input> Parser<'_, 'input> {
             Token::Not => self.unary(true, at, depth),
             Token::Operator(Binary::Subtract) => self.unary(false, at, depth),
             Token::Operator(operator) if operator.precedence() == 3 => {
-                self.binary(operator, channel(self.active), at, depth)
+                self.binary(operator, self.channel(self.active), at, depth)
             }
             _ => Err(error(at, "Expected a waveform, number, or expression")),
         }
@@ -248,13 +241,24 @@ impl<'input> Parser<'_, 'input> {
 
     fn named_value(&self, name: &str, at: usize) -> Result<Expression> {
         if name.eq_ignore_ascii_case("x") {
-            return Ok(channel(self.active));
+            return Ok(self.channel(self.active));
         }
         self.channels
             .iter()
-            .position(|candidate| candidate.eq_ignore_ascii_case(name))
-            .map(channel)
+            .position(|candidate| candidate.name.eq_ignore_ascii_case(name))
+            .map(|index| self.channel(index))
             .ok_or_else(|| error(at, format!("Unknown waveform {name}")))
+    }
+
+    fn channel(&self, index: usize) -> Expression {
+        let kind = match self.channels[index].signal_type {
+            SignalType::Analog(unit) => Kind::Numeric(Unit::Explicit(unit)),
+            SignalType::Digital => Kind::Predicate,
+        };
+        Expression {
+            root: Node::Channel(index, self.channels[index].signal_type),
+            kind,
+        }
     }
 
     fn unary(&mut self, predicate: bool, at: usize, depth: usize) -> Result<Expression> {
@@ -312,12 +316,5 @@ impl<'input> Parser<'_, 'input> {
             ),
             kind,
         })
-    }
-}
-
-fn channel(index: usize) -> Expression {
-    Expression {
-        root: Node::Channel(index),
-        kind: Kind::Numeric(Unit::Volts(1)),
     }
 }

@@ -1,4 +1,5 @@
 use super::{JOBS, Task, Viewer, plot, reads, spectrum_input::Input};
+use crate::file_manager::signal_view::take_query_result;
 use egui::{Align2, Color32, FontId, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
 use little_clip_core::engineering::{
     analysis::{FilterChain, FilterKind, FilterStage},
@@ -424,26 +425,17 @@ impl Filters {
     }
 
     fn poll(&mut self) {
-        let Some((key, task)) = self.task.as_ref() else {
+        let Some((key, result)) = take_query_result(&mut self.task) else {
             return;
         };
-        let Some(result) = task.poll() else { return };
-        let key = key.clone();
-        self.task = None;
         let Some(lane) = self.lanes.get_mut(&key.channel) else {
             return;
         };
         if lane.rows != key.rows || lane.stages != key.stages {
             return;
         }
-        if matches!(result, Err(little_clip_core::JobError::QueueFull)) {
-            return;
-        }
         lane.completed = Some(key);
-        match result
-            .map_err(|error| error.to_string())
-            .and_then(|result| result)
-        {
+        match result {
             Ok(output) => {
                 lane.output = Some(output);
                 lane.error = None;
