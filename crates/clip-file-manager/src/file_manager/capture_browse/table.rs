@@ -29,17 +29,18 @@ pub(in crate::file_manager) struct Columns<const N: usize> {
 }
 
 impl<const N: usize> Columns<N> {
-    pub fn show<'a, T: 'a>(
+    pub fn show<T: Copy>(
         &self,
         ui: &mut Ui,
         page: Page<'_>,
         colors: WorkbenchColors,
-        read: impl Fn(u64) -> Option<&'a T>,
-        ordinal: impl Fn(&T) -> u64,
-        paint: impl Fn(&Ui, Rect, &T),
+        read: impl Fn(u64) -> Option<T>,
+        ordinal: impl Fn(T) -> u64,
+        paint: impl Fn(&Ui, Rect, T),
     ) -> Response {
+        let width = (ui.available_width() - ui.spacing().scroll.allocated_width()).max(0.0);
         let heading = ui
-            .allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover())
+            .allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover())
             .0;
         self.cells(ui, heading, self.headings, colors.text_muted);
         let mut area = ScrollArea::vertical()
@@ -58,7 +59,10 @@ impl<const N: usize> Columns<N> {
             output.visible = page.offset + rows.start as u64..page.offset + rows.end as u64;
             for index in output.visible.clone() {
                 let (rect, response) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+                    ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
+                if index % 2 == 1 {
+                    ui.painter().rect_filled(rect, 0.0, colors.panel);
+                }
                 let Some(row) = read(index) else {
                     let number = (index + 1).to_string();
                     let mut pending = [""; N];

@@ -4,6 +4,7 @@ use crate::{
     ui_appearance::WorkbenchColors,
 };
 use egui::{PointerButton, Rect, Sense, Ui, vec2};
+use egui_extras::{Column, TableBuilder};
 use little_clip_core::engineering::tags::{self, SampleBin, SignalIndex, SignalPreview};
 use std::{fmt::Write as _, ops::Range, sync::Arc, time::Duration};
 
@@ -242,28 +243,43 @@ impl View {
 
     fn table(&mut self, ui: &mut Ui) {
         let range = self.desired();
-        let height = ui.text_style_height(&egui::TextStyle::Monospace) + 5.0;
-        let count = range.end - range.start;
-        egui::ScrollArea::vertical()
+        let height = ui.text_style_height(&egui::TextStyle::Monospace) + 3.0;
+        TableBuilder::new(ui)
             .id_salt("tag raw sample rows")
-            .max_height(ui.available_height().max(54.0))
-            .show_rows(ui, height, count as usize, |ui, rows| {
-                for row in rows.map(|row| range.start + row as u64) {
-                    let value = self
-                        .value(row)
-                        .map_or_else(|| "…".to_owned(), |value| value.to_string());
-                    let text =
-                        egui::RichText::new(format!("{:>9}   {:>4}", row + 1, value)).monospace();
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), height],
-                            egui::Button::selectable(self.selected == Some(row), text),
-                        )
-                        .clicked()
-                    {
-                        self.selected = Some(row);
-                    }
-                }
+            .striped(true)
+            .sense(Sense::click())
+            .auto_shrink([false, false])
+            .column(Column::exact(108.0).clip(true))
+            .column(Column::remainder().clip(true))
+            .header(height, |mut row| {
+                row.col(|ui| {
+                    ui.strong("Sample");
+                });
+                row.col(|ui| {
+                    ui.strong("Value");
+                });
+            })
+            .body(|body| {
+                body.rows(
+                    height,
+                    (range.end - range.start) as usize,
+                    |mut table_row| {
+                        let row = range.start + table_row.index() as u64;
+                        let value = self
+                            .value(row)
+                            .map_or_else(|| "…".to_owned(), |value| value.to_string());
+                        table_row.set_selected(self.selected == Some(row));
+                        table_row.col(|ui| {
+                            ui.monospace((row + 1).to_string());
+                        });
+                        table_row.col(|ui| {
+                            ui.monospace(value);
+                        });
+                        if table_row.response().clicked() {
+                            self.selected = Some(row);
+                        }
+                    },
+                );
             });
     }
 

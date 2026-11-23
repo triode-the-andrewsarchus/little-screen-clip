@@ -234,28 +234,22 @@ impl Panel {
             Some(Ok(output)) => {
                 coverage(ui, output, span);
                 let selected = active_event(&output.events, cursor);
-                event_list(
+                destination = event_list(
                     ui,
-                    "logic-protocol-rows",
+                    ("logic-protocol-rows", "Decoded event"),
                     cursor,
                     &mut followed,
                     selected,
                     output.events.len(),
-                    |ui, rows| {
-                        for row in rows {
-                            let event = &output.events[row];
-                            let time = display_value(event.time.start, "s");
-                            let label = format!("{time:>13}    {}", event_label(event.kind));
-                            let response = ui.selectable_label(
-                                selected == Some(row),
-                                egui::RichText::new(label).monospace(),
-                            );
-                            if response.clicked() {
-                                destination = Some(event.clone());
-                            }
-                        }
+                    |index| {
+                        let event = &output.events[index];
+                        (
+                            display_value(event.time.start, "s"),
+                            event_label(event.kind),
+                        )
                     },
-                );
+                )
+                .map(|index| output.events[index].clone());
             }
             Some(Err(error)) => {
                 ui.colored_label(ui.visuals().error_fg_color, error);

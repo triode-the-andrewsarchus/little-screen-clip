@@ -1,6 +1,9 @@
 use super::{Job, Source, error, keyed_poll, launch, plot, poll};
 use crate::{
-    file_manager::preview_copy::{self, Copies},
+    file_manager::{
+        capture_browse::table::{Columns, Page},
+        preview_copy::{self, Copies},
+    },
     ui_appearance::WorkbenchColors,
 };
 use egui::{Align, Layout, PointerButton, Sense, Ui, vec2};
@@ -11,6 +14,20 @@ use std::{fmt::Write as _, ops::Range, sync::Arc, time::Duration};
 
 const PAGE: u64 = 4096;
 const WINDOW: u64 = 256;
+const COLUMNS: Columns<5> = Columns {
+    id: "trace records",
+    headings: [
+        "Frame",
+        "Start ticks",
+        "Duration ticks",
+        "Direction",
+        "Bytes",
+    ],
+    fractions: [0.11, 0.25, 0.23, 0.24, 0.17],
+    min_height: 48.0,
+    selected_fill: 0.45,
+    hover_fill: 0.19,
+};
 
 pub(super) struct View {
     preview: TracePreview,
@@ -218,40 +235,28 @@ impl View {
     }
 
     fn table(&mut self, ui: &mut Ui, height: f32, source: &Arc<Source>, colors: WorkbenchColors) {
-        ui.weak("Frame     Start ticks   Duration     Direction   Bytes");
         let count = self.rows().saturating_sub(self.page).min(PAGE) as usize;
-        let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 6.0;
-        let mut area = egui::ScrollArea::vertical()
-            .id_salt(("trace records", self.page))
-            .auto_shrink([false, false])
-            .max_height((height - 19.0).max(48.0));
-        if let Some(offset) = self.scroll_to.take() {
-            area = area
-                .vertical_scroll_offset(offset as f32 * (row_height + ui.spacing().item_spacing.y));
+        let scroll_to = self.scroll_to.take();
+        let mut output = COLUMNS.show(
+            ui,
+            Page {
+                offset: self.page,
+                count,
+                selected: Some(self.selected),
+                selection: self.selection.as_ref(),
+                scroll_to,
+                generation: 0,
+                height,
+            },
+            colors,
+            |row| self.row(row),
+            |info| info.row,
+            |ui, rect, info| row_contents(ui, rect, info, colors),
+        );
+        if let Some((row, extend)) = output.clicked {
+            self.select(row, extend);
         }
-        let mut demand = None;
-        let page = self.page;
-        area.show_rows(ui, row_height, count, |ui, range| {
-            for row in range.map(|row| row as u64 + page) {
-                if let Some(info) = self.row(row) {
-                    if row_button(
-                        ui,
-                        info,
-                        self.selected == row,
-                        self.selection.as_ref(),
-                        colors,
-                        row_height,
-                    ) {
-                        let extend = ui.input(|input| input.modifiers.shift);
-                        self.select(row, extend);
-                    }
-                } else {
-                    demand.get_or_insert(row);
-                    ui.monospace(format!("{:>6}     …", row + 1));
-                }
-            }
-        });
-        if let Some(row) = demand {
+        if let Some(row) = output.visible.find(|&row| self.row(row).is_none()) {
             self.start_window(ui, source, row);
         }
     }
@@ -405,35 +410,24 @@ impl View {
     }
 }
 
-fn row_button(
-    ui: &mut Ui,
-    info: FrameInfo,
-    selected: bool,
-    range: Option<&Range<u64>>,
-    colors: WorkbenchColors,
-    height: f32,
-) -> bool {
-    let active = selected || range.is_some_and(|range| range.contains(&info.row));
+fn row_contents(ui: &Ui, rect: egui::Rect, info: FrameInfo, colors: WorkbenchColors) {
     let color = if info.direction == Direction::Reader {
         colors.accent
     } else {
         colors.warning
     };
-    let text = format!(
-        "{:>6}  {:>12}  {:>8}  {:>9}  {:>5}",
-        info.row + 1,
-        info.timestamp_ticks,
-        info.duration_ticks,
-        plot::direction(info.direction),
-        info.data_len,
+    COLUMNS.cells(
+        ui,
+        rect,
+        [
+            &(info.row + 1).to_string(),
+            &info.timestamp_ticks.to_string(),
+            &info.duration_ticks.to_string(),
+            plot::direction(info.direction),
+            &info.data_len.to_string(),
+        ],
+        color,
     );
-    let label = egui::RichText::new(text).monospace();
-    let label = if active { label } else { label.color(color) };
-    ui.add_sized(
-        [ui.available_width(), height],
-        egui::Button::selectable(active, label),
-    )
-    .clicked()
 }
 
 fn bytes(ui: &mut Ui, frame: &Frame) {

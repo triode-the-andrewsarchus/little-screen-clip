@@ -4,6 +4,7 @@ pub(super) mod strip;
 
 use super::scope_view::plot as timing;
 use egui::{Color32, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui_extras::{Column, TableBuilder};
 use little_clip_core::{
     engineering::{
         pulses::{Capture, Signal},
@@ -21,6 +22,9 @@ pub(super) struct Viewer {
     capture: Capture,
     active: usize,
     query: String,
+    matches: Vec<usize>,
+    reveal_signal: bool,
+    reveal_pulse: bool,
     span: Range<f64>,
     selection: Option<Range<f64>>,
     cursor: Option<f64>,
@@ -30,10 +34,14 @@ impl Viewer {
     pub fn load(path: &Path, cancel: &AtomicBool) -> Result<Self, String> {
         let (_, capture) = Capture::load(path, cancel)?;
         let span = 0.0..duration(&capture.signals[0]);
+        let matches = (0..capture.signals.len()).collect();
         Ok(Self {
             capture,
             active: 0,
             query: String::new(),
+            matches,
+            reveal_signal: false,
+            reveal_pulse: true,
             span,
             selection: None,
             cursor: None,
@@ -46,6 +54,8 @@ impl Viewer {
             self.span = 0.0..duration(&self.capture.signals[ordinal]);
             self.selection = None;
             self.cursor = None;
+            self.reveal_signal = true;
+            self.reveal_pulse = true;
         }
     }
 
@@ -57,10 +67,16 @@ impl Viewer {
             close,
         );
         shell.render_header(ui, |_| {});
-        self.selector(ui);
         if !self.capture.complete {
             ui.weak("Showing the available prefix of this capture");
         }
+        if self.capture.signals.len() > 1 {
+            let width = (ui.available_width() * 0.49).clamp(120.0, 580.0);
+            egui::Panel::left("ir_signal_bank")
+                .exact_size(width)
+                .show(ui, |ui| self.signal_list(ui));
+        }
+        self.signal_summary(ui);
         if self.capture.signals[self.active].pulses.is_empty() {
             self.fields(ui);
         } else {
@@ -68,33 +84,125 @@ impl Viewer {
         }
     }
 
-    fn selector(&mut self, ui: &mut Ui) {
+    fn signal_list(&mut self, ui: &mut Ui) {
+        let search_changed = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.query)
+                    .hint_text("Find a signal")
+                    .desired_width(ui.available_width()),
+            )
+            .changed();
+        if search_changed {
+            let query = self.query.trim().to_lowercase();
+            self.matches = self
+                .capture
+                .signals
+                .iter()
+                .enumerate()
+                .filter(|(_, signal)| {
+                    query.is_empty()
+                        || [&*signal.name, signal.model.as_deref().unwrap_or_default()]
+                            .iter()
+                            .any(|value| value.to_lowercase().contains(&query))
+                })
+                .map(|(index, _)| index)
+                .collect();
+        }
+        if self.matches.is_empty() {
+            ui.weak("No matching signals");
+            return;
+        }
+        ui.spacing_mut().item_spacing.y = 1.0;
+        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 3.0;
+        let width = ui.available_width();
+        let show_codes = width >= 386.0;
+        let headings = if show_codes {
+            &["Signal", "Device", "Protocol", "Address", "Command"][..]
+        } else {
+            &["Signal", "Device", "Protocol"][..]
+        };
+        let mut table = TableBuilder::new(ui)
+            .id_salt("ir_signal_list")
+            .striped(true)
+            .sense(Sense::click())
+            .auto_shrink([false, false])
+            .column(Column::exact(width * 0.21).clip(true))
+            .column(Column::exact(width * 0.22).clip(true));
+        if show_codes {
+            table = table
+                .column(Column::exact(width * 0.12).clip(true))
+                .column(Column::exact(width * 0.17).clip(true));
+        }
+        table = table.column(Column::remainder().clip(true));
+        if search_changed {
+            table = table.vertical_scroll_offset(0.0);
+        } else if std::mem::take(&mut self.reveal_signal)
+            && let Ok(index) = self.matches.binary_search(&self.active)
+        {
+            table = table.scroll_to_row(index, None);
+        }
         let mut selected = self.active;
-        ui.horizontal_wrapped(|ui| {
-            ui.strong(self.capture.format.title());
-            if self.capture.signals.len() > 1 {
-                egui::ComboBox::from_id_salt("pulse_active_signal")
-                    .selected_text(self.capture.signals[self.active].label().as_ref())
-                    .show_ui(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.query).hint_text("Find a signal"),
-                        );
-                        let query = self.query.to_lowercase();
-                        egui::ScrollArea::vertical()
-                            .max_height(298.0)
-                            .show(ui, |ui| {
-                                for (index, signal) in self.capture.signals.iter().enumerate() {
-                                    if query.is_empty()
-                                        || signal.name.to_lowercase().contains(&query)
-                                    {
-                                        ui.selectable_value(&mut selected, index, &signal.name);
-                                    }
-                                }
-                            });
+        table
+            .header(row_height, |mut row| {
+                for title in headings {
+                    row.col(|ui| {
+                        ui.strong(*title);
                     });
+                }
+            })
+            .body(|body| {
+                body.rows(row_height, self.matches.len(), |mut row| {
+                    let index = self.matches[row.index()];
+                    let signal = &self.capture.signals[index];
+                    row.set_selected(index == self.active);
+                    row.col(|ui| {
+                        ui.add(egui::Label::new(&signal.name).truncate());
+                    });
+                    row.col(|ui| {
+                        ui.add(egui::Label::new(signal.model.as_deref().unwrap_or("—")).truncate());
+                    });
+                    row.col(|ui| {
+                        let protocol =
+                            signal
+                                .protocol
+                                .as_deref()
+                                .unwrap_or(if signal.pulses.is_empty() {
+                                    "—"
+                                } else {
+                                    "Raw"
+                                });
+                        ui.add(egui::Label::new(protocol).truncate());
+                    });
+                    if show_codes {
+                        for field in ["address", "command"] {
+                            row.col(|ui| {
+                                let value = signal.fields.iter().find_map(|(key, value)| {
+                                    (key == field).then_some(value.as_str())
+                                });
+                                ui.add(egui::Label::new(value.unwrap_or("—")).truncate());
+                            });
+                        }
+                    }
+                    if row.response().clicked() {
+                        selected = index;
+                    }
+                });
+            });
+        if selected != self.active {
+            self.focus_signal(selected);
+            self.reveal_signal = false;
+        }
+    }
+
+    fn signal_summary(&self, ui: &mut Ui) {
+        let signal = &self.capture.signals[self.active];
+        ui.horizontal_wrapped(|ui| {
+            if signal.name != self.capture.format.title() {
+                ui.strong(signal.label().as_ref());
             }
-            let signal = &self.capture.signals[self.active];
-            if let Some(protocol) = &signal.protocol {
+            if let Some(protocol) = &signal.protocol
+                && protocol != &signal.name
+            {
                 ui.label(protocol);
             }
             if let Some(hz) = signal.carrier_hz {
@@ -104,9 +212,6 @@ impl Viewer {
                 ui.weak(format!("{:.1}% duty", duty * 100.0));
             }
         });
-        if selected != self.active {
-            self.focus_signal(selected);
-        }
     }
 
     fn fields(&self, ui: &mut Ui) {
@@ -130,6 +235,7 @@ impl Viewer {
             ui.weak(format!("{} pulses", signal.pulses.len()));
             if ui.button("Fit").clicked() {
                 self.span = 0.0..duration(signal);
+                self.reveal_pulse = true;
             }
             let span = self.selection.as_ref().map(sample_range);
             let pulses = span.map_or(&[][..], |span| signal.intersecting(span));
@@ -159,7 +265,7 @@ impl Viewer {
                 ui.label(format!("Δ {}", display_value(span.end - span.start, "s")));
             }
         });
-        let height = (ui.available_height() * 0.57).max(85.0);
+        let height = (ui.available_height() * 0.36).clamp(70.0, 208.0);
         let (outer, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
         let rect = Rect::from_min_max(outer.min + vec2(30.0, 6.0), outer.max - vec2(8.0, 18.0));
@@ -203,6 +309,7 @@ impl Viewer {
                 let start = (anchor - (anchor - self.span.start) * width / old - offset)
                     .clamp(0.0, (domain - width).max(0.0));
                 self.span = start..start + width;
+                self.reveal_pulse = true;
             }
         }
         let Some(point) = response.interact_pointer_pos() else {
@@ -212,6 +319,7 @@ impl Viewer {
         if response.clicked() && rect.contains(point) {
             self.cursor = Some(time);
             self.selection = None;
+            self.reveal_pulse = true;
         }
         if response.dragged()
             && let Some(origin) = ui
@@ -221,6 +329,7 @@ impl Viewer {
             let first = timing::at(rect, &self.span, origin.x);
             self.selection = Some(first.min(time)..first.max(time));
             self.cursor = Some(time);
+            self.reveal_pulse = true;
         }
     }
 
@@ -228,35 +337,56 @@ impl Viewer {
         let signal = &self.capture.signals[self.active];
         let span = self.selection.as_ref().unwrap_or(&self.span);
         let pulses = signal.intersecting(sample_range(span));
-        ui.weak("Start · Duration · Level");
-        egui::ScrollArea::vertical()
-            .max_height(ui.available_height().max(32.0))
-            .show_rows(
-                ui,
-                ui.text_style_height(&egui::TextStyle::Monospace),
-                pulses.len(),
-                |ui, rows| {
-                    for index in rows {
-                        let pulse = pulses[index];
-                        let start = pulse.start_us as f64 * 1e-6;
-                        let end = pulse.end_us() as f64 * 1e-6;
-                        let highlighted = self.cursor.is_some_and(|t| start <= t && t < end);
-                        let label = format!(
-                            "{:>13}   {:>12}   {}",
-                            display_value(start, "s"),
-                            display_value(f64::from(pulse.duration_us) * 1e-6, "s"),
-                            level(pulse.high)
-                        );
-                        if ui
-                            .selectable_label(highlighted, egui::RichText::new(label).monospace())
-                            .clicked()
-                        {
-                            self.cursor = Some(start);
-                            self.selection = None;
+        ui.spacing_mut().item_spacing.y = 1.0;
+        let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 3.0;
+        let time_width = (ui.available_width() * 0.35).clamp(40.0, 102.0);
+        let mut table = TableBuilder::new(ui)
+            .id_salt("pulse_samples")
+            .striped(true)
+            .sense(Sense::click())
+            .auto_shrink([false, false])
+            .columns(Column::exact(time_width).clip(true), 2)
+            .column(Column::remainder().clip(true));
+        if std::mem::take(&mut self.reveal_pulse) {
+            let target = self
+                .cursor
+                .filter(|cursor| span.contains(cursor))
+                .map_or(0, |cursor| {
+                    pulses.partition_point(|pulse| pulse.end_us() as f64 * 1e-6 <= cursor)
+                });
+            table = table.scroll_to_row(target, None);
+        }
+        table
+            .header(row_height, |mut row| {
+                for title in ["Start", "Duration", "Level"] {
+                    row.col(|ui| {
+                        ui.strong(title);
+                    });
+                }
+            })
+            .body(|body| {
+                body.rows(row_height, pulses.len(), |mut row| {
+                    let pulse = pulses[row.index()];
+                    let start = pulse.start_us as f64 * 1e-6;
+                    let end = pulse.end_us() as f64 * 1e-6;
+                    row.set_selected(self.cursor.is_some_and(|t| start <= t && t < end));
+                    row.col(|ui| {
+                        ui.monospace(display_value(start, "s"));
+                    });
+                    row.col(|ui| {
+                        ui.monospace(display_value(f64::from(pulse.duration_us) * 1e-6, "s"));
+                    });
+                    row.col(|ui| {
+                        ui.monospace(level(pulse.high));
+                    });
+                    if row.response().clicked() {
+                        self.cursor = Some(start);
+                        if self.selection.take().is_some() {
+                            self.reveal_pulse = true;
                         }
                     }
-                },
-            );
+                });
+            });
     }
 }
 

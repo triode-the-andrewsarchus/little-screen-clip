@@ -2,7 +2,8 @@
 
 pub(super) mod strip;
 
-use egui::{RichText, Ui};
+use egui::{Sense, Ui};
+use egui_extras::{Column, TableBuilder};
 use little_clip_core::{
     engineering::radio::{self, BANDS, Channel, Plan},
     palette::AppPalette,
@@ -136,51 +137,51 @@ impl Viewer {
     }
 
     fn channel_table(&mut self, ui: &mut Ui, height: f32) {
-        ui.horizontal(|ui| {
-            ui.add_sized([56.0, 24.0], egui::Label::new("#"));
-            ui.add_sized([190.0, 24.0], egui::Label::new("Channel"));
-            ui.add_sized([126.0, 24.0], egui::Label::new("Receive"));
-            ui.label("Mode");
-        });
-        egui::ScrollArea::vertical()
+        ui.spacing_mut().item_spacing.y = 1.0;
+        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 3.0;
+        let name_width = (ui.available_width() * 0.28).clamp(72.0, 250.0);
+        TableBuilder::new(ui)
             .id_salt("radio_channel_list")
-            .max_height(height)
-            .show_rows(ui, 24.0, self.shown.len(), |ui, rows| {
-                for row in rows {
-                    let index = self.shown[row];
-                    let channel = &self.plan.channels[index];
-                    ui.horizontal(|ui| {
-                        let number = ui.add_sized(
-                            [56.0, 24.0],
-                            egui::Button::selectable(
-                                self.selected == Some(index),
-                                channel.number.to_string(),
-                            ),
-                        );
-                        let name = ui.add_sized(
-                            [182.0, 24.0],
-                            egui::Label::new(&channel.name)
-                                .truncate()
-                                .sense(egui::Sense::click()),
-                        );
-                        let rx = ui.add_sized(
-                            [110.0, 24.0],
-                            egui::Label::new(radio::frequency_label(channel.receive_hz))
-                                .sense(egui::Sense::click()),
-                        );
-                        let mode =
-                            ui.add(egui::Label::new(&channel.mode).sense(egui::Sense::click()));
-                        if number.clicked() || name.clicked() || rx.clicked() || mode.clicked() {
-                            self.selected = Some(index);
-                        }
-                        if let Some(selected) = self.selected
-                            && selected == index
-                        {
-                            let band = BANDS[radio::band(channel.receive_hz)];
-                            ui.weak(band);
-                        }
+            .striped(true)
+            .sense(Sense::click())
+            .auto_shrink([false, false])
+            .max_scroll_height(height)
+            .column(Column::exact(48.0).clip(true))
+            .column(Column::exact(name_width).clip(true))
+            .column(Column::exact(125.0).clip(true))
+            .column(Column::exact(64.0).clip(true))
+            .column(Column::remainder().clip(true))
+            .header(row_height, |mut row| {
+                for title in ["#", "Channel", "Receive", "Mode", "Band"] {
+                    row.col(|ui| {
+                        ui.strong(title);
                     });
                 }
+            })
+            .body(|body| {
+                body.rows(row_height, self.shown.len(), |mut row| {
+                    let index = self.shown[row.index()];
+                    let channel = &self.plan.channels[index];
+                    row.set_selected(self.selected == Some(index));
+                    row.col(|ui| {
+                        ui.monospace(channel.number.to_string());
+                    });
+                    row.col(|ui| {
+                        ui.add(egui::Label::new(&channel.name).truncate());
+                    });
+                    row.col(|ui| {
+                        ui.monospace(radio::frequency_label(channel.receive_hz));
+                    });
+                    row.col(|ui| {
+                        ui.label(&channel.mode);
+                    });
+                    row.col(|ui| {
+                        ui.label(BANDS[radio::band(channel.receive_hz)]);
+                    });
+                    if row.response().clicked() {
+                        self.selected = Some(index);
+                    }
+                });
             });
     }
 
@@ -245,23 +246,39 @@ impl Viewer {
             return;
         }
         let height = (ui.available_height() - 107.0).max(80.0);
-        egui::ScrollArea::vertical().max_height(height).show_rows(
-            ui,
-            23.0,
-            self.plan.records.len(),
-            |ui, rows| {
-                for index in rows {
+        let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 3.0;
+        TableBuilder::new(ui)
+            .id_salt("radio_clone_records")
+            .striped(true)
+            .sense(Sense::click())
+            .auto_shrink([false, false])
+            .max_scroll_height(height)
+            .column(Column::exact(112.0).clip(true))
+            .column(Column::remainder().clip(true))
+            .header(row_height, |mut row| {
+                row.col(|ui| {
+                    ui.strong("Address");
+                });
+                row.col(|ui| {
+                    ui.strong("Bytes");
+                });
+            })
+            .body(|body| {
+                body.rows(row_height, self.plan.records.len(), |mut row| {
+                    let index = row.index();
                     let record = &self.plan.records[index];
-                    let label = format!("{:08X}     {} bytes", record.address, record.bytes.len());
-                    if ui
-                        .selectable_label(self.record == index, RichText::new(label).monospace())
-                        .clicked()
-                    {
+                    row.set_selected(self.record == index);
+                    row.col(|ui| {
+                        ui.monospace(format!("{:08X}", record.address));
+                    });
+                    row.col(|ui| {
+                        ui.monospace(record.bytes.len().to_string());
+                    });
+                    if row.response().clicked() {
                         self.record = index;
                     }
-                }
-            },
-        );
+                });
+            });
         let record = &self.plan.records[self.record];
         ui.separator();
         ui.strong(format!("Address 0x{:08X}", record.address));

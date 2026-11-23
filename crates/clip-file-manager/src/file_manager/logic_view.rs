@@ -7,6 +7,7 @@ pub(super) mod strip;
 use super::{preview_copy::Copies, preview_job::Task, scope_view::plot as timing};
 use crate::file_source::ReadCheck;
 use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui_extras::{Column, TableBuilder};
 use little_clip_core::{
     BackgroundJobs,
     engineering::{
@@ -367,35 +368,23 @@ impl Viewer {
                 display_value(trace.inspected_until, "s")
             ));
         }
-        let mut destination = None;
-        event_list(
+        let destination = event_list(
             ui,
-            "logic-edge-rows",
+            ("logic-edge-rows", "Level"),
             self.cursor,
             &mut self.followed_cursor,
             selected,
             trace.edges.len(),
-            |ui, rows| {
-                for index in rows {
-                    let edge = &trace.edges[index];
-                    let label = format!(
-                        "{:>13}       {}",
-                        display_value(edge.time_seconds, "s"),
-                        level_label(edge.level)
-                    );
-                    if ui
-                        .selectable_label(
-                            selected == Some(index),
-                            egui::RichText::new(label).monospace(),
-                        )
-                        .clicked()
-                    {
-                        destination = Some(edge.time_seconds);
-                    }
-                }
+            |index| {
+                let edge = &trace.edges[index];
+                (
+                    display_value(edge.time_seconds, "s"),
+                    level_label(edge.level).to_owned(),
+                )
             },
         );
-        if let Some(time) = destination {
+        if let Some(index) = destination {
+            let time = trace.edges[index].time_seconds;
             self.cursor = Some(time);
             self.recenter(time);
         }
@@ -543,25 +532,56 @@ impl Viewer {
 
 fn event_list(
     ui: &mut Ui,
-    id: &'static str,
+    (id, heading): (&'static str, &'static str),
     cursor: Option<f64>,
     followed_cursor: &mut Option<f64>,
     selected: Option<usize>,
     count: usize,
-    add: impl FnMut(&mut Ui, Range<usize>),
-) {
-    let text_height = ui.text_style_height(&egui::TextStyle::Monospace) + 2.0;
-    let mut rows = egui::ScrollArea::vertical()
+    mut values: impl FnMut(usize) -> (String, String),
+) -> Option<usize> {
+    ui.spacing_mut().item_spacing.y = 1.0;
+    let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 3.0;
+    let time_width = (ui.available_width() * 0.32).clamp(40.0, 111.0);
+    let mut table = TableBuilder::new(ui)
         .id_salt(id)
-        .max_height((ui.available_height() - 8.0).max(42.0));
+        .striped(true)
+        .sense(Sense::click())
+        .auto_shrink([false, false])
+        .column(Column::exact(time_width).clip(true))
+        .column(Column::remainder().clip(true));
     if *followed_cursor != cursor {
         if let Some(row) = selected {
-            let stride = text_height + ui.spacing().item_spacing.y;
-            rows = rows.vertical_scroll_offset((row as f32 * stride - stride * 2.0).max(0.0));
+            table = table.scroll_to_row(row, None);
         }
         *followed_cursor = cursor;
     }
-    rows.show_rows(ui, text_height, count, add);
+    let mut clicked = None;
+    table
+        .header(row_height, |mut row| {
+            row.col(|ui| {
+                ui.strong("Time");
+            });
+            row.col(|ui| {
+                ui.strong(heading);
+            });
+        })
+        .body(|body| {
+            body.rows(row_height, count, |mut row| {
+                let index = row.index();
+                let (time, value) = values(index);
+                row.set_selected(selected == Some(index));
+                row.col(|ui| {
+                    ui.monospace(time);
+                });
+                row.col(|ui| {
+                    ui.monospace(value);
+                });
+                if row.response().clicked() {
+                    clicked = Some(index);
+                }
+            });
+        });
+    clicked
 }
 
 fn read_frame(recording: &Recording, key: WindowKey, cancel: &AtomicBool) -> Result<Frame, String> {
