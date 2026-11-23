@@ -175,6 +175,7 @@ pub fn sample_span(channel: &Channel, time: Range<f64>) -> Range<u64> {
 pub enum Capture {
     Scope(scope::Capture),
     Power(jls::Capture),
+    Audio(crate::audio::sampled_wave::SampledWave),
 }
 
 #[derive(Default)]
@@ -194,6 +195,7 @@ impl Capture {
         match self {
             Self::Scope(capture) => capture.model(),
             Self::Power(capture) => capture.model(),
+            Self::Audio(_) => "PCM WAVE",
         }
     }
 
@@ -201,6 +203,7 @@ impl Capture {
         match self {
             Self::Scope(capture) => capture.channels(),
             Self::Power(capture) => capture.channels(),
+            Self::Audio(capture) => capture.channels(),
         }
     }
 
@@ -213,6 +216,7 @@ impl Capture {
         match self {
             Self::Scope(capture) => capture.read_samples(index, range, cancel),
             Self::Power(capture) => capture.read_samples(index, range, cancel),
+            Self::Audio(capture) => capture.read_samples(index, range, cancel),
         }
     }
 
@@ -272,14 +276,14 @@ impl Capture {
         cancel: &AtomicBool,
     ) -> Result<Envelope, String> {
         match self {
-            Self::Scope(_) => {
+            Self::Scope(_) | Self::Audio(_) => {
                 let step = (range.end - range.start).div_ceil(bins).max(1);
                 summarize(
                     self,
                     index,
                     range,
                     step,
-                    complete_scope || step <= PREVIEW_WINDOW,
+                    (complete_scope && matches!(self, Self::Scope(_))) || step <= PREVIEW_WINDOW,
                     cancel,
                 )
             }
@@ -314,6 +318,13 @@ impl Recording {
             .is_some_and(|extension| extension.eq_ignore_ascii_case("jls"))
         {
             Capture::Power(jls::Capture::open(input)?)
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+        {
+            Capture::Audio(crate::audio::sampled_wave::SampledWave::open(
+                input, path, cancel,
+            )?)
         } else {
             Capture::Scope(scope::Capture::open(input)?)
         };

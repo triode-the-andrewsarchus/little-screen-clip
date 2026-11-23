@@ -146,9 +146,8 @@ impl Viewers {
             self.session,
             Some(
                 ViewerSession::Comparison(_)
-                    | ViewerSession::Waveform(_)
+                    | ViewerSession::Signals(_)
                     | ViewerSession::Touchstone(_)
-                    | ViewerSession::LogicCapture(_)
                     | ViewerSession::PacketCapture(_)
                     | ViewerSession::CanCapture(_)
                     | ViewerSession::Tags(_)
@@ -256,9 +255,8 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::Minecraft(_)
         | ViewerSession::Toolpath(_)
         | ViewerSession::Comparison(_)
-        | ViewerSession::Waveform(_)
+        | ViewerSession::Signals(_)
         | ViewerSession::Touchstone(_)
-        | ViewerSession::LogicCapture(_)
         | ViewerSession::PacketCapture(_)
         | ViewerSession::CanCapture(_)
         | ViewerSession::PulseSignals(_)

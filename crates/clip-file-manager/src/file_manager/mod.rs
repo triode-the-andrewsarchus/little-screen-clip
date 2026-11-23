@@ -60,6 +60,7 @@ mod scope_view;
 pub(crate) mod search;
 mod selection;
 mod shelf;
+mod signal_view;
 mod sorting;
 mod spreadsheet_strip;
 mod subtitle_strip;
@@ -117,6 +118,12 @@ impl LastStatus {
     pub fn is_active(&self, duration: Duration) -> bool {
         self.timestamp.elapsed() < duration
     }
+}
+
+#[derive(Clone, Copy)]
+enum EngineeringAction {
+    Compare,
+    Analyze,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -352,7 +359,7 @@ pub(crate) struct FileManager {
     was_modal: bool,
     shelf: shelf::Shelf,
     open_file: Option<PathBuf>,
-    compare_selection: bool,
+    engineering_selection: Option<EngineeringAction>,
     external_file: Option<PathBuf>,
     inspect_file: Option<PathBuf>,
     document_start: Option<(PathBuf, DocumentPosition)>,
@@ -443,7 +450,7 @@ impl FileManager {
             was_modal: false,
             shelf: shelf::Shelf::default(),
             open_file: None,
-            compare_selection: false,
+            engineering_selection: None,
             external_file: None,
             inspect_file: None,
             document_start: None,

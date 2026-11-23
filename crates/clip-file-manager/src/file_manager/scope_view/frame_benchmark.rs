@@ -58,7 +58,7 @@ fn scope_frame_benchmark() {
                     |ctx| {
                         ctx.root_ui(|ui| {
                             egui::CentralPanel::default().show(ui, |ui| {
-                                viewer.ui(ui, &mut false, &palette, &mut copies);
+                                viewer.content(ui, &palette, &mut copies, None);
                             });
                         });
                     },

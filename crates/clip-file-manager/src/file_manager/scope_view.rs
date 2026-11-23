@@ -1,5 +1,6 @@
 //! File-backed oscilloscope plots with one timeline shared by cursors and analysis.
 
+mod filters;
 #[cfg(test)]
 mod frame_benchmark;
 mod hover;
@@ -10,7 +11,11 @@ mod reads;
 mod snap;
 pub(super) mod strip;
 
-use super::{preview_copy::Copies, preview_job::Task};
+use super::{
+    preview_copy::Copies,
+    preview_job::Task,
+    signal_view::timeline::{self, Link},
+};
 use crate::file_source::ReadCheck;
 use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2};
 use little_clip_core::{
@@ -70,6 +75,7 @@ pub(super) struct Viewer {
     analysis_dirty_at: f64,
     math: String,
     math_state: math::Math,
+    filters: filters::Filters,
     spectrum: bool,
     spectrum_window: SpectrumWindow,
     spectrum_db: bool,
@@ -133,6 +139,7 @@ impl Viewer {
             analysis_dirty_at: 0.0,
             math: String::new(),
             math_state: math::Math::default(),
+            filters: filters::Filters::default(),
             spectrum: false,
             spectrum_window: SpectrumWindow::Hann,
             spectrum_db: true,
@@ -160,27 +167,38 @@ impl Viewer {
         self.span = self.clamp_span(left - pad..right + pad);
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette, copies: &mut Copies) {
+    pub(super) fn domain(&self) -> Range<f64> {
+        self.domain.clone()
+    }
+
+    pub(super) fn span(&mut self) -> &mut Range<f64> {
+        &mut self.span
+    }
+
+    pub(super) fn min_height(&self) -> f32 {
+        if self.spectrum { 410.0 } else { 205.0 }
+    }
+
+    pub(super) fn content(
+        &mut self,
+        ui: &mut Ui,
+        palette: &AppPalette,
+        copies: &mut Copies,
+        link: Option<&Link>,
+    ) -> Option<f64> {
         self.poll(ui.ctx());
         if self.logic_subview(ui, palette, copies) {
-            return;
+            return None;
         }
-        let (label, icon) = if self.recording.power_recording() {
-            ("Power recording", crate::icons::Icon::Zap)
-        } else {
-            ("Oscilloscope", crate::icons::Icon::Waves)
-        };
-        let mut shell = crate::shell::StudioShell::new(label, icon, palette, close);
-        shell.render_header(ui, |_| {});
         self.toolbar(ui, copies);
         self.power_totals(ui);
         let has_spectrum = self.spectrum;
         let plot_height = if has_spectrum {
-            (ui.available_height() * 0.54).max(80.0)
+            (ui.available_height() * 0.36).max(68.0)
         } else {
             (ui.available_height() - 57.0).max(80.0)
         };
-        self.waveform(ui, plot_height);
+        let probe = self.waveform(ui, plot_height, link);
         self.overview_ui(ui);
         self.cursor_readout(ui);
         if has_spectrum {
@@ -194,9 +212,11 @@ impl Viewer {
             snap.request(&self.recording, ui.ctx());
         }
         self.request_analysis(ui.ctx());
+        self.filters.update(ui, &self.recording, self.active);
         if self.pending() {
             ui.ctx().request_repaint_after(Duration::from_millis(16));
         }
+        probe
     }
 
     fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) {
@@ -276,7 +296,7 @@ impl Viewer {
 
     fn math_controls(&mut self, ui: &mut Ui) {
         let channel = &self.overview.channels[self.active];
-        if !self.recording.power_recording() || channel.unit == "V" {
+        if channel.unit == "V" {
             let status = self
                 .math_state
                 .status(channel, &self.span, self.math_envelope());
@@ -323,28 +343,40 @@ impl Viewer {
         &self.index.as_ref().unwrap_or(&self.overview.envelopes)[self.active]
     }
 
-    fn waveform(&mut self, ui: &mut Ui, height: f32) {
+    fn waveform(&mut self, ui: &mut Ui, height: f32, link: Option<&Link>) -> Option<f64> {
         let (outer, response) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), height.max(40.0)),
             Sense::click_and_drag(),
         );
         let rect = Rect::from_min_max(
-            outer.min + egui::vec2(56.0, 4.0),
-            outer.max - egui::vec2(8.0, 16.0),
+            outer.min + egui::vec2(if link.is_some() { 78.0 } else { 56.0 }, 4.0),
+            outer.max - egui::vec2(9.0, 16.0),
         );
-        self.navigate(ui, rect, &response);
+        if let Some(span) =
+            timeline::navigate(ui.ctx(), rect, &response, &self.span, link.is_some())
+        {
+            let domain = link.map_or(&self.domain, |link| &link.domain);
+            self.span = timeline::fit(
+                domain,
+                span,
+                self.overview.channels[self.active].interval_seconds,
+            );
+        }
         self.move_cursors(ui, rect, &response);
         let painter = ui.painter_at(outer);
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
         let ink = ui.visuals().weak_text_color();
-        plot::axes(&painter, rect, &self.span, ink);
+        let axis = timeline::translate(&self.span, link.map_or(0.0, |link| link.offset));
+        plot::axes(&painter, rect, &axis, ink);
         let clipped = painter.with_clip_rect(rect);
-        self.hover.time = response
+        let probe = response
             .hover_pos()
             .filter(|point| rect.contains(*point))
             .map(|point| plot::at(rect, &self.span, point.x));
+        self.hover.time = probe.or(link.and_then(|link| link.probe));
         self.draw_channels(&painter, &clipped, rect, ink);
         self.draw_math(&painter, &clipped, rect, ink);
+        self.draw_filters(&painter, &clipped, rect, ink);
         self.paint_marks(ui, &clipped, rect);
         for (label, time) in ["A", "B"]
             .into_iter()
@@ -371,8 +403,10 @@ impl Viewer {
             rect,
             ui.visuals().text_color(),
             ui.visuals().window_fill(),
+            link.map_or(0.0, |link| link.offset),
         );
         response.on_hover_text("Scroll to zoom · Middle drag to pan · Drag to add a range · Right-click a range to remove · Shift bypasses zero-crossing snap");
+        probe
     }
 
     fn draw_channels(
@@ -406,7 +440,13 @@ impl Viewer {
             let detail = self
                 .detail
                 .as_ref()
-                .filter(|(cover, _)| contains(cover, &self.span))
+                .filter(|(cover, _)| {
+                    contains(
+                        cover,
+                        &(self.span.start.max(self.domain.start)
+                            ..self.span.end.min(self.domain.end)),
+                    )
+                })
                 .map(|(_, detail)| detail);
             if let Some(raw) = detail.and_then(|detail| detail.raw(index)) {
                 let (start, samples) = raw.visible(&self.span);
@@ -454,7 +494,9 @@ impl Viewer {
     }
 
     fn lane_count(&self) -> usize {
-        self.physical_lanes() + usize::from(self.math_state.numeric().is_some())
+        self.physical_lanes()
+            + usize::from(self.math_state.numeric().is_some())
+            + self.filters.len()
     }
 
     fn channel_lane(&self, rect: Rect, slot: usize, index: usize) -> (Rect, Peak) {
@@ -743,6 +785,7 @@ impl Viewer {
             || self.detail_job.is_some()
             || self.analysis_job.is_some()
             || self.snaps.iter().any(CursorSnap::pending)
+            || self.filters.pending()
             || self.hover.pending()
             || self.math_state.pending()
             || self.analysis_key.is_none()
@@ -756,41 +799,11 @@ impl Viewer {
     }
 
     fn clamp_span(&self, requested: Range<f64>) -> Range<f64> {
-        let total = self.domain.end - self.domain.start;
-        let min = (self.overview.channels[self.active].interval_seconds * 4.0).min(total);
-        let width = (requested.end - requested.start).clamp(min, total);
-        let first = requested.start.clamp(
-            self.domain.start,
-            (self.domain.end - width).max(self.domain.start),
-        );
-        first..first + width
-    }
-
-    fn navigate(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
-        let pointer = ui.input(|input| input.pointer.hover_pos());
-        if !response.hovered() || !pointer.is_some_and(|pointer| rect.contains(pointer)) {
-            return;
-        }
-        let (scroll, movement) =
-            ui.input(|input| (input.smooth_scroll_delta, input.pointer.delta()));
-        let span = self.span.end - self.span.start;
-        if scroll.y != 0.0
-            && let Some(pointer) = pointer
-        {
-            let t = plot::at(rect, &self.span, pointer.x);
-            let scale = f64::from((-scroll.y * 0.012).exp()).clamp(0.1, 10.0);
-            self.span =
-                self.clamp_span(t + (self.span.start - t) * scale..t + (self.span.end - t) * scale);
-        }
-        let drag = if response.dragged_by(PointerButton::Middle) {
-            movement.x
-        } else {
-            0.0
-        };
-        let offset = -f64::from((scroll.x + drag) / rect.width().max(1.0)) * span;
-        if offset != 0.0 {
-            self.span = self.clamp_span(self.span.start + offset..self.span.end + offset);
-        }
+        timeline::fit(
+            &self.domain,
+            requested,
+            self.overview.channels[self.active].interval_seconds,
+        )
     }
 
     fn move_cursors(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
@@ -944,7 +957,10 @@ impl Viewer {
     }
 
     fn request_detail(&mut self) {
-        if self.detail_job.is_some() {
+        if self.detail_job.is_some()
+            || self.span.end <= self.domain.start
+            || self.span.start >= self.domain.end
+        {
             return;
         }
         let span = self.span.end - self.span.start;
@@ -959,8 +975,9 @@ impl Viewer {
         {
             return;
         }
+        let visible = self.span.start.max(self.domain.start)..self.span.end.min(self.domain.end);
         if self.detail.as_ref().is_some_and(|(cover, detail)| {
-            contains(cover, &self.span)
+            contains(cover, &visible)
                 && matches!(detail, PlotData::Raw(_)) == raw
                 && cover.end - cover.start <= span * 4.0
         }) {

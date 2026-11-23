@@ -54,9 +54,8 @@ enum Loaded {
         original_path: PathBuf,
     },
     Path,
-    Waveform(Box<super::scope_view::Viewer>),
+    Signals(Box<super::signal_view::Viewer>),
     Touchstone(Box<super::touchstone_view::Viewer>),
-    LogicCapture(Box<super::logic_view::Viewer>),
     PacketCapture(Box<super::packets_view::Viewer>),
     CanCapture(Box<super::can_view::Viewer>),
     PulseSignals(Box<super::pulse_view::Viewer>),
@@ -92,9 +91,8 @@ enum ViewerSession {
     Midi(MidiViewerState),
     Model(Model3dViewerState),
     Scene(SplatViewerState),
-    Waveform(Box<super::scope_view::Viewer>),
+    Signals(Box<super::signal_view::Viewer>),
     Touchstone(Box<super::touchstone_view::Viewer>),
-    LogicCapture(Box<super::logic_view::Viewer>),
     PacketCapture(Box<super::packets_view::Viewer>),
     CanCapture(Box<super::can_view::Viewer>),
     PulseSignals(Box<super::pulse_view::Viewer>),
@@ -256,7 +254,11 @@ impl Viewers {
         });
     }
 
-    pub fn open_comparison(&mut self, paths: Vec<PathBuf>) {
+    pub(super) fn open_engineering(
+        &mut self,
+        paths: Vec<PathBuf>,
+        action: super::EngineeringAction,
+    ) {
         if self.active() {
             return;
         }
@@ -265,8 +267,15 @@ impl Viewers {
         };
         self.source_guard = None;
         self.open_job(path, false, move |_, cancel| {
-            super::engineering_compare::Viewer::load(paths, cancel)
-                .map(|view| (Loaded::Comparison(Box::new(view)), None))
+            let loaded = match action {
+                super::EngineeringAction::Compare => Loaded::Comparison(Box::new(
+                    super::engineering_compare::Viewer::load(paths, cancel)?,
+                )),
+                super::EngineeringAction::Analyze => Loaded::Signals(Box::new(
+                    super::signal_view::Viewer::load_sources(paths, cancel)?,
+                )),
+            };
+            Ok((loaded, None))
         });
     }
 
@@ -437,12 +446,7 @@ impl Viewers {
                 Some(ViewerSession::Multisample(state)),
                 Some(super::DocumentPosition::SampleRegion(instrument, region)),
             ) => state.select(instrument, region),
-            (
-                Some(ViewerSession::Waveform(state)),
-                Some(super::DocumentPosition::ScopeSamples { first, end, .. }),
-            ) => {
-                state.focus_samples(first, end);
-            }
+            (Some(ViewerSession::Signals(state)), Some(position)) => state.focus(position),
             (
                 Some(ViewerSession::Touchstone(state)),
                 Some(super::DocumentPosition::TouchstoneBand {
@@ -452,16 +456,6 @@ impl Viewers {
                 }),
             ) => {
                 state.focus_band([f64::from_bits(start_hz_bits), f64::from_bits(end_hz_bits)]);
-            }
-            (
-                Some(ViewerSession::LogicCapture(state)),
-                Some(super::DocumentPosition::LogicRegion {
-                    start_bits,
-                    end_bits,
-                    ..
-                }),
-            ) => {
-                state.focus_time(f64::from_bits(start_bits), f64::from_bits(end_bits));
             }
             (
                 Some(ViewerSession::PacketCapture(state)),
@@ -530,9 +524,8 @@ impl Viewers {
                 | ViewerSession::Minecraft(_)
                 | ViewerSession::Toolpath(_)
                 | ViewerSession::Embroidery(_)
-                | ViewerSession::Waveform(_)
+                | ViewerSession::Signals(_)
                 | ViewerSession::Touchstone(_)
-                | ViewerSession::LogicCapture(_)
                 | ViewerSession::PacketCapture(_)
                 | ViewerSession::CanCapture(_)
                 | ViewerSession::PulseSignals(_)
@@ -959,17 +952,14 @@ fn load(
         Kind::Document(Format::Embroidery) => super::embroidery::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Embroidery),
-        Kind::Document(Format::Oscilloscope | Format::PowerRecording) => {
-            super::scope_view::Viewer::load(path, cancelled)
-                .map(Box::new)
-                .map(Loaded::Waveform)
-        }
+        Kind::Document(
+            format @ (Format::Oscilloscope | Format::PowerRecording | Format::LogicCapture),
+        ) => super::signal_view::Viewer::load(path, format, cancelled)
+            .map(Box::new)
+            .map(Loaded::Signals),
         Kind::Document(Format::Touchstone) => super::touchstone_view::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Touchstone),
-        Kind::Document(Format::LogicCapture) => super::logic_view::Viewer::load(path, cancelled)
-            .map(Box::new)
-            .map(Loaded::LogicCapture),
         Kind::Document(Format::PacketCapture) => super::packets_view::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::PacketCapture),
@@ -1102,17 +1092,13 @@ fn session(
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
         Loaded::Multisample(viewer) => ViewerSession::Multisample(*viewer),
         Loaded::Embroidery(viewer) => ViewerSession::Embroidery(viewer),
-        Loaded::Waveform(mut viewer) => {
+        Loaded::Signals(mut viewer) => {
             viewer.set_check(check);
-            ViewerSession::Waveform(viewer)
+            ViewerSession::Signals(viewer)
         }
         Loaded::Touchstone(mut viewer) => {
             viewer.set_check(check);
             ViewerSession::Touchstone(viewer)
-        }
-        Loaded::LogicCapture(mut viewer) => {
-            viewer.set_check(check);
-            ViewerSession::LogicCapture(viewer)
         }
         Loaded::PacketCapture(mut viewer) => {
             viewer.set_check(check);
@@ -1234,9 +1220,8 @@ fn render(
         ViewerSession::Model(state) => state.render_ui(ui, palette, close),
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
         ViewerSession::Comparison(state) => state.ui(ui, close, palette),
-        ViewerSession::Waveform(state) => state.ui(ui, close, palette, copies),
+        ViewerSession::Signals(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Touchstone(state) => state.ui(ui, close, palette, copies),
-        ViewerSession::LogicCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::PacketCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::CanCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::PulseSignals(state) => state.ui(ui, close, palette),

@@ -4,7 +4,12 @@ mod plot;
 mod protocols;
 pub(super) mod strip;
 
-use super::{preview_copy::Copies, preview_job::Task, scope_view::plot as timing};
+use super::{
+    preview_copy::Copies,
+    preview_job::Task,
+    scope_view::plot as timing,
+    signal_view::timeline::{self, Link},
+};
 use crate::file_source::ReadCheck;
 use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2, vec2};
 use egui_extras::{Column, TableBuilder};
@@ -15,7 +20,6 @@ use little_clip_core::{
         logic_preview::{Overview, Recording},
         waveforms::display_value,
     },
-    palette::AppPalette,
 };
 use std::{
     io::Write,
@@ -110,16 +114,26 @@ impl Viewer {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette, copies: &mut Copies) {
+    pub(super) fn domain(&self) -> Range<f64> {
+        self.overview.span.clone()
+    }
+
+    pub(super) fn span(&mut self) -> &mut Range<f64> {
+        &mut self.span
+    }
+
+    pub(super) fn min_height(&self) -> f32 {
+        if self.show_transitions { 380.0 } else { 205.0 }
+    }
+
+    pub(super) fn content(
+        &mut self,
+        ui: &mut Ui,
+        copies: &mut Copies,
+        link: Option<&Link>,
+    ) -> Option<f64> {
         self.poll(ui.ctx());
-        self.refine(ui.ctx());
-        let mut shell = crate::shell::StudioShell::new(
-            "Logic capture",
-            crate::icons::Icon::Waves,
-            palette,
-            close,
-        );
-        shell.render_header(ui, |_| {});
+        self.refine(ui.ctx(), link.is_none());
         self.toolbar(ui, copies);
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
             ui.weak(message);
@@ -129,7 +143,7 @@ impl Viewer {
         }
         let reserved = if self.show_transitions { 238.0 } else { 39.0 };
         let height = (ui.available_height() - reserved).max(75.0);
-        self.waveforms(ui, height);
+        let probe = self.waveforms(ui, height, link);
         self.overview(ui);
         self.request_window(ui.ctx());
         if self.show_transitions && !self.protocols.edges() {
@@ -145,6 +159,7 @@ impl Viewer {
                 self.transitions(ui);
             }
         }
+        probe
     }
 
     fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) {
@@ -216,13 +231,19 @@ impl Viewer {
         self.active
     }
 
-    fn waveforms(&mut self, ui: &mut Ui, height: f32) {
+    fn waveforms(&mut self, ui: &mut Ui, height: f32, link: Option<&Link>) -> Option<f64> {
         let (outer, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
         let annotations = self.show_transitions && !self.protocols.edges();
         let top = if annotations { 25.0 } else { 3.0 };
         let rect = Rect::from_min_max(outer.min + vec2(78.0, top), outer.max - vec2(9.0, 18.0));
-        self.navigate(ui, rect, &response);
+        if let Some(span) =
+            timeline::navigate(ui.ctx(), rect, &response, &self.span, link.is_some())
+        {
+            let domain = link.map_or(&self.overview.span, |link| &link.domain);
+            self.span = timeline::fit(domain, span, self.interval());
+        }
+        self.move_cursor(ui, rect, &response);
         let painter = ui.painter_at(outer);
         let ink = ui.visuals().weak_text_color();
         if annotations {
@@ -245,7 +266,8 @@ impl Viewer {
             }
         }
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-        timing::axes(&painter, rect, &self.span, ink);
+        let axis = timeline::translate(&self.span, link.map_or(0.0, |link| link.offset));
+        timing::axes(&painter, rect, &axis, ink);
         let clipped = painter.with_clip_rect(rect);
         self.draw_channels(&painter, &clipped, rect, ink);
         if let Some(selected) = &self.selected {
@@ -281,6 +303,15 @@ impl Viewer {
             };
             clipped.vline(x, rect.y_range(), Stroke::new(1.25, color));
         }
+        let probe = response
+            .hover_pos()
+            .filter(|point| rect.contains(*point))
+            .map(|point| timing::at(rect, &self.span, point.x));
+        if let Some(time) = probe.or(link.and_then(|link| link.probe)) {
+            let x = timing::x_at(rect, &self.span, time);
+            clipped.vline(x, rect.y_range(), Stroke::new(1.0, ink));
+        }
+        probe
     }
 
     fn draw_channels(
@@ -414,30 +445,7 @@ impl Viewer {
         }
     }
 
-    fn navigate(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
-        if response.hovered()
-            && let Some(pointer) = ui
-                .input(|input| input.pointer.hover_pos())
-                .filter(|p| rect.contains(*p))
-        {
-            let scroll = ui.input(|input| input.smooth_scroll_delta);
-            let width = self.span.end - self.span.start;
-            let delta = ui.input(|input| input.pointer.delta().x);
-            let drag = if response.dragged_by(PointerButton::Middle) {
-                delta
-            } else {
-                0.0
-            };
-            let shift = -f64::from((scroll.x + drag) / rect.width().max(1.0)) * width;
-            if scroll.y != 0.0 || shift != 0.0 {
-                let anchor = timing::at(rect, &self.span, pointer.x);
-                let scale = f64::from((-scroll.y * 0.012).exp()).clamp(0.1, 10.0);
-                self.span = self.fit(
-                    anchor + (self.span.start - anchor) * scale + shift
-                        ..anchor + (self.span.end - anchor) * scale + shift,
-                );
-            }
-        }
+    fn move_cursor(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
         let Some(pointer) = response.interact_pointer_pos() else {
             return;
         };
@@ -462,17 +470,14 @@ impl Viewer {
         self.span = self.fit(center - half..center + half);
     }
 
-    fn fit(&self, requested: Range<f64>) -> Range<f64> {
-        let domain = &self.overview.span;
-        let total = domain.end - domain.start;
-        let resolution = self.overview.lanes[self.focused_lane()]
+    fn interval(&self) -> f64 {
+        self.overview.lanes[self.focused_lane()]
             .sample_rate
-            .map_or(1e-9, f64::recip);
-        let width = (requested.end - requested.start).clamp((resolution * 4.0).min(total), total);
-        let start = requested
-            .start
-            .clamp(domain.start, (domain.end - width).max(domain.start));
-        start..start + width
+            .map_or(1e-9, f64::recip)
+    }
+
+    fn fit(&self, requested: Range<f64>) -> Range<f64> {
+        timeline::fit(&self.overview.span, requested, self.interval())
     }
 
     fn poll(&mut self, ctx: &Context) {
@@ -494,7 +499,7 @@ impl Viewer {
         }
     }
 
-    fn refine(&mut self, ctx: &Context) {
+    fn refine(&mut self, ctx: &Context, follow_extent: bool) {
         if let Some(result) = self.refinement.as_ref().and_then(Task::poll) {
             self.refinement = None;
             match result
@@ -506,7 +511,7 @@ impl Viewer {
                     if let Some(overview) = overview {
                         let fit = self.span == self.overview.span;
                         self.overview = overview;
-                        if fit {
+                        if fit && follow_extent {
                             self.span = self.overview.span.clone();
                         }
                     }

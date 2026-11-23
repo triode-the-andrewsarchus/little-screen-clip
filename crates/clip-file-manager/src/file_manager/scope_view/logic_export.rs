@@ -58,7 +58,14 @@ impl Viewer {
                 && ui.input_mut(|input| {
                     input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
                 }));
-        converted.view.ui(ui, &mut back, palette, copies);
+        let mut shell = crate::shell::StudioShell::new(
+            "Logic from math",
+            crate::icons::Icon::Waves,
+            palette,
+            &mut back,
+        );
+        shell.render_header(ui, |_| {});
+        converted.view.content(ui, copies, None);
         if back {
             self.conversion.opened = None;
         }

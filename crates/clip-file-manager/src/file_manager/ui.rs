@@ -817,7 +817,7 @@ impl FileManager {
     }
 
     fn apply_list_actions(&mut self, actions: ListActions) {
-        self.compare_selection |= actions.compare_selection;
+        self.engineering_selection = actions.engineering_selection.or(self.engineering_selection);
         if actions.selection.is_some() || actions.clear {
             self.type_navigation.clear();
         }
@@ -1703,7 +1703,7 @@ struct ListActions {
     mount_binary: Option<(PathBuf, bool)>,
     unmount_binary: Option<PathBuf>,
     search_similar: Option<PathBuf>,
-    compare_selection: bool,
+    engineering_selection: Option<super::EngineeringAction>,
 }
 
 impl ListActions {
@@ -1867,7 +1867,7 @@ impl ListActions {
             && (2..=super::engineering_compare::MAX_SOURCES).contains(&count)
             && ui.button("Compare selected files").clicked()
         {
-            self.compare_selection = true;
+            self.engineering_selection = Some(super::EngineeringAction::Compare);
             ui.close();
         }
     }

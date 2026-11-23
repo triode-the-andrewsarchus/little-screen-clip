@@ -14,6 +14,7 @@ pub use cover::read_audio_cover;
 pub mod decode;
 mod render;
 pub use render::{WavEncoding, WavRenderOptions, render_wav};
+pub(crate) mod sampled_wave;
 mod source;
 pub use source::{
     AudioInput, SeekableAudio, ToolAudioInput, from_file as audio_input_from_file,

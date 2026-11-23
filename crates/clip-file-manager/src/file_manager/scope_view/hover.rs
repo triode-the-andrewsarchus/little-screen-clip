@@ -115,10 +115,17 @@ impl Viewer {
             .and_then(|raw: &RawChannel| raw.value_at(time))
     }
 
-    pub(super) fn paint_hover(&self, painter: &Painter, rect: Rect, ink: Color32, fill: Color32) {
+    pub(super) fn paint_hover(
+        &self,
+        painter: &Painter,
+        rect: Rect,
+        ink: Color32,
+        fill: Color32,
+        offset: f64,
+    ) {
         let Some(time) = self.hover.time else { return };
         let x = plot::x_at(rect, &self.span, time);
-        let mut labels = vec![(display_value(time, "s"), ink)];
+        let mut labels = vec![(display_value(time + offset, "s"), ink)];
         painter.vline(x, rect.y_range(), Stroke::new(1.0, ink));
         for (slot, index) in self.visible_channels().enumerate() {
             let channel = &self.overview.channels[index];

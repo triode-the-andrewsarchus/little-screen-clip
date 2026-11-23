@@ -486,23 +486,33 @@ impl FileManagerApp {
         }
     }
     fn comparison_menu(&mut self, ui: &mut egui::Ui) {
-        if !self.viewers.active()
-            && self.browser.can_compare_selection()
-            && ui.button("Compare selected files").clicked()
+        if self.viewers.active() || !self.browser.can_compare_selection() {
+            return;
+        }
+        if self
+            .browser
+            .selected_paths()
+            .iter()
+            .all(|path| super::signal_view::supports_path(path))
+            && ui.button("Analyze signals together").clicked()
         {
-            self.browser.compare_selection = true;
+            self.browser.engineering_selection = Some(super::EngineeringAction::Analyze);
+            ui.close();
+        }
+        if ui.button("Compare selected files").clicked() {
+            self.browser.engineering_selection = Some(super::EngineeringAction::Compare);
             ui.close();
         }
     }
 
-    fn try_open_comparison(&mut self, ctx: &egui::Context) -> bool {
-        if !std::mem::take(&mut self.browser.compare_selection) {
+    fn try_open_selection(&mut self, ctx: &egui::Context) -> bool {
+        let Some(action) = self.browser.engineering_selection.take() else {
             return false;
-        }
+        };
         match self.browser.comparison_paths() {
             Ok(paths) => {
                 self.browser.stop_previews();
-                self.viewers.open_comparison(paths);
+                self.viewers.open_engineering(paths, action);
                 ctx.request_repaint();
                 true
             }
@@ -529,7 +539,7 @@ impl FileManagerApp {
                 }
             } else {
                 self.browser.ui(ui, &self.palette);
-                if self.try_open_comparison(ctx) {
+                if self.try_open_selection(ctx) {
                     return;
                 }
                 if let Some(request) = self.browser.constellation.studio_request.take() {

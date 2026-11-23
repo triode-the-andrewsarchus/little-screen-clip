@@ -120,6 +120,7 @@ impl Viewer {
                 display_value(peak.map_or(f64::NAN, hz), "Hz")
             ));
         }
+        self.draw_filter_response(ui, rect, &span);
         response.on_hover_text(
             "Scroll to zoom the frequency axis · Click a frequency to measure amplitude",
         );
@@ -153,6 +154,7 @@ impl Viewer {
                 self.spectrum_span = None;
             }
         });
+        self.filter_controls(ui);
     }
 }
 

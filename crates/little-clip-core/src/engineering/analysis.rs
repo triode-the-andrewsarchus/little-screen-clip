@@ -1,9 +1,11 @@
 //! Numerical tools for inspecting bounded windows of captured signals.
 
 mod expression;
+mod filter;
 mod spectrum;
 
 pub use expression::{Expression, ExpressionError, Value};
+pub use filter::{FilterChain, FilterKind, FilterStage};
 pub use spectrum::{
     MAX_ANALYSIS_SAMPLES, Spectrum, SpectrumWindow, fundamental_hz, spectrum, spectrum_with_window,
 };
