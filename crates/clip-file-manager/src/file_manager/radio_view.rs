@@ -1,7 +1,9 @@
 //! Channel lists and Icom image inspection without connecting a radio.
 
+mod frequency;
 pub(super) mod strip;
 
+use crate::ui_appearance::WorkbenchColors;
 use egui::{Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 use little_clip_core::{
@@ -16,7 +18,10 @@ pub(super) struct Viewer {
     selected: Option<usize>,
     band: Option<usize>,
     search: String,
+    matched: Vec<usize>,
     shown: Vec<usize>,
+    frequency: frequency::View,
+    scroll_to: Option<usize>,
     memory: bool,
     record: usize,
 }
@@ -26,6 +31,9 @@ impl Viewer {
         let plan = radio::read(path, cancel)?;
         let length = plan.channels.len();
         let band_counts = plan.band_counts();
+        let shown: Vec<_> = (0..length).collect();
+        let mut frequency = frequency::View::default();
+        frequency.rebuild(&plan.channels, &shown);
         Ok(Self {
             memory: length == 0 && !plan.records.is_empty(),
             plan,
@@ -33,7 +41,10 @@ impl Viewer {
             selected: (length > 0).then_some(0),
             band: None,
             search: String::new(),
-            shown: (0..length).collect(),
+            matched: shown.clone(),
+            shown,
+            frequency,
+            scroll_to: None,
             record: 0,
         })
     }
@@ -41,6 +52,7 @@ impl Viewer {
     pub fn focus_channel(&mut self, ordinal: usize) {
         if ordinal < self.plan.channels.len() {
             self.selected = Some(ordinal);
+            self.scroll_to = Some(ordinal);
             self.memory = false;
         } else if self.memory && ordinal < self.plan.records.len() {
             self.record = ordinal;
@@ -59,7 +71,7 @@ impl Viewer {
         if self.memory {
             self.clone_records(ui);
         } else {
-            self.channels(ui);
+            self.channels(ui, WorkbenchColors::from_palette(palette));
         }
     }
 
@@ -84,8 +96,25 @@ impl Viewer {
         }
     }
 
-    fn channels(&mut self, ui: &mut Ui) {
+    fn channels(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         self.channel_filters(ui);
+        match self
+            .frequency
+            .show(ui, &self.plan.channels, self.selected, colors)
+        {
+            Some(frequency::Action::Select(index)) => {
+                self.apply_brush();
+                self.selected = Some(index);
+                self.scroll_to = Some(index);
+                ui.ctx().request_repaint();
+            }
+            Some(frequency::Action::Filter) => {
+                self.apply_brush();
+                self.scroll_to = self.selected;
+                ui.ctx().request_repaint();
+            }
+            None => {}
+        }
         let footer = 183.0;
         let body_height = (ui.available_height() - footer).max(84.0);
         self.channel_table(ui, body_height);
@@ -94,6 +123,8 @@ impl Viewer {
 
     fn channel_filters(&mut self, ui: &mut Ui) {
         let mut changed = false;
+        let mut cleared_range = false;
+        let band = self.band;
         let mut copy = false;
         ui.horizontal_wrapped(|ui| {
             changed |= ui
@@ -113,7 +144,27 @@ impl Viewer {
                 }
                 changed |= ui
                     .selectable_value(&mut self.band, Some(index), format!("{name}  {count}"))
+                    .on_hover_text("Filter by receive band")
                     .changed();
+            }
+            ui.toggle_value(&mut self.frequency.open, "Frequency map");
+            if self.frequency.open && ui.small_button("Fit map").clicked() {
+                self.frequency.fit();
+            }
+            if let Some(brush) = self.frequency.brush.as_ref() {
+                let label = format!(
+                    "{} to {}  ×",
+                    radio::frequency_label(*brush.start()),
+                    radio::frequency_label(*brush.end()),
+                );
+                if ui
+                    .button(label)
+                    .on_hover_text("Clear the receive/transmit range filter")
+                    .clicked()
+                {
+                    self.frequency.brush = None;
+                    cleared_range = true;
+                }
             }
             copy = ui
                 .add_enabled(!self.shown.is_empty(), egui::Button::new("Copy channels"))
@@ -121,23 +172,12 @@ impl Viewer {
                 .clicked();
         });
         if changed {
-            let query = self.search.trim().to_lowercase();
-            self.shown = self
-                .plan
-                .channels
-                .iter()
-                .enumerate()
-                .filter(|(_, channel)| {
-                    self.band
-                        .is_none_or(|band| band == radio::band(channel.receive_hz))
-                        && (query.is_empty() || matches_query(channel, &query))
-                })
-                .map(|(index, _)| index)
-                .collect();
-            self.selected = self
-                .selected
-                .filter(|index| self.shown.binary_search(index).is_ok())
-                .or_else(|| self.shown.first().copied());
+            if band != self.band {
+                self.frequency.brush = None;
+            }
+            self.apply_channel_filters();
+        } else if cleared_range {
+            self.apply_brush();
         }
         if copy {
             use std::fmt::Write;
@@ -160,11 +200,43 @@ impl Viewer {
         }
     }
 
+    fn apply_channel_filters(&mut self) {
+        let query = self.search.trim().to_lowercase();
+        self.matched = self
+            .plan
+            .channels
+            .iter()
+            .enumerate()
+            .filter(|(_, channel)| {
+                self.band
+                    .is_none_or(|band| band == radio::band(channel.receive_hz))
+                    && (query.is_empty() || matches_query(channel, &query))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        self.frequency.rebuild(&self.plan.channels, &self.matched);
+        self.apply_brush();
+        self.scroll_to = self.selected;
+    }
+
+    fn apply_brush(&mut self) {
+        self.shown = self
+            .matched
+            .iter()
+            .copied()
+            .filter(|&index| self.frequency.includes(&self.plan.channels[index]))
+            .collect();
+        self.selected = self
+            .selected
+            .filter(|index| self.shown.binary_search(index).is_ok())
+            .or_else(|| self.shown.first().copied());
+    }
+
     fn channel_table(&mut self, ui: &mut Ui, height: f32) {
         ui.spacing_mut().item_spacing.y = 1.0;
         let row_height = ui.text_style_height(&egui::TextStyle::Body) + 3.0;
         let name_width = (ui.available_width() * 0.28).clamp(72.0, 250.0);
-        TableBuilder::new(ui)
+        let mut table = TableBuilder::new(ui)
             .id_salt("radio_channel_list")
             .striped(true)
             .sense(Sense::click())
@@ -174,7 +246,15 @@ impl Viewer {
             .column(Column::exact(name_width).clip(true))
             .column(Column::exact(125.0).clip(true))
             .column(Column::exact(64.0).clip(true))
-            .column(Column::remainder().clip(true))
+            .column(Column::remainder().clip(true));
+        if let Some(row) = self
+            .scroll_to
+            .take()
+            .and_then(|index| self.shown.binary_search(&index).ok())
+        {
+            table = table.scroll_to_row(row, Some(egui::Align::Center));
+        }
+        table
             .header(row_height, |mut row| {
                 for title in ["#", "Channel", "Receive", "Mode", "Band"] {
                     row.col(|ui| {
@@ -204,6 +284,7 @@ impl Viewer {
                     });
                     if row.response().clicked() {
                         self.selected = Some(index);
+                        row.response().ctx.request_repaint();
                     }
                 });
             });
