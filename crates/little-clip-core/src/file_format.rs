@@ -4,7 +4,11 @@
 //! Workers validate ordinary sources and decode them before publishing prepared
 //! documents. Ambiguous sampler names require positive content identification;
 //! they retain their ordinary routing until a worker supplies that evidence.
-use std::path::Path;
+use std::{
+    io::Read,
+    path::Path,
+    sync::atomic::{AtomicBool, Ordering},
+};
 /// Cheap semantic-document path hints; workers establish actual content support.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -54,6 +58,38 @@ impl Format {
         }
     }
 }
+/// Whether an extension requires positive content evidence to override routing.
+pub fn ambiguous_engineering_path(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("csv") || extension.eq_ignore_ascii_case("bin")
+    })
+}
+
+/// Check a bounded, identity-verified prefix on a content worker.
+///
+/// No hint leaves existing routing in place. The successful decoder must still
+/// validate its own pinned input, including any format-specific offsets.
+pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format> {
+    use crate::{engineering::scope, file_source::ReadCheck};
+
+    if !ambiguous_engineering_path(path) || cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    let check = ReadCheck::default();
+    let (file, source) = check.open(path, None, cancel).ok()?;
+    let length = file.metadata().ok()?.len();
+    let mut bytes = Vec::new();
+    (&file)
+        .take(scope::HEADER_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if cancel.load(Ordering::Relaxed) || !scope::matches_header_with_len(&bytes, length) {
+        return None;
+    }
+    source.check_file(&file).ok()?;
+    Some(Format::Oscilloscope)
+}
+
 /// Returns whether a path uses a Gaussian-capable scene container extension.
 ///
 /// GLB may instead contain meshes; loading classifies it on the worker thread.
@@ -76,6 +112,36 @@ pub fn is_midi(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn recognized_scope_csv_changes_browser_routing_without_claiming_other_csv_or_binary() {
+        let directory = tempfile::tempdir().unwrap();
+        let waveform = directory.path().join("waveform.csv");
+        std::fs::write(
+            &waveform,
+            "X,CH1,Start,Increment,\nSequence,Volt,-1e-3,1e-6\n0,1.5\n1,0.5\n",
+        )
+        .unwrap();
+        let spreadsheet = directory.path().join("measurements.csv");
+        std::fs::write(&spreadsheet, "X,Start,Increment\n1,2,3\n").unwrap();
+        let binary = directory.path().join("ordinary.bin");
+        std::fs::write(&binary, [0; 1024]).unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let inventory = crate::file_inventory::read_directory(directory.path(), &cancel).unwrap();
+        for (path, expected) in [
+            (waveform, Some(Format::Oscilloscope)),
+            (spreadsheet, Some(Format::Spreadsheet)),
+            (binary, None),
+        ] {
+            let entry = inventory
+                .entries
+                .iter()
+                .find(|entry| entry.path == path)
+                .unwrap();
+            assert_eq!(entry.document_format(), expected);
+        }
+    }
+
     #[test]
     fn classification_and_preview_source_share_the_same_format_inventory() {
         for (name, format) in [

@@ -4,7 +4,12 @@
 //! and its paired instrument exports.
 //! https://github.com/scottprahl/RigolWFM/tree/9e6f993103f773f81df409fc65c2cc359d7bd249
 
-use super::{ByteLane, Channel, HEADER_BYTES, Layout};
+use super::{
+    Channel, Layout,
+    binary::{ByteOrder, Encoding, Lane},
+};
+
+pub(super) const HEADER_BYTES: usize = 280;
 
 const CHANNEL_MASK: usize = 88;
 const CHANNEL_OFFSETS: usize = 92;
@@ -49,7 +54,11 @@ fn model_supported(model: &str) -> bool {
     )
 }
 
-pub(super) fn parse(header: &[u8; HEADER_BYTES], len: u64) -> Result<Layout, String> {
+pub(super) fn parse(prefix: &[u8], len: u64) -> Result<Layout, String> {
+    let header = prefix
+        .get(..HEADER_BYTES)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or("Rigol waveform header is truncated.")?;
     let acquisition = acquisition(header, len)?;
     let channel_count = acquisition.enabled.count_ones() as usize;
     let firmware = ascii_field(&header[28..48]);
@@ -73,19 +82,22 @@ pub(super) fn parse(header: &[u8; HEADER_BYTES], len: u64) -> Result<Layout, Str
             start_seconds: acquisition.start_seconds,
             interval_seconds: acquisition.interval_seconds,
         });
-        lanes.push(ByteLane {
+        lanes.push(Lane {
             offset: acquisition.offset,
             stride: acquisition.stride,
             column,
+            order: ByteOrder::Little,
+            encoding: Encoding::Unsigned8,
+            zero: 127.0,
             gain,
             bias,
         });
     }
-    Ok(Layout {
-        model: ascii_field(&header[8..28]).unwrap_or_default().into(),
+    Ok(Layout::binary(
+        ascii_field(&header[8..28]).unwrap_or_default().into(),
         channels,
         lanes,
-    })
+    ))
 }
 
 struct Acquisition {

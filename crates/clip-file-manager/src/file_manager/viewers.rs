@@ -390,7 +390,7 @@ impl Viewers {
             ) => state.select(instrument, region),
             (
                 Some(ViewerSession::Oscilloscope(state)),
-                Some(super::DocumentPosition::ScopeSamples { first, end }),
+                Some(super::DocumentPosition::ScopeSamples { first, end, .. }),
             ) => {
                 state.focus_samples(first, end);
             }
@@ -746,9 +746,13 @@ fn load_file_session(
     position: Option<super::DocumentPosition>,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
-    use super::DocumentPosition::{ArchiveMember, VideoAudioRange, VideoAudioTrack};
+    use super::DocumentPosition::{ArchiveMember, ScopeSamples, VideoAudioRange, VideoAudioTrack};
     let revision = match position {
-        Some(ArchiveMember(_, revision) | VideoAudioRange { revision, .. }) => Some(revision),
+        Some(
+            ArchiveMember(_, revision)
+            | VideoAudioRange { revision, .. }
+            | ScopeSamples { revision, .. },
+        ) => Some(revision),
         _ => None,
     };
     if let Some(revision) = revision {
@@ -813,7 +817,8 @@ fn load(
     if let Some(preview) = identify_special_file(path, cancelled)? {
         return Ok(preview);
     }
-    let kind = kind(path);
+    let kind = little_clip_core::file_format::recognize_engineering(path, cancelled)
+        .map_or_else(|| kind(path), Kind::Document);
     let limit = match kind {
         Kind::Image { max_bytes } => max_bytes as u64,
         Kind::Midi | Kind::Document(Format::Spreadsheet | Format::Notebook) => 32 * 1024 * 1024,

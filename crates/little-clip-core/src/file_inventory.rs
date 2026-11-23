@@ -29,6 +29,9 @@ pub struct Entry {
     pub regular_file: bool,
     pub system: Option<crate::kernel_interface::Kind>,
     pub typescript: bool,
+    /// Positive engineering signature, populated for ordinary browser listings.
+    #[serde(skip)]
+    pub recognized_format: Option<file_format::Format>,
     pub symlink: bool,
     pub hidden: bool,
     pub size: String,
@@ -56,7 +59,10 @@ impl Entry {
 
     pub fn document_format(&self) -> Option<file_format::Format> {
         self.regular_file
-            .then(|| file_format::Format::for_path(&self.path))
+            .then(|| {
+                self.recognized_format
+                    .or_else(|| file_format::Format::for_path(&self.path))
+            })
             .flatten()
     }
     pub fn is_subtitles(&self) -> bool {
@@ -219,6 +225,10 @@ fn collect_directory(
         match child {
             Ok(child) => {
                 let mut entry = read_entry(child, held.is_none());
+                if held.is_none() && entry.regular_file {
+                    entry.recognized_format =
+                        file_format::recognize_engineering(&entry.path, cancelled);
+                }
                 if let Some(held) = held {
                     entry.path =
                         path.join(entry.path.strip_prefix(held).map_err(|e| e.to_string())?);
@@ -293,6 +303,7 @@ pub fn read_entry(child: std::fs::DirEntry, inspect_content_hints: bool) -> Entr
     let entry_identity = link_metadata.as_ref().ok().map(identity);
     entry_identity.hash(&mut hasher);
     Entry {
+        recognized_format: None,
         typescript: inspect_content_hints
             && regular_file
             && crate::text_format::is_typescript_source(&path),

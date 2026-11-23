@@ -53,6 +53,7 @@ impl Selection {
         DocumentPosition::ScopeSamples {
             first: self.samples.start,
             end: self.samples.end,
+            revision: self.revision,
         }
     }
 
@@ -69,7 +70,7 @@ pub(in crate::file_manager) fn load(path: &Path, cancel: &AtomicBool) -> Data {
     let mut data = Data::new(
         display_path(path),
         "Oscilloscope capture".into(),
-        crate::icons::Icon::Audio,
+        crate::icons::Icon::Waves,
     );
     let preview = Recording::open(path, ReadCheck::default(), cancel).and_then(|recording| {
         let overview = recording.overview(cancel)?;
@@ -165,12 +166,32 @@ pub(in crate::file_manager) fn show(
         DocumentPosition::ScopeSamples {
             first: sample.saturating_sub(half),
             end: (sample + half).min(channel.sample_count),
+            revision: entry.revision,
         }
     });
-    if selection.is_some() {
-        response.on_hover_text("Ctrl+C copies exact first-channel samples as CSV");
-    } else {
-        response.on_hover_text("Drag to select samples · Double-click to inspect this region");
-    }
+    response.on_hover_ui(|ui| {
+        let overview = &preview.overview;
+        ui.strong(&overview.model);
+        ui.horizontal_wrapped(|ui| {
+            for (index, channel) in overview.channels.iter().enumerate() {
+                ui.colored_label(
+                    plot::color(index),
+                    format!("{} ({})", channel.name, channel.unit),
+                );
+            }
+        });
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(350.0, 32.0 * overview.channels.len() as f32),
+            Sense::hover(),
+        );
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
+        plot::overview(&painter, rect.shrink(4.0), overview);
+        if selection.is_some() {
+            ui.weak("Ctrl+C copies exact first-channel samples as CSV");
+        } else {
+            ui.weak("Drag to select · Double-click to open the region");
+        }
+    });
     (selection.map(Selection::position).or(seek), engaged)
 }

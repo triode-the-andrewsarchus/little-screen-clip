@@ -126,7 +126,7 @@ impl Viewer {
         self.poll(ui.ctx());
         let mut shell = crate::shell::StudioShell::new(
             "Oscilloscope",
-            crate::icons::Icon::Audio,
+            crate::icons::Icon::Waves,
             palette,
             close,
         );

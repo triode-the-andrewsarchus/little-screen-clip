@@ -49,6 +49,7 @@ enum Kind {
     Spreadsheet,
     Midi,
     Scope,
+    EngineeringCandidate,
     Brush,
     Embroidery,
     Geography,
@@ -181,6 +182,11 @@ impl crate::ScreenRenderer {
         if kind == Kind::Geography {
             return self.earth_preview(&Document::from_path(path).ok()?);
         }
+        if little_clip_core::file_format::recognize_engineering(path, &AtomicBool::new(false))
+            == Some(Format::Oscilloscope)
+        {
+            return load(path, Kind::Scope, extension);
+        }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
         {
             return crate::render_trajectory_thumbnail(&trajectory).map(|thumbnail| {
@@ -300,6 +306,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Text
     } else if Trajectory::is_candidate(path) {
         Kind::Trajectory
+    } else if little_clip_core::file_format::ambiguous_engineering_path(path) {
+        Kind::EngineeringCandidate
     } else {
         return None;
     };
@@ -308,7 +316,7 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
 
 fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
     match kind {
-        Kind::Geography | Kind::Trajectory => None,
+        Kind::Geography | Kind::Trajectory | Kind::EngineeringCandidate => None,
         Kind::Scope => {
             let cancel = AtomicBool::new(false);
             let recording = little_clip_core::engineering::waveforms::Recording::open(

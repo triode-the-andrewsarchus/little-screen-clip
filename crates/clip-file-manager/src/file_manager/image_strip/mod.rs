@@ -148,6 +148,7 @@ mod tests {
             minecraft_world: None,
             system: None,
             typescript: false,
+            recognized_format: None,
             symlink: false,
             hidden: false,
             size: "100 B".into(),

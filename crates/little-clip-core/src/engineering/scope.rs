@@ -1,6 +1,12 @@
 //! Timestamped, calibrated analog channels read from saved oscilloscope captures.
 
+mod binary;
 mod rigol;
+mod rigol_csv;
+mod siglent;
+mod tektronix;
+
+use binary::Lane;
 
 use std::{
     fs::File,
@@ -10,21 +16,34 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-/// Maximum header prefix needed to recognize a supported binary scope capture.
-pub const HEADER_BYTES: usize = 280;
+/// Maximum header prefix needed to recognize a supported scope capture.
+pub const HEADER_BYTES: usize = tektronix::HEADER_BYTES;
 
 /// Maximum number of samples returned by a single ranged read.
 pub const MAX_SAMPLES_PER_READ: u64 = 1 << 20;
 
 /// Returns whether a pathname is a candidate for oscilloscope recognition.
 pub fn is_candidate_path(path: &Path) -> bool {
-    path.extension()
-        .is_some_and(|value| value.eq_ignore_ascii_case("wfm"))
+    path.extension().is_some_and(|value| {
+        ["wfm", "csv", "bin"]
+            .iter()
+            .any(|extension| value.eq_ignore_ascii_case(extension))
+    })
 }
 
-/// Recognizes the Rigol DS1000Z-family file header in a bounded prefix.
+/// Recognizes a supported waveform signature in a bounded prefix.
+///
+/// This covers WFM signatures and the two specific Rigol CSV header rows.
+/// Use [matches_header_with_len] to identify Siglent binary captures as well.
 pub fn matches_header(prefix: &[u8]) -> bool {
     rigol::matches_header(prefix)
+        || tektronix::matches_header(prefix)
+        || rigol_csv::Header::recognize(prefix).is_some()
+}
+
+/// Recognizes a waveform header, including length-checked Siglent exports.
+pub fn matches_header_with_len(prefix: &[u8], file_len: u64) -> bool {
+    matches_header(prefix) || siglent::matches_header(prefix, file_len)
 }
 
 /// Calibrated sample grid and display metadata for one saved channel.
@@ -36,7 +55,7 @@ pub struct Channel {
     pub unit: String,
     /// Number of samples present in the capture.
     pub sample_count: u64,
-    /// Time of the first sample relative to the capture trigger, in seconds.
+    /// Time coordinate of the first sample in the recorded time grid, in seconds.
     pub start_seconds: f64,
     /// Time between consecutive samples, in seconds.
     pub interval_seconds: f64,
@@ -50,19 +69,52 @@ impl Channel {
 }
 
 #[derive(Debug)]
-struct ByteLane {
-    offset: u64,
-    stride: usize,
-    column: usize,
-    gain: f64,
-    bias: f64,
+enum Samples {
+    Binary(Vec<Lane>),
+    Csv(rigol_csv::Rows),
 }
 
 #[derive(Debug)]
 struct Layout {
     model: String,
     channels: Vec<Channel>,
-    lanes: Vec<ByteLane>,
+    samples: Samples,
+}
+
+impl Layout {
+    fn binary(model: String, channels: Vec<Channel>, lanes: Vec<Lane>) -> Self {
+        Self {
+            model,
+            channels,
+            samples: Samples::Binary(lanes),
+        }
+    }
+
+    fn read(file: &File, prefix: &[u8], file_len: u64) -> Result<Self, String> {
+        if rigol::matches_header(prefix) {
+            return rigol::parse(prefix, file_len);
+        }
+        if tektronix::matches_header(prefix) {
+            let (channel, lane) = tektronix::parse(prefix, file_len)?;
+            return Ok(Self::binary(
+                "Tektronix WFM".into(),
+                vec![channel],
+                vec![lane],
+            ));
+        }
+        if let Some(header) = rigol_csv::Header::recognize(prefix) {
+            let (channels, rows) = header.open(file, file_len)?;
+            return Ok(Self {
+                model: "Rigol CSV".into(),
+                channels,
+                samples: Samples::Csv(rows),
+            });
+        }
+        if let Ok((channels, lanes)) = siglent::open(prefix, file_len) {
+            return Ok(Self::binary("Siglent V1".into(), channels, lanes));
+        }
+        Err("This oscilloscope waveform layout is unsupported.".into())
+    }
 }
 
 /// A capture backed by one retained file handle and a bounded header.
@@ -75,9 +127,9 @@ pub struct Capture {
 impl Capture {
     /// Opens an already guarded, readable capture handle.
     ///
-    /// Only the header is read. The caller should obtain the file through
-    /// [crate::file_source::ReadCheck] and retain its observation checks for
-    /// deferred jobs.
+    /// The binary readers only read the header. CSV also reads a bounded part
+    /// of its first and last data rows to establish the sample extent. The
+    /// caller should retain [crate::file_source::ReadCheck] for deferred jobs.
     ///
     /// # Errors
     /// Returns an error for an unreadable, truncated, or unsupported capture.
@@ -87,9 +139,10 @@ impl Capture {
             return Err("Scope capture needs a regular file.".into());
         }
         let mut header = [0; HEADER_BYTES];
-        file.read_exact_at(&mut header, 0)
+        let prefix = &mut header[..metadata.len().min(HEADER_BYTES as u64) as usize];
+        file.read_exact_at(prefix, 0)
             .map_err(|error| format!("Reading scope header. {error}"))?;
-        let layout = rigol::parse(&header, metadata.len())?;
+        let layout = Layout::read(&file, prefix, metadata.len())?;
         Ok(Self { file, layout })
     }
 
@@ -117,12 +170,12 @@ impl Capture {
         range: Range<u64>,
         cancel: &AtomicBool,
     ) -> Result<Vec<f32>, String> {
-        let lane = self
+        let metadata = self
             .layout
-            .lanes
+            .channels
             .get(channel)
             .ok_or("Scope channel is unavailable.")?;
-        if range.end > self.layout.channels[channel].sample_count || range.start > range.end {
+        if range.end > metadata.sample_count || range.start > range.end {
             return Err("Sample range is outside this capture.".into());
         }
         let count = range.end - range.start;
@@ -131,21 +184,10 @@ impl Capture {
         }
         check_cancelled(cancel)?;
 
-        // Parser validation bounds the entire payload by the file length.
-        let offset = lane.offset + range.start * lane.stride as u64;
-        let mut bytes = vec![0; count as usize * lane.stride];
-        for (index, chunk) in bytes.chunks_mut(64 * 1024).enumerate() {
-            check_cancelled(cancel)?;
-            self.file
-                .read_exact_at(chunk, offset + (index * 64 * 1024) as u64)
-                .map_err(|error| format!("Reading scope samples. {error}"))?;
+        match &self.layout.samples {
+            Samples::Binary(lanes) => lanes[channel].read_samples(&self.file, range, cancel),
+            Samples::Csv(rows) => rows.read_samples(&self.file, channel, range, cancel),
         }
-        check_cancelled(cancel)?;
-        let samples = bytes
-            .chunks_exact(lane.stride)
-            .map(|frame| ((f64::from(frame[lane.column]) - 127.0) * lane.gain + lane.bias) as f32)
-            .collect();
-        Ok(samples)
     }
 }
 
@@ -154,8 +196,10 @@ mod tests {
     use super::*;
     use std::io::{Seek, SeekFrom, Write};
 
+    const RIGOL_HEADER_BYTES: usize = rigol::HEADER_BYTES;
+
     fn sample_capture(mask: u8, firmware: &[u8], values: &[u8]) -> File {
-        let mut header = [0; HEADER_BYTES];
+        let mut header = [0; RIGOL_HEADER_BYTES];
         header[..8].copy_from_slice(&[1, 0xff, 0xff, 0xff, 0xa6, 0xa5, 0x38, 0]);
         header[8..15].copy_from_slice(b"DS1054Z");
         header[28..28 + firmware.len()].copy_from_slice(firmware);
@@ -165,11 +209,11 @@ mod tests {
         header[88] = mask;
         header[116..120].copy_from_slice(&(values.len() as u32).to_le_bytes());
         header[120..124].copy_from_slice(&0.25_f32.to_le_bytes());
-        header[260..264].copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+        header[260..264].copy_from_slice(&(RIGOL_HEADER_BYTES as u32).to_le_bytes());
 
         for n in 0..4 {
             let offset = 92 + n * 4;
-            header[offset..offset + 4].copy_from_slice(&(HEADER_BYTES as u32).to_le_bytes());
+            header[offset..offset + 4].copy_from_slice(&(RIGOL_HEADER_BYTES as u32).to_le_bytes());
             let offset = 124 + 28 * n;
             header[offset] = u8::from(mask & (1 << n) != 0);
             header[offset + 8..offset + 12].copy_from_slice(&1.0_f32.to_le_bytes());
@@ -219,8 +263,41 @@ mod tests {
     #[test]
     fn rejects_declared_samples_past_the_end_of_the_file() {
         let file = sample_capture(1, b"00.04.04.SP3", &[0; 5]);
-        file.set_len((HEADER_BYTES + 4) as u64).unwrap();
+        file.set_len((RIGOL_HEADER_BYTES + 4) as u64).unwrap();
         assert!(Capture::open(file).is_err());
+    }
+
+    #[test]
+    fn only_content_recognition_admits_overloaded_extensions() {
+        assert!(is_candidate_path(Path::new("capture.BIN")));
+        assert!(is_candidate_path(Path::new("capture.CSV")));
+        assert!(!is_candidate_path(Path::new("capture.zip")));
+        for prefix in [b"Time,Amplitude\n0,4\n".as_slice(), &[0; HEADER_BYTES]] {
+            let len = prefix.len() as u64;
+            assert!(!matches_header_with_len(prefix, len));
+            let mut file = tempfile::tempfile().unwrap();
+            file.write_all(prefix).unwrap();
+            assert!(Capture::open(file).unwrap_err().contains("unsupported"));
+        }
+    }
+
+    #[test]
+    fn dispatches_rigol_csv_through_the_shared_range_reader() {
+        let bytes =
+            b"X,CH2,CH4,Start,Increment,\nSequence,Volt,Volt,-2.0e-3,1.0e-3,\n0,-1,3,,,\n1,1,-3,,,";
+        assert!(matches_header_with_len(bytes, bytes.len() as u64));
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(bytes).unwrap();
+        let capture = Capture::open(file).unwrap();
+        assert_eq!(capture.model(), "Rigol CSV");
+        assert_eq!(capture.channels()[1].name, "CH4");
+        assert_eq!(capture.channels()[1].time_at(1), -1e-3);
+        assert_eq!(
+            capture
+                .read_samples(1, 0..2, &AtomicBool::new(false))
+                .unwrap(),
+            [3.0, -3.0]
+        );
     }
 
     #[test]

@@ -133,6 +133,7 @@ pub(super) enum DocumentPosition {
     ScopeSamples {
         first: u64,
         end: u64,
+        revision: u64,
     },
 }
 
