@@ -14,15 +14,12 @@ impl Image {
         let time = data.rows.len();
         let frequencies = data.rows[0].bins_dbfs.len();
         let mut pixels = Vec::with_capacity(time * frequencies);
-        for frequency in (0..frequencies).rev() {
-            for row in &data.rows {
-                let value = row.bins_dbfs[frequency];
-                pixels.push(tone(value, limits));
-            }
+        for row in &data.rows {
+            pixels.extend(row.bins_dbfs.iter().map(|&value| tone(value, limits)));
         }
         Self {
             data,
-            pixels: ColorImage::new([time, frequencies], pixels),
+            pixels: ColorImage::new([frequencies, time], pixels),
             low_dbfs: limits.0,
             high_dbfs: limits.1,
         }
@@ -36,10 +33,10 @@ pub(super) struct Point<'a> {
 }
 
 pub(super) fn point(frame: &Waterfall, rect: Rect, position: Pos2) -> Point<'_> {
-    let time = ((position.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+    let time = time_fraction(rect, position);
     let row = ((time * frame.rows.len() as f32) as usize).min(frame.rows.len() - 1);
     let spectrum = &frame.rows[row];
-    let frequency_fraction = ((rect.bottom() - position.y) / rect.height()).clamp(0.0, 1.0);
+    let frequency_fraction = ((position.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
     let bin = ((frequency_fraction * spectrum.bins_dbfs.len() as f32) as usize)
         .min(spectrum.bins_dbfs.len() - 1);
     Point {
@@ -47,6 +44,10 @@ pub(super) fn point(frame: &Waterfall, rect: Rect, position: Pos2) -> Point<'_> 
         bin,
         frequency_fraction,
     }
+}
+
+pub(super) fn time_fraction(rect: Rect, position: Pos2) -> f32 {
+    ((position.y - rect.top()) / rect.height()).clamp(0.0, 1.0)
 }
 
 fn contrast(data: &Waterfall) -> (f32, f32) {
@@ -95,4 +96,43 @@ fn tone(value: f32, (low, high): (f32, f32)) -> Color32 {
         (from + (to - from) * fraction).round() as u8
     });
     Color32::from_rgb(red, green, blue)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{pos2, vec2};
+
+    #[test]
+    fn texture_and_pointer_share_frequency_columns_and_time_rows() {
+        let row = |start, levels: [f32; 3]| Spectrum {
+            samples: start..start + 8,
+            sample_rate_hz: Some(250_000.0),
+            center_hz: None,
+            crosses_tuning: false,
+            finite_samples: 8,
+            noise_bandwidth_hz: None,
+            bins_dbfs: levels.into(),
+        };
+        let waterfall = Waterfall {
+            samples: 0..16,
+            rows: vec![row(0, [-45.0, -90.0, -52.0]), row(8, [-76.0, -79.0, -16.0])],
+            sampled: false,
+        };
+        let image = Image::prepare(waterfall);
+        assert_eq!(image.pixels.size, [3, 2]);
+        let rect = Rect::from_min_size(pos2(20.0, 30.0), vec2(300.0, 200.0));
+        for (position, time_row, bin) in [(pos2(70.0, 80.0), 0, 0), (pos2(270.0, 180.0), 1, 2)] {
+            let point = point(&image.data, rect, position);
+            assert_eq!(point.spectrum.samples.start, time_row as u64 * 8);
+            assert_eq!(point.bin, bin);
+            assert_eq!(
+                image.pixels.pixels[time_row * 3 + bin],
+                tone(
+                    point.spectrum.bins_dbfs[bin],
+                    (image.low_dbfs, image.high_dbfs)
+                )
+            );
+        }
+    }
 }

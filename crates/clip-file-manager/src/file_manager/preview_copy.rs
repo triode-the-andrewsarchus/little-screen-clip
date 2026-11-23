@@ -122,13 +122,25 @@ pub(super) fn drag_range(
     focus: egui::Id,
     modified: bool,
 ) -> (bool, Option<(f32, f32)>) {
+    drag_range_by(ui, response, focus, modified, |point| {
+        ((point.x - response.rect.left()) / response.rect.width()).clamp(0.0, 1.0)
+    })
+}
+
+pub(super) fn drag_range_by(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    focus: egui::Id,
+    modified: bool,
+    fraction: impl Fn(egui::Pos2) -> f32,
+) -> (bool, Option<(f32, f32)>) {
     use egui::PointerButton::Primary;
     let dragging = !modified && (response.dragged_by(Primary) || response.drag_stopped_by(Primary));
     if !dragging {
         return (false, None);
     }
     ui.memory_mut(|memory| memory.request_focus(focus));
-    (true, drag_fractions(ui, response))
+    (true, drag_fractions(ui, response, fraction))
 }
 
 /// Handles a row's own range selection while preserving its file-list response.
@@ -167,8 +179,11 @@ fn remember_range(
 }
 
 /// Ascending fractions, including the final pointer movement on release.
-fn drag_fractions(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)> {
-    let fraction = |x: f32| ((x - response.rect.left()) / response.rect.width()).clamp(0.0, 1.0);
+fn drag_fractions(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    fraction: impl Fn(egui::Pos2) -> f32,
+) -> Option<(f32, f32)> {
     let point = response.interact_pointer_pos()?;
     let origin = ui.input(|input| input.pointer.press_origin());
     let start = ui.ctx().data_mut(|data| {
@@ -177,12 +192,12 @@ fn drag_fractions(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)
             data.remove::<f32>(response.id);
             start
         } else {
-            let start = origin.map(|origin| fraction(origin.x))?;
+            let start = origin.map(&fraction)?;
             data.insert_temp(response.id, start);
             Some(start)
         }
     })?;
-    let end = fraction(point.x);
+    let end = fraction(point);
     Some((start.min(end), start.max(end)))
 }
 
