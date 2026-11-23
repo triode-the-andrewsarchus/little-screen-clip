@@ -29,6 +29,7 @@ pub enum Format {
     PowerRecording,
     Touchstone,
     LogicCapture,
+    PacketCapture,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -53,6 +54,7 @@ impl Format {
             "wfm" => Some(Self::Oscilloscope),
             "jls" => Some(Self::PowerRecording),
             "sr" | "sal" | "vcd" => Some(Self::LogicCapture),
+            "pcap" | "pcapng" => Some(Self::PacketCapture),
             _ if crate::engineering::touchstone::extension_ports(path).is_some() => {
                 Some(Self::Touchstone)
             }
@@ -68,11 +70,17 @@ impl Format {
 }
 /// Whether an extension requires positive content evidence to override routing.
 pub fn ambiguous_engineering_path(path: &Path) -> bool {
-    path.extension().is_some_and(|extension| {
-        ["csv", "bin", "ts", "dsl"]
-            .iter()
-            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-    })
+    packet_probe_path(path)
+        || path.extension().is_some_and(|extension| {
+            ["csv", "bin", "ts", "dsl"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
+fn packet_probe_path(path: &Path) -> bool {
+    Format::for_path(path) != Some(Format::PacketCapture)
+        && crate::engineering::packets::is_candidate_path(path)
 }
 
 /// Check a bounded, identity-verified prefix on a content worker.
@@ -81,7 +89,7 @@ pub fn ambiguous_engineering_path(path: &Path) -> bool {
 /// validate its own pinned input, including any format-specific offsets.
 pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format> {
     use crate::{
-        engineering::{logic, scope, touchstone},
+        engineering::{logic, packets, scope, touchstone},
         file_source::ReadCheck,
     };
 
@@ -89,8 +97,12 @@ pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format>
         return None;
     }
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-    let rf = extension == "ts";
-    let bound = if rf { 64 * 1024 } else { scope::HEADER_BYTES };
+    let packet = packet_probe_path(path);
+    let bound = if packet || extension == "ts" {
+        64 * 1024
+    } else {
+        scope::HEADER_BYTES
+    };
     let check = ReadCheck::default();
     let (file, source) = check.open(path, None, cancel).ok()?;
     let length = file.metadata().ok()?.len();
@@ -100,6 +112,7 @@ pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format>
         return None;
     }
     let format = match extension.as_str() {
+        _ if packet => packets::recognizes(&bytes, path).then_some(Format::PacketCapture),
         "ts" => touchstone::recognizes(&bytes, path).then_some(Format::Touchstone),
         "dsl" => (bytes.starts_with(b"PK\x03\x04") && logic::probe(&file, path))
             .then_some(Format::LogicCapture),

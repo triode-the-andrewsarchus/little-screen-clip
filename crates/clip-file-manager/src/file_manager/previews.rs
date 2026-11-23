@@ -457,6 +457,16 @@ impl EntryPreviews {
                 self.listing(entry),
                 response,
             );
+        } else if entry.document_format() == Some(Format::PacketCapture) {
+            return super::packets_view::strip::show(
+                ui,
+                row,
+                entry,
+                columns,
+                colors,
+                self.listing(entry),
+                response,
+            );
         } else if entry.is_spreadsheet() {
             let ready = self.listing(entry);
             if let Some(trajectory) = ready.filter(|ready| ready.data.solar_trajectory) {

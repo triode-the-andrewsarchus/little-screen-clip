@@ -45,6 +45,7 @@ mod photo_ratings;
 use little_clip_core::jobs::task as preview_job;
 mod logic_view;
 mod metadata;
+mod packets_view;
 mod preview_copy;
 mod previews;
 mod scene_strip;
@@ -135,6 +136,10 @@ pub(super) enum DocumentPosition {
     ScopeSamples {
         first: u64,
         end: u64,
+        revision: u64,
+    },
+    CapturedPacket {
+        ordinal: u64,
         revision: u64,
     },
     LogicRegion {

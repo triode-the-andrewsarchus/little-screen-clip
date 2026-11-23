@@ -62,6 +62,7 @@ tempfile = "3.27"
 regex.workspace = true
 base64.workspace = true
 flate2 = "1.1"
+lz4_flex = "0.14"
 zstd.workspace = true
 quick-xml = "0.41"
 roxmltree.workspace = true

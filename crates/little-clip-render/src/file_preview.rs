@@ -36,6 +36,7 @@ pub(crate) enum Preview {
     Scope(little_clip_core::engineering::waveforms::Overview),
     Touchstone(little_clip_core::engineering::touchstone::Summary),
     Logic(little_clip_core::engineering::logic_preview::Overview),
+    Packets(little_clip_core::engineering::packets::Summary),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -53,6 +54,7 @@ enum Kind {
     Scope,
     Touchstone,
     Logic,
+    Packets,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -190,6 +192,7 @@ impl crate::ScreenRenderer {
             Some(Format::Oscilloscope) => return load(path, Kind::Scope, extension),
             Some(Format::Touchstone) => return load(path, Kind::Touchstone, extension),
             Some(Format::LogicCapture) => return load(path, Kind::Logic, extension),
+            Some(Format::PacketCapture) => return load(path, Kind::Packets, extension),
             _ => {}
         }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
@@ -300,6 +303,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Touchstone
     } else if Format::for_path(path) == Some(Format::LogicCapture) {
         Kind::Logic
+    } else if Format::for_path(path) == Some(Format::PacketCapture) {
+        Kind::Packets
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
@@ -353,6 +358,14 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
                 little_clip_core::engineering::logic_preview::Recording::open(path, &cancel)
                     .ok()?;
             recording.overview(&cancel).ok().map(Preview::Logic)
+        }
+        Kind::Packets => {
+            use little_clip_core::{engineering::packets, file_source::ReadCheck};
+            let cancel = AtomicBool::new(false);
+            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
+            let summary = packets::summary(std::io::BufReader::new(&file), &cancel).ok()?;
+            source.check_file(&file).ok()?;
+            Some(Preview::Packets(summary))
         }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);

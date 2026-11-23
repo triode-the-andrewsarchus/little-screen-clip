@@ -6591,6 +6591,7 @@ dependencies = [
  "libc",
  "libheif-rs",
  "lopdf 0.47.0",
+ "lz4_flex",
  "mail-parser",
  "merman-core",
  "merman-model",
@@ -6945,6 +6946,15 @@ dependencies = [
  "float_next_after",
  "lyon_path",
  "num-traits",
+]
+
+[[package]]
+name = "lz4_flex"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f56455fff36934a9500d69062aec1c77037179b6f0669e4d5d6b72b84722d6a3"
+dependencies = [
+ "twox-hash",
 ]
 
 [[package]]

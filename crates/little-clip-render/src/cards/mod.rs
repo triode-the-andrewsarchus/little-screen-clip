@@ -1,5 +1,6 @@
 //! Card renderers for slot cards, media, spreadsheets, 3D models, and formatted text.
 
+mod activity;
 mod audio;
 mod images;
 mod logic_capture;
@@ -514,6 +515,10 @@ impl ScreenRenderer {
             }
             Some(Preview::Logic(capture)) => {
                 self.draw_logic_capture(pixmap, capture, [rx, ry, rw, rh]);
+                true
+            }
+            Some(Preview::Packets(summary)) => {
+                self.draw_packet_activity(pixmap, summary, [rx, ry, rw, rh]);
                 true
             }
             Some(Preview::Midi(score)) => {
