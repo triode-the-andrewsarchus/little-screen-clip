@@ -35,6 +35,11 @@ impl RawChannel {
             .flatten()
     }
 
+    pub fn sample_at(&self, row: u64) -> Option<f32> {
+        let index = usize::try_from(row.checked_sub(self.first)?).ok()?;
+        self.samples.get(index).copied()
+    }
+
     pub fn snap(&self, time: f64, radius: f64) -> Option<f64> {
         let index = analysis::nearest_zero_crossing(
             &self.samples,
@@ -107,6 +112,7 @@ pub(super) struct Measurements {
     pub frequencies: Vec<Option<f64>>,
     pub raw: RawChannel,
     pub extrema: Peak,
+    pub valid_samples: usize,
     pub math: Option<(Arc<RawChannel>, Peak)>,
     pub limited: bool,
     pub power_totals: Option<PowerTotals>,
@@ -144,7 +150,11 @@ pub(super) fn analyze(
             })
             .transpose()?;
         let mut extrema = Peak::default();
-        extrema.add(&raw.samples);
+        let mut valid_samples = 0;
+        for &value in raw.samples.iter().filter(|value| value.is_finite()) {
+            valid_samples += 1;
+            extrema.add(std::slice::from_ref(&value));
+        }
         let raw = data
             .into_iter()
             .nth(request.active)
@@ -154,6 +164,7 @@ pub(super) fn analyze(
             frequencies,
             raw,
             extrema,
+            valid_samples,
             math,
             limited,
             power_totals,

@@ -17,7 +17,7 @@ The branch adds four floating interfaces for adding a recording, editing equatio
 - [x] Give stacked channels individually labeled plots, separated scales, units and direct visibility buttons. Keep overlay available for comparable units.
 - [x] Put a display offset control and reset on each applicable trace. Indicate a nonzero offset with its unit. Use original samples for measurement, filtering, equations, copying and snapping.
 - [x] Draw a hover value at each visible trace intersection. Group labels where the panels would overlap and clamp them to the viewport. Confirm separated labels in stacked view and grouped labels in overlay using the four-channel Rigol recording.
-- [ ] Exercise hover with missing samples and selections at the limits of the visible zoom range.
+- [x] Exercise hover with missing samples and selections at the limits of the visible zoom range.
 - [x] Show each math lane's equation beside its result. Support independent editing, add and remove, naming, inline errors, and direct spectrum targeting. Keep source aliases, predicates, decoded inputs, filters, resampling and feedback connected to their existing evaluators. Preserve surviving bindings when an equation changes.
 - [x] Check the inline editor with the four-channel Rigol capture, PWM and I²S inputs, a rejected edit and its recovery, condition-based measurements and a short window.
 - [ ] Keep filter actions recognizable and near the affected trace. Move the remaining floating analysis controls into their workspaces.
@@ -82,11 +82,21 @@ In the scope test, a 1 kHz transient in the 1–2 s window rose above the baseli
 
 ## 9. Check scope markers against missing data and zoom limits
 
-- [ ] Exercise the hover readouts with a gap on one channel and valid samples on its neighbors. Distinguish a missing value from a measured zero.
-- [ ] Inspect a selection at the widest and closest zoom levels and around a gap. Verify the source sample positions, zero-crossing snap and Shift override.
-- [ ] Check aligned traces with independent units and display offsets while switching between stacked and overlay views. Keep measurements tied to the original values.
+- [x] Exercise the hover readouts with a gap on one channel and valid samples on its neighbors. Distinguish a missing value from a measured zero.
+- [x] Inspect a selection at the widest and closest zoom levels and around a gap. Verify the source sample positions, zero-crossing snap and Shift override.
+- [x] Check start times, units and display offsets in stacked view and switch compatible traces between stacked and overlay views. Keep measurements tied to the original values.
 
-Start with a recording that has known samples on both sides of a gap. Walk from a hover readout or selection to its source rows, then back to the same location after zooming. Keep units and missing-value indicators close to their trace intersections.
+Put a missing-value readout on its channel at the vertical probe. Break the overview trace at empty columns. In the cursor row, show the active channel, each endpoint's time and nearest recorded sample, and a button to center on that endpoint at the current zoom. Show the sample count and any known gaps beside the selection measurements.
+
+The sample file in Engineering has 15,000 missing CH1 values, a continuous zero on CH2 and a late-starting CH3. At fit and at the four-sample zoom limit, the probe distinguished all three. A wide selection snapped to CH1 samples 36,193 and 55,057, with both values at zero. Center A preserved that selection and brought the original crossing into view. A Shift drag moved A to sample 36,194 at about 130.5 mV. After adding a 500 mA display offset to CH2, the hover readout still showed 0 A raw. The all-voltage variant grouped the three nearby labels in overlay and separated them again in stacked view. At 800 × 620, scrolling below the overview exposed both cursor controls and the range statistics.
+
+## 10. Measure the same interval across recordings
+
+- [ ] Pin an existing A/B selection to the analysis workspace from the source that produced it. Agree on the same times across the aligned recordings and show each source's actual coverage.
+- [ ] Show results beside the source that produced them. Select a result to focus its contributing data at the right scale. Preserve independent local cursors, selections and decoder settings.
+- [ ] Verify a PWM duty change alongside an analog response, including a trimmed recording, a sampled gap, and a changed clock correction.
+
+Put the pin action beside the A/B readout in multi-recording analysis. Take the interval from the recording's native times and draw its aligned edges on the linked tracks. A source that starts partway through the interval should show its covered portion and identify which values can be measured there. Let the user return from a focused result to the shared interval in one action. Begin by reusing the scope and power statistics and decoded PWM cycles.
 
 ## Review after each addition
 

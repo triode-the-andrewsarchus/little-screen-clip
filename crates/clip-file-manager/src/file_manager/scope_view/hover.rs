@@ -12,19 +12,49 @@ use little_clip_core::{
     },
 };
 use std::{
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, LazyLock},
     time::Duration,
 };
 
 static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 1));
-type Coordinates = Vec<Option<u64>>;
-type Values = Vec<Option<f32>>;
+type Address = (usize, u64);
+type Samples = BTreeMap<Address, Option<f32>>;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Probe {
+    Value(f32),
+    Gap,
+    Outside,
+    Pending,
+    Unavailable,
+}
+
+impl Probe {
+    fn from_sample(value: f32) -> Self {
+        if value.is_finite() {
+            Self::Value(value)
+        } else {
+            Self::Gap
+        }
+    }
+
+    pub fn text(self, unit: &str) -> String {
+        match self {
+            Self::Value(value) => display_value(f64::from(value), unit),
+            Self::Gap => "No sample".into(),
+            Self::Outside => "Outside recording".into(),
+            Self::Pending => "Reading…".into(),
+            Self::Unavailable => "Sample unavailable".into(),
+        }
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Hover {
     pub time: Option<f64>,
-    loaded: Option<(Coordinates, Values)>,
-    job: Option<(Coordinates, Task<Result<Values, String>>)>,
+    samples: Samples,
+    job: Option<(BTreeSet<Address>, Task<Result<Samples, String>>)>,
 }
 
 impl Hover {
@@ -32,89 +62,104 @@ impl Hover {
         self.job.is_some()
     }
 
-    pub fn value(&self, index: usize, channel: &Channel, time: f64) -> Option<f32> {
-        let (loaded, values) = self.loaded.as_ref()?;
-        if loaded.get(index).copied().flatten() == coordinate(channel, time) {
-            values.get(index).copied().flatten()
-        } else {
-            None
+    fn value(&self, address: Address) -> Probe {
+        match self.samples.get(&address) {
+            Some(Some(value)) => Probe::from_sample(*value),
+            Some(None) => Probe::Unavailable,
+            None => Probe::Pending,
         }
     }
 
-    pub fn update(&mut self, ctx: &Context, recording: &Arc<Recording>, cached: bool) {
-        if let Some((target, result)) = take_query_result(&mut self.job) {
-            self.loaded = Some((target, result.unwrap_or_default()));
+    fn update(&mut self, ctx: &Context, recording: &Arc<Recording>, wanted: &BTreeSet<Address>) {
+        if let Some((requested, result)) = take_query_result(&mut self.job) {
+            self.samples.extend(
+                result.unwrap_or_else(|_| requested.into_iter().map(|row| (row, None)).collect()),
+            );
         }
-        let Some(time) = self.time.filter(|_| !cached && self.job.is_none()) else {
-            return;
-        };
-        let target = recording
-            .channels()
+        self.samples.retain(|row, _| wanted.contains(row));
+        let needed = wanted
             .iter()
-            .map(|channel| coordinate(channel, time))
-            .collect::<Coordinates>();
-        if self
-            .loaded
-            .as_ref()
-            .is_some_and(|(coordinates, _)| *coordinates == target)
-        {
+            .copied()
+            .filter(|row| !self.samples.contains_key(row))
+            .collect::<BTreeSet<_>>();
+        if self.job.is_some() || needed.is_empty() {
             return;
         }
-        let request = target.clone();
+        let request = needed.clone();
         let recording = recording.clone();
         let repaint = ctx.clone();
         let task = Task::start(&JOBS, Duration::from_secs(3), move |cancel| {
             let result = recording.checked(cancel, |capture| {
-                request
+                // A failed channel read should leave the other channels readable.
+                Ok(request
                     .into_iter()
-                    .enumerate()
-                    .map(|(index, row)| {
-                        row.map(|row| {
-                            capture
-                                .read_samples(index, row..row + 1, cancel)
-                                .map(|values| values.first().copied())
-                        })
-                        .transpose()
-                        .map(Option::flatten)
+                    .map(|address @ (index, row)| {
+                        let value = capture
+                            .read_samples(index, row..row + 1, cancel)
+                            .ok()
+                            .and_then(|samples| samples.first().copied());
+                        (address, value)
                     })
-                    .collect()
+                    .collect())
             });
             repaint.request_repaint();
             result
         });
-        self.job = Some((target, task));
+        self.job = Some((needed, task));
     }
 }
 
 fn coordinate(channel: &Channel, time: f64) -> Option<u64> {
+    if channel.sample_count == 0
+        || !(channel.start_seconds..channel.time_at(channel.sample_count)).contains(&time)
+    {
+        return None;
+    }
     let position = (time - channel.start_seconds) / channel.interval_seconds;
-    let row = position.round() as u64;
-    (position >= 0.0 && row < channel.sample_count).then_some(row)
+    Some((position.round() as u64).min(channel.sample_count - 1))
 }
 
 impl Viewer {
     pub(super) fn update_hover(&mut self, ctx: &Context) {
-        let cached = self.hover.time.is_some_and(|time| {
-            self.overview
-                .channels
-                .iter()
-                .enumerate()
-                .all(|(index, channel)| {
-                    coordinate(channel, time).is_none() || self.raw_value(index, time).is_some()
-                })
-        });
-        self.hover.update(ctx, &self.recording, cached);
+        let pointed = self
+            .hover
+            .time
+            .into_iter()
+            .flat_map(|time| self.visible_channels().map(move |index| (index, time)));
+        let cursors = self
+            .cursors
+            .into_iter()
+            .flatten()
+            .map(|time| (self.active, time));
+        let wanted = pointed
+            .chain(cursors)
+            .filter_map(|(index, time)| {
+                Some((index, coordinate(&self.overview.channels[index], time)?))
+            })
+            .filter(|&(index, row)| self.raw_value(index, row).is_none())
+            .collect();
+        self.hover.update(ctx, &self.recording, &wanted);
     }
 
-    fn raw_value(&self, index: usize, time: f64) -> Option<f32> {
+    pub(super) fn recorded_probe(&self, index: usize, time: f64) -> (Option<u64>, Probe) {
+        let Some(row) = coordinate(&self.overview.channels[index], time) else {
+            return (None, Probe::Outside);
+        };
+        let value = self
+            .raw_value(index, row)
+            .map_or_else(|| self.hover.value((index, row)), Probe::from_sample);
+        (Some(row), value)
+    }
+
+    fn raw_value(&self, index: usize, row: u64) -> Option<f32> {
         self.detail
             .as_ref()
             .and_then(|(_, data)| data.raw(index))
-            .and_then(|raw| raw.value_at(time))
+            .and_then(|raw| raw.sample_at(row))
             .or_else(|| {
                 (self.measurement_key.as_ref()?.channel == index)
                     .then_some(&self.measurements.as_ref()?.raw)?
-                    .value_at(time)
+                    .sample_at(row)
             })
     }
 
@@ -154,25 +199,29 @@ impl Viewer {
         let text_width = (available - 19.0).max(1.0);
         let mut labels = Vec::new();
         let mut add_label = |(lane, bounds): (Rect, Peak),
-                             value: f32,
+                             probe: Probe,
                              name: &str,
                              unit: &str,
                              display_offset,
                              color| {
-            if !bounds.valid() || !value.is_finite() {
-                return;
-            }
-            let y = plot::y_at(lane, bounds, value);
+            let value = match probe {
+                Probe::Value(value) if bounds.valid() => Some(value),
+                _ => None,
+            };
+            let y = value.map_or(lane.center().y, |value| plot::y_at(lane, bounds, value));
             if !visible.y_range().contains(y) {
                 return;
             }
-            painter.circle_filled(pos2(x, y), 3.0, color);
-            let measured = display_value(f64::from(value), unit);
-            let text = if display_offset == 0.0 {
-                format!("{name}  {measured}")
-            } else {
-                let displayed = display_value(f64::from(value + display_offset), unit);
-                format!("{name}  {measured} raw · {displayed} shifted")
+            if value.is_some() {
+                painter.circle_filled(pos2(x, y), 3.0, color);
+            }
+            let measured = probe.text(unit);
+            let text = match value {
+                Some(value) if display_offset != 0.0 => {
+                    let displayed = display_value(f64::from(value + display_offset), unit);
+                    format!("{name}  {measured} raw · {displayed} shifted")
+                }
+                _ => format!("{name}  {measured}"),
             };
             let mut job = LayoutJob::simple(text, FontId::monospace(12.0), color, text_width);
             job.wrap.max_rows = 1;
@@ -187,19 +236,14 @@ impl Viewer {
         } in channels
         {
             let channel = &self.overview.channels[index];
-            let value = self
-                .raw_value(index, time)
-                .or_else(|| self.hover.value(index, channel, time));
-            if let Some(value) = value {
-                add_label(
-                    (plot, bounds),
-                    value,
-                    &channel.name,
-                    &channel.unit,
-                    display_offset,
-                    super::plot::color(index),
-                );
-            }
+            add_label(
+                (plot, bounds),
+                self.recorded_probe(index, time).1,
+                &channel.name,
+                &channel.unit,
+                display_offset,
+                super::plot::color(index),
+            );
         }
         let math_slot = self.physical_lanes();
         if let Some((raw, bounds)) = self.calculated()
@@ -207,7 +251,7 @@ impl Viewer {
         {
             add_label(
                 (self.lane(rect, math_slot).plot, *bounds),
-                value,
+                Probe::from_sample(value),
                 "Math",
                 &self.math_unit(),
                 0.0,
@@ -219,7 +263,7 @@ impl Viewer {
             let unit = &self.overview.channels[index].unit;
             add_label(
                 (self.lane(rect, filter_start + slot).plot, bounds),
-                value,
+                Probe::from_sample(value),
                 name,
                 unit,
                 0.0,
@@ -299,6 +343,39 @@ fn label_panels(labels: impl Iterator<Item = (f32, f32)>, area: Rangef) -> Vec<L
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gap_zero_failed_and_unread_addresses_stay_distinct() {
+        let hover = Hover {
+            samples: BTreeMap::from([
+                ((0, 100), Some(f32::NAN)),
+                ((1, 100), Some(0.0)),
+                ((2, 100), None),
+            ]),
+            ..Default::default()
+        };
+        assert_eq!(hover.value((0, 100)), Probe::Gap);
+        assert_eq!(hover.value((1, 100)), Probe::Value(0.0));
+        assert_eq!(hover.value((2, 100)), Probe::Unavailable);
+        assert_eq!(hover.value((1, 101)), Probe::Pending);
+        assert_eq!(Probe::Value(0.0).text("A"), "0 A");
+    }
+
+    #[test]
+    fn probe_rows_are_native_to_each_channel_and_stop_at_its_coverage() {
+        let channel = Channel {
+            name: "CH1".into(),
+            unit: "V".into(),
+            sample_count: 4,
+            start_seconds: -0.5,
+            interval_seconds: 0.125,
+        };
+        assert_eq!(coordinate(&channel, -0.51), None);
+        assert_eq!(coordinate(&channel, -0.5), Some(0));
+        assert_eq!(coordinate(&channel, -0.26), Some(2));
+        assert_eq!(coordinate(&channel, -0.01), Some(3));
+        assert_eq!(coordinate(&channel, 0.0), None);
+    }
 
     #[test]
     fn probe_panels_merge_overlapping_labels_and_keep_separate_intersections() {

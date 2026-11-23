@@ -143,8 +143,18 @@ pub(in crate::file_manager) fn draw_envelope(
     let dt = count as f64 / bins.len().max(1) as f64;
     let mut mesh = egui::Mesh::default();
     let mut line = Vec::with_capacity(bins.len());
+    let finish_segment = |line: &mut Vec<Pos2>| {
+        if line.len() > 1 {
+            painter.add(egui::Shape::line(
+                std::mem::take(line),
+                Stroke::new(1.05, stroke.gamma_multiply(0.84)),
+            ));
+        }
+        line.clear();
+    };
     for (index, peak) in bins.into_iter().enumerate() {
         if !peak.valid() {
+            finish_segment(&mut line);
             continue;
         }
         let time = channel.start_seconds
@@ -158,12 +168,7 @@ pub(in crate::file_manager) fn draw_envelope(
         line.push(pos2(x, (top + bottom) * 0.5));
     }
     painter.add(mesh);
-    if line.len() > 1 {
-        painter.add(egui::Shape::line(
-            line,
-            Stroke::new(1.05, stroke.gamma_multiply(0.84)),
-        ));
-    }
+    finish_segment(&mut line);
 }
 
 pub(in crate::file_manager) fn draw_raw(

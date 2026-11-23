@@ -28,7 +28,10 @@ use little_clip_core::{
     BackgroundJobs,
     engineering::{
         analysis::{Dimension, SignalType, SpectrumWindow},
-        waveforms::{Envelope, Overview, Peak, Recording, display_value, time_span},
+        waveforms::{
+            Envelope, Overview, Peak, Recording, display_axis_value, display_value, sample_span,
+            time_span,
+        },
     },
     palette::AppPalette,
 };
@@ -258,11 +261,15 @@ impl Viewer {
             let height = if showing_spectrum {
                 (ui.available_height() * 0.32).max(68.0)
             } else {
-                (ui.available_height() - 72.0).max(80.0)
+                (ui.available_height() - 112.0).max(80.0)
             };
             let probe = self.waveform(ui, height, link);
             self.overview_ui(ui);
-            self.cursor_readout(ui, Link::clock(link));
+            ui.scope(|ui| {
+                ui.spacing_mut().interact_size.y = 24.0;
+                ui.spacing_mut().button_padding.y = 2.0;
+                self.cursor_readout(ui, link);
+            });
             probe
         } else {
             self.hover.time = None;
@@ -550,10 +557,16 @@ impl Viewer {
                 );
             }
             let bounds = scale.samples;
+            let plot = lane.plot;
+            plotted.push(PlottedChannel {
+                index,
+                plot,
+                bounds,
+                display_offset: offset,
+            });
             if !bounds.valid() {
                 continue;
             }
-            let plot = lane.plot;
             let clipped = painter.with_clip_rect(plot);
             if let Some(raw) = detail.and_then(|detail| detail.raw(index)) {
                 let (start, samples) = raw.visible(&self.span);
@@ -567,12 +580,6 @@ impl Viewer {
                 };
                 plot::draw_envelope(&clipped, plot, &self.span, channel, envelope, bounds, color);
             }
-            plotted.push(PlottedChannel {
-                index,
-                plot,
-                bounds,
-                display_offset: offset,
-            });
         }
         plotted
     }
@@ -703,11 +710,12 @@ impl Viewer {
     fn active_mark(&self) -> Option<MarkedRange> {
         let span = self.selection()?;
         let peak_to_peak = self
-            .measurement_key
-            .as_ref()
-            .filter(|key| key.channel == self.active && key.span == span)
-            .and_then(|_| self.measurements.as_ref())
-            .filter(|data| data.extrema.valid() && !data.limited)
+            .measurements_for(&span)
+            .filter(|data| {
+                data.extrema.valid()
+                    && !data.limited
+                    && data.valid_samples == data.raw.samples.len()
+            })
             .map(|data| {
                 (
                     data.extrema.max - data.extrema.min,
@@ -773,57 +781,89 @@ impl Viewer {
         });
     }
 
-    fn cursor_readout(&self, ui: &mut Ui, clock: little_clip_core::engineering::analysis::Clock) {
+    fn measurements_for(&self, range: &Range<f64>) -> Option<&Measurements> {
+        let key = self.measurement_key.as_ref()?;
+        (key.channel == self.active && key.span == *range).then_some(self.measurements.as_ref()?)
+    }
+
+    fn cursor_readout(&mut self, ui: &mut Ui, link: Option<&Link>) {
+        let clock = Link::clock(link);
+        let mut center = None;
+        let channel = &self.overview.channels[self.active];
+        let selection = self.selection();
         ui.horizontal_wrapped(|ui| {
-            let unit = &self.overview.channels[self.active].unit;
+            if self.cursors.iter().any(Option::is_some) {
+                ui.colored_label(plot::color(self.active), &channel.name);
+            }
             for (label, time) in ["A", "B"].into_iter().zip(self.cursors) {
                 if let Some(time) = time {
-                    let value = self
-                        .detail
-                        .as_ref()
-                        .and_then(|(_, detail)| detail.raw(self.active)?.value_at(time))
-                        .or_else(|| {
-                            if self.measurement_key.as_ref()?.channel == self.active {
-                                self.measurements.as_ref()?.raw.value_at(time)
-                            } else {
-                                None
-                            }
-                        });
-                    ui.label(format!(
-                        "{label}  {}  {}",
-                        display_value(clock.to_workspace(time), "s"),
-                        display_value(value.map_or(f64::NAN, f64::from), unit)
-                    ));
+                    let (row, probe) = self.recorded_probe(self.active, time);
+                    let position = display_axis_value(
+                        clock.to_workspace(time),
+                        channel.interval_seconds * clock.scale(),
+                        "s",
+                    );
+                    let sample =
+                        row.map_or_else(String::new, |row| format!("sample {} · ", row + 1));
+                    ui.horizontal(|ui| {
+                        if ui.button(format!("Center {label}")).clicked() {
+                            center = Some(time);
+                        }
+                        ui.label(format!(
+                            "{position} · {sample}{}",
+                            probe.text(&channel.unit)
+                        ));
+                    });
                 }
             }
-            if let Some(range) = self.selection() {
+            if selection.is_some() {
+                ui.weak("Shift bypasses snap · Right-click to remove");
+            } else {
+                ui.weak("Scroll to zoom · Middle-drag to pan · Drag to measure");
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            if let Some(range) = &selection {
                 let width = (range.end - range.start) * clock.scale();
                 ui.label(format!(
                     "Δt  {}    1/Δt  {}",
                     display_value(width, "s"),
                     display_value(width.recip(), "Hz")
                 ));
-                ui.weak("Right-click a range to remove it · Shift bypasses cursor snap");
-            } else {
-                ui.weak("Scroll to zoom · Middle-drag to pan · Drag to measure");
+                let rows = sample_span(channel, range.clone());
+                ui.weak(format!("{} samples in range", rows.end - rows.start));
             }
-            if let Some(measured) = &self.measurements
-                && self
-                    .measurement_key
-                    .as_ref()
-                    .is_some_and(|key| key.channel == self.active)
+            if let Some(measured) = self.measurements_for(selection.as_ref().unwrap_or(&self.span))
             {
-                if measured.extrema.valid() {
+                let missing = measured.raw.samples.len() - measured.valid_samples;
+                if missing > 0 {
                     ui.weak(format!(
-                        "Pk–Pk  {}",
-                        display_value(f64::from(measured.extrema.max - measured.extrema.min), unit)
+                        "{missing} missing samples{}",
+                        if measured.limited { " in window" } else { "" }
                     ));
+                }
+                if measured.extrema.valid() {
+                    let reading = display_value(
+                        f64::from(measured.extrema.max - measured.extrema.min),
+                        &channel.unit,
+                    );
+                    if missing > 0 || measured.limited {
+                        ui.weak(format!("Observed Pk–Pk  {reading}"));
+                    } else {
+                        ui.weak(format!("Pk–Pk  {reading}"));
+                    }
                 }
                 if measured.limited {
                     ui.weak("Waveform measurements use a 65k-sample window");
                 }
             }
         });
+        if let Some(time) = center {
+            let half = (self.span.end - self.span.start) / 2.0;
+            let domain = link.map_or(&self.domain, |link| &link.domain);
+            let step = self.overview.channels[self.active].interval_seconds;
+            self.span = timeline::fit(domain, time - half..time + half, step);
+        }
     }
 
     fn power_totals(&self, ui: &mut Ui) {
@@ -922,9 +962,8 @@ impl Viewer {
         }
         let cursors = self.cursors;
         let near = |t: f64| {
-            cursors
-                .iter()
-                .position(|value| value.is_some_and(|value| (value - t).abs() <= radius))
+            let [a, b] = cursors.map(|time| time.map_or(f64::INFINITY, |time| (time - t).abs()));
+            (a.min(b) <= radius).then_some(usize::from(b < a))
         };
         if active
             && let Some(origin) = origin
