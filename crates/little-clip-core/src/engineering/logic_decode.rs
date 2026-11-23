@@ -3,6 +3,9 @@
 use super::logic::{Edge, Level, Trace};
 use std::ops::Range;
 
+mod spi;
+pub use spi::{SpiConfig, spi};
+
 const MAX_EVENTS: usize = 16_384;
 const MAX_INPUT_EDGES: usize = 1 << 20;
 
@@ -30,6 +33,11 @@ pub enum Kind {
     I2cData {
         byte: u8,
         ack: bool,
+    },
+    SpiWord {
+        mosi: Option<u32>,
+        miso: Option<u32>,
+        bits: u8,
     },
     UartByte {
         byte: u8,

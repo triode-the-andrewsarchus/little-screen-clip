@@ -96,3 +96,39 @@ fn y_at(rect: Rect, level: Option<Level>) -> f32 {
         _ => rect.center().y,
     }
 }
+
+pub(super) fn annotations(
+    painter: &Painter,
+    rect: Rect,
+    span: &Range<f64>,
+    events: &[little_clip_core::engineering::logic_decode::Event],
+    color: Color32,
+    ink: Color32,
+) {
+    let painter = painter.with_clip_rect(rect);
+    let mut represented_until = rect.left() - 2.0;
+    for event in events {
+        let left = x_at(rect, span, event.time.start).max(rect.left());
+        let right = x_at(rect, span, event.time.end)
+            .max(left + 2.0)
+            .min(rect.right());
+        if left < represented_until || right <= left {
+            continue;
+        }
+        let segment = Rect::from_min_max(
+            pos2(left, rect.top() + 3.0),
+            pos2(right, rect.bottom() - 2.0),
+        );
+        painter.rect_filled(segment, 2.0, color.gamma_multiply(0.26));
+        if segment.width() > 65.0 {
+            painter.with_clip_rect(segment).text(
+                segment.left_center() + egui::vec2(3.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                super::protocols::event_label(event.kind),
+                egui::FontId::monospace(10.0),
+                ink,
+            );
+        }
+        represented_until = right;
+    }
+}

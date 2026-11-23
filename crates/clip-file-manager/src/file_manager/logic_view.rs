@@ -74,7 +74,7 @@ impl Viewer {
     pub fn load(path: &Path, cancel: &AtomicBool) -> Result<Self, String> {
         let recording = Recording::open(path, cancel)?;
         let overview = recording.overview(cancel)?;
-        let protocols = protocols::Panel::new(&overview.lanes);
+        let protocols = protocols::Panel::default();
         Ok(Self {
             span: overview.span.clone(),
             overview,
@@ -168,6 +168,9 @@ impl Viewer {
                 self.span = self.overview.span.clone();
             }
             ui.toggle_value(&mut self.show_transitions, "Transitions");
+            if self.protocols.add_menu(ui, &self.overview.lanes) {
+                self.show_transitions = true;
+            }
             if !self.refined {
                 ui.weak("Finding capture extent…");
             }
@@ -216,10 +219,31 @@ impl Viewer {
     fn waveforms(&mut self, ui: &mut Ui, height: f32) {
         let (outer, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
-        let rect = Rect::from_min_max(outer.min + vec2(78.0, 3.0), outer.max - vec2(9.0, 18.0));
+        let annotations = self.show_transitions && !self.protocols.edges();
+        let top = if annotations { 25.0 } else { 3.0 };
+        let rect = Rect::from_min_max(outer.min + vec2(78.0, top), outer.max - vec2(9.0, 18.0));
         self.navigate(ui, rect, &response);
         let painter = ui.painter_at(outer);
         let ink = ui.visuals().weak_text_color();
+        if annotations {
+            let band = Rect::from_min_max(pos2(rect.left(), outer.top()), rect.right_top());
+            let events = self.protocols.events(&self.span);
+            plot::annotations(
+                &painter,
+                band,
+                &self.span,
+                events,
+                ui.visuals().selection.bg_fill,
+                ink,
+            );
+            if response.clicked_by(PointerButton::Primary)
+                && let Some(point) = response
+                    .interact_pointer_pos()
+                    .filter(|point| band.contains(*point))
+            {
+                self.cursor = Some(timing::at(band, &self.span, point.x));
+            }
+        }
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
         timing::axes(&painter, rect, &self.span, ink);
         let clipped = painter.with_clip_rect(rect);
