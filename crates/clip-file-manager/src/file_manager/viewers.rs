@@ -55,6 +55,7 @@ enum Loaded {
     Path,
     Waveform(Box<super::scope_view::Viewer>),
     Touchstone(Box<super::touchstone_view::Viewer>),
+    LogicCapture(Box<super::logic_view::Viewer>),
     Video(super::media::VideoMetadata),
     VideoAudio(video_audio::Prepared),
     External,
@@ -84,6 +85,7 @@ enum ViewerSession {
     Scene(SplatViewerState),
     Waveform(Box<super::scope_view::Viewer>),
     Touchstone(Box<super::touchstone_view::Viewer>),
+    LogicCapture(Box<super::logic_view::Viewer>),
     Video(video::Video),
 }
 struct Loading {
@@ -406,6 +408,16 @@ impl Viewers {
             ) => {
                 state.focus_band([f64::from_bits(start_hz_bits), f64::from_bits(end_hz_bits)]);
             }
+            (
+                Some(ViewerSession::LogicCapture(state)),
+                Some(super::DocumentPosition::LogicRegion {
+                    start_bits,
+                    end_bits,
+                    ..
+                }),
+            ) => {
+                state.focus_time(f64::from_bits(start_bits), f64::from_bits(end_bits));
+            }
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::SubtitleCue(cue))) => {
                 state.preview.select_subtitle(cue)
             }
@@ -446,6 +458,7 @@ impl Viewers {
                 | ViewerSession::Embroidery(_)
                 | ViewerSession::Waveform(_)
                 | ViewerSession::Touchstone(_)
+                | ViewerSession::LogicCapture(_)
                 | ViewerSession::Sheet(_),
             )
             | None => {}
@@ -760,14 +773,15 @@ fn load_file_session(
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
     use super::DocumentPosition::{
-        ArchiveMember, ScopeSamples, TouchstoneBand, VideoAudioRange, VideoAudioTrack,
+        ArchiveMember, LogicRegion, ScopeSamples, TouchstoneBand, VideoAudioRange, VideoAudioTrack,
     };
     let revision = match position {
         Some(
             ArchiveMember(_, revision)
             | VideoAudioRange { revision, .. }
             | ScopeSamples { revision, .. }
-            | TouchstoneBand { revision, .. },
+            | TouchstoneBand { revision, .. }
+            | LogicRegion { revision, .. },
         ) => Some(revision),
         _ => None,
     };
@@ -863,6 +877,9 @@ fn load(
         Kind::Document(Format::Touchstone) => super::touchstone_view::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Touchstone),
+        Kind::Document(Format::LogicCapture) => super::logic_view::Viewer::load(path, cancelled)
+            .map(Box::new)
+            .map(Loaded::LogicCapture),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
@@ -977,6 +994,10 @@ fn session(
             viewer.set_check(check);
             ViewerSession::Touchstone(viewer)
         }
+        Loaded::LogicCapture(mut viewer) => {
+            viewer.set_check(check);
+            ViewerSession::LogicCapture(viewer)
+        }
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
@@ -1079,6 +1100,7 @@ fn render(
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
         ViewerSession::Waveform(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Touchstone(state) => state.ui(ui, close, palette, copies),
+        ViewerSession::LogicCapture(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Video(state) => state.ui(ui, close, palette, copies),
     }
 }

@@ -20,17 +20,17 @@ pub(super) fn fraction(range: &Range<f64>, x: f64) -> f32 {
     ((x - range.start) / (range.end - range.start).max(f64::MIN_POSITIVE)) as f32
 }
 
-pub(super) fn at(rect: Rect, range: &Range<f64>, x: f32) -> f64 {
+pub(in crate::file_manager) fn at(rect: Rect, range: &Range<f64>, x: f32) -> f64 {
     range.start
         + f64::from(((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0))
             * (range.end - range.start)
 }
 
-pub(super) fn x_at(rect: Rect, range: &Range<f64>, time: f64) -> f32 {
+pub(in crate::file_manager) fn x_at(rect: Rect, range: &Range<f64>, time: f64) -> f32 {
     rect.left() + rect.width() * fraction(range, time)
 }
 
-pub(super) fn lane(rect: Rect, index: usize, count: usize) -> Rect {
+pub(in crate::file_manager) fn lane(rect: Rect, index: usize, count: usize) -> Rect {
     let height = rect.height() / count.max(1) as f32;
     Rect::from_min_size(
         pos2(rect.left(), rect.top() + index as f32 * height),
@@ -38,7 +38,12 @@ pub(super) fn lane(rect: Rect, index: usize, count: usize) -> Rect {
     )
 }
 
-pub(super) fn axes(painter: &Painter, rect: Rect, span: &Range<f64>, foreground: Color32) {
+pub(in crate::file_manager) fn axes(
+    painter: &Painter,
+    rect: Rect,
+    span: &Range<f64>,
+    foreground: Color32,
+) {
     for bin in 0..=6 {
         let fraction = bin as f32 / 6.0;
         let x = rect.left() + rect.width() * fraction;
@@ -174,7 +179,7 @@ pub(super) fn y_at(rect: Rect, bounds: Peak, value: f32) -> f32 {
     }
 }
 
-pub(super) fn highlight(
+pub(in crate::file_manager) fn highlight(
     painter: &Painter,
     rect: Rect,
     span: &Range<f64>,

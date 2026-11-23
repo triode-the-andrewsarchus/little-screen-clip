@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod frame_benchmark;
-mod plot;
+pub(super) mod plot;
 mod reads;
 pub(super) mod strip;
 

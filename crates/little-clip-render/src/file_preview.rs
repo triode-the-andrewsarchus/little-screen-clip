@@ -35,6 +35,7 @@ pub(crate) enum Preview {
     Midi(MidiData),
     Scope(little_clip_core::engineering::waveforms::Overview),
     Touchstone(little_clip_core::engineering::touchstone::Summary),
+    Logic(little_clip_core::engineering::logic_preview::Overview),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -51,6 +52,7 @@ enum Kind {
     Midi,
     Scope,
     Touchstone,
+    Logic,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -187,6 +189,7 @@ impl crate::ScreenRenderer {
         match little_clip_core::file_format::recognize_engineering(path, &AtomicBool::new(false)) {
             Some(Format::Oscilloscope) => return load(path, Kind::Scope, extension),
             Some(Format::Touchstone) => return load(path, Kind::Touchstone, extension),
+            Some(Format::LogicCapture) => return load(path, Kind::Logic, extension),
             _ => {}
         }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
@@ -295,6 +298,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Scope
     } else if Format::for_path(path) == Some(Format::Touchstone) {
         Kind::Touchstone
+    } else if Format::for_path(path) == Some(Format::LogicCapture) {
+        Kind::Logic
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
@@ -341,6 +346,13 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             let sweep = touchstone::summary(&file, path, 800, &cancel).ok()?;
             source.check_file(&file).ok()?;
             Some(Preview::Touchstone(sweep))
+        }
+        Kind::Logic => {
+            let cancel = AtomicBool::new(false);
+            let recording =
+                little_clip_core::engineering::logic_preview::Recording::open(path, &cancel)
+                    .ok()?;
+            recording.overview(&cancel).ok().map(Preview::Logic)
         }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);

@@ -144,7 +144,11 @@ impl Viewers {
         });
         let can_rename = !matches!(
             self.session,
-            Some(ViewerSession::Waveform(_) | ViewerSession::Touchstone(_))
+            Some(
+                ViewerSession::Waveform(_)
+                    | ViewerSession::Touchstone(_)
+                    | ViewerSession::LogicCapture(_)
+            )
         ) && self.file_controls_ready()
             && archive_label.is_none()
             && source.is_some()
@@ -248,6 +252,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::Toolpath(_)
         | ViewerSession::Waveform(_)
         | ViewerSession::Touchstone(_)
+        | ViewerSession::LogicCapture(_)
         | ViewerSession::Embroidery(_)
         | ViewerSession::VcvPatch(_)
         | ViewerSession::Database(_)

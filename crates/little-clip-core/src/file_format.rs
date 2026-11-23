@@ -28,6 +28,7 @@ pub enum Format {
     Oscilloscope,
     PowerRecording,
     Touchstone,
+    LogicCapture,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -51,6 +52,7 @@ impl Format {
             "gcode" => Some(Self::Toolpath),
             "wfm" => Some(Self::Oscilloscope),
             "jls" => Some(Self::PowerRecording),
+            "sr" | "sal" | "vcd" => Some(Self::LogicCapture),
             _ if crate::engineering::touchstone::extension_ports(path).is_some() => {
                 Some(Self::Touchstone)
             }
@@ -67,7 +69,7 @@ impl Format {
 /// Whether an extension requires positive content evidence to override routing.
 pub fn ambiguous_engineering_path(path: &Path) -> bool {
     path.extension().is_some_and(|extension| {
-        ["csv", "bin", "ts"]
+        ["csv", "bin", "ts", "dsl"]
             .iter()
             .any(|candidate| extension.eq_ignore_ascii_case(candidate))
     })
@@ -79,16 +81,15 @@ pub fn ambiguous_engineering_path(path: &Path) -> bool {
 /// validate its own pinned input, including any format-specific offsets.
 pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format> {
     use crate::{
-        engineering::{scope, touchstone},
+        engineering::{logic, scope, touchstone},
         file_source::ReadCheck,
     };
 
     if !ambiguous_engineering_path(path) || cancel.load(Ordering::Relaxed) {
         return None;
     }
-    let rf = path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ts"));
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    let rf = extension == "ts";
     let bound = if rf { 64 * 1024 } else { scope::HEADER_BYTES };
     let check = ReadCheck::default();
     let (file, source) = check.open(path, None, cancel).ok()?;
@@ -98,10 +99,12 @@ pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format>
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
-    let format = if rf {
-        touchstone::recognizes(&bytes, path).then_some(Format::Touchstone)
-    } else {
-        scope::matches_header_with_len(&bytes, length).then_some(Format::Oscilloscope)
+    let format = match extension.as_str() {
+        "ts" => touchstone::recognizes(&bytes, path).then_some(Format::Touchstone),
+        "dsl" => (bytes.starts_with(b"PK\x03\x04") && logic::probe(&file, path))
+            .then_some(Format::LogicCapture),
+        "bin" if logic::matches_binary_header(&bytes) => Some(Format::LogicCapture),
+        _ => scope::matches_header_with_len(&bytes, length).then_some(Format::Oscilloscope),
     }?;
     source.check_file(&file).ok()?;
     Some(format)

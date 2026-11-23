@@ -2,6 +2,7 @@
 
 mod audio;
 mod images;
+mod logic_capture;
 mod rf_sweep;
 mod rich_media;
 mod splat;
@@ -509,6 +510,10 @@ impl ScreenRenderer {
             }
             Some(Preview::Touchstone(sweep)) => {
                 self.draw_rf_sweep_card(pixmap, sweep, [rx, ry, rw, rh]);
+                true
+            }
+            Some(Preview::Logic(capture)) => {
+                self.draw_logic_capture(pixmap, capture, [rx, ry, rw, rh]);
                 true
             }
             Some(Preview::Midi(score)) => {
