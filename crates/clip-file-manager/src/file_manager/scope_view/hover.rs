@@ -1,11 +1,14 @@
-use super::{RawChannel, Viewer, plot};
-use crate::file_manager::preview_job::Task;
-use egui::{Align2, Color32, Context, FontId, Painter, Rect, Stroke, pos2, vec2};
+use super::{PlottedChannel, Viewer, plot};
+use crate::file_manager::{preview_job::Task, signal_view::take_query_result};
+use egui::{
+    Align2, Color32, Context, FontId, Galley, Painter, Rangef, Rect, Stroke, pos2, text::LayoutJob,
+    vec2,
+};
 use little_clip_core::{
     BackgroundJobs,
     engineering::{
         scope::Channel,
-        waveforms::{Recording, display_value},
+        waveforms::{Peak, Recording, display_value},
     },
 };
 use std::{
@@ -39,9 +42,8 @@ impl Hover {
     }
 
     pub fn update(&mut self, ctx: &Context, recording: &Arc<Recording>, cached: bool) {
-        if let Some(result) = self.job.as_ref().and_then(|(_, task)| task.poll()) {
-            let (target, _) = self.job.take().expect("completed hover read");
-            self.loaded = Some((target, result.ok().and_then(Result::ok).unwrap_or_default()));
+        if let Some((target, result)) = take_query_result(&mut self.job) {
+            self.loaded = Some((target, result.unwrap_or_default()));
         }
         let Some(time) = self.time.filter(|_| !cached && self.job.is_none()) else {
             return;
@@ -108,11 +110,12 @@ impl Viewer {
         self.detail
             .as_ref()
             .and_then(|(_, data)| data.raw(index))
+            .and_then(|raw| raw.value_at(time))
             .or_else(|| {
                 (self.measurement_key.as_ref()?.channel == index)
-                    .then_some(&self.measurements.as_ref()?.raw)
+                    .then_some(&self.measurements.as_ref()?.raw)?
+                    .value_at(time)
             })
-            .and_then(|raw: &RawChannel| raw.value_at(time))
     }
 
     pub(super) fn paint_hover(
@@ -122,68 +125,196 @@ impl Viewer {
         ink: Color32,
         fill: Color32,
         offset: f64,
+        channels: &[PlottedChannel],
     ) {
         let Some(time) = self.hover.time else { return };
         let x = plot::x_at(rect, &self.span, time);
-        let mut labels = vec![(display_value(time + offset, "s"), ink)];
+        let visible = rect.intersect(painter.clip_rect());
+        if !visible.is_positive() || !visible.x_range().contains(x) {
+            return;
+        }
         painter.vline(x, rect.y_range(), Stroke::new(1.0, ink));
-        for (slot, index) in self.visible_channels().enumerate() {
+        if visible.top() == rect.top() {
+            selection_label(
+                painter,
+                visible,
+                x,
+                rect.top() + 5.0,
+                &display_value(time + offset, "s"),
+                ink,
+                fill,
+            );
+        }
+        let to_right = visible.right() - x >= x - visible.left();
+        let available = if to_right {
+            visible.right() - x
+        } else {
+            x - visible.left()
+        };
+        let text_width = (available - 19.0).max(1.0);
+        let mut labels = Vec::new();
+        let mut add_label = |(lane, bounds): (Rect, Peak),
+                             value: f32,
+                             name: &str,
+                             unit: &str,
+                             display_offset,
+                             color| {
+            if !bounds.valid() || !value.is_finite() {
+                return;
+            }
+            let y = plot::y_at(lane, bounds, value);
+            if !visible.y_range().contains(y) {
+                return;
+            }
+            painter.circle_filled(pos2(x, y), 3.0, color);
+            let measured = display_value(f64::from(value), unit);
+            let text = if display_offset == 0.0 {
+                format!("{name}  {measured}")
+            } else {
+                let displayed = display_value(f64::from(value + display_offset), unit);
+                format!("{name}  {measured} raw · {displayed} shifted")
+            };
+            let mut job = LayoutJob::simple(text, FontId::monospace(12.0), color, text_width);
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            labels.push((y, painter.layout_job(job)));
+        };
+        for &PlottedChannel {
+            index,
+            plot,
+            bounds,
+            display_offset,
+        } in channels
+        {
             let channel = &self.overview.channels[index];
-            let color = plot::color(index);
             let value = self
                 .raw_value(index, time)
                 .or_else(|| self.hover.value(index, channel, time));
-            labels.push((
-                format!(
-                    "{}  {}",
-                    channel.name,
-                    display_value(value.map_or(f64::NAN, f64::from), &channel.unit)
-                ),
-                color,
-            ));
-            if let Some(value) = value.filter(|value| value.is_finite()) {
-                let (lane, bounds) = self.channel_lane(rect, slot, index);
-                if bounds.valid() {
-                    painter.circle_filled(pos2(x, plot::y_at(lane, bounds, value)), 3.0, color);
-                }
+            if let Some(value) = value {
+                add_label(
+                    (plot, bounds),
+                    value,
+                    &channel.name,
+                    &channel.unit,
+                    display_offset,
+                    super::plot::color(index),
+                );
             }
         }
-        if let Some((raw, _)) = self.calculated() {
-            let value = raw.value_at(time).map_or(f64::NAN, f64::from);
-            labels.push((
-                format!("Math  {}", display_value(value, &self.math_unit())),
+        let math_slot = self.physical_lanes();
+        if let Some((raw, bounds)) = self.calculated()
+            && let Some(value) = raw.value_at(time)
+        {
+            add_label(
+                (self.lane(rect, math_slot).plot, *bounds),
+                value,
+                "Math",
+                &self.math_unit(),
+                0.0,
                 super::MATH_COLOR,
-            ));
+            );
         }
-        for (index, name, value) in self.filters.values(time) {
+        let filter_start = math_slot + usize::from(self.math_state.numeric().is_some());
+        for (slot, index, name, bounds, value) in self.filters.probes(time) {
             let unit = &self.overview.channels[index].unit;
-            let value = display_value(value.map_or(f64::NAN, f64::from), unit);
-            labels.push((format!("{name}  {value}"), super::filters::FILTER_COLOR));
+            add_label(
+                (self.lane(rect, filter_start + slot).plot, bounds),
+                value,
+                name,
+                unit,
+                0.0,
+                super::filters::FILTER_COLOR,
+            );
         }
-        let font = FontId::monospace(12.0);
-        let laid_out = labels
-            .into_iter()
-            .map(|(text, color)| painter.layout_no_wrap(text, font.clone(), color))
-            .collect::<Vec<_>>();
-        let width = laid_out
+        paint_probe_labels(painter, visible, x, to_right, fill, &mut labels);
+    }
+}
+
+fn paint_probe_labels(
+    painter: &Painter,
+    area: Rect,
+    x: f32,
+    to_right: bool,
+    fill: Color32,
+    labels: &mut [(f32, Arc<Galley>)],
+) {
+    labels.sort_by(|first, second| first.0.total_cmp(&second.0));
+    let panels = label_panels(
+        labels.iter().map(|(y, label)| (*y, label.size().y)),
+        area.y_range(),
+    );
+    for panel in panels {
+        let rows = &labels[panel.rows];
+        let width = rows
             .iter()
-            .map(|line| line.size().x)
+            .map(|(_, line)| line.size().x)
             .fold(0.0_f32, f32::max)
-            + 14.0;
-        let height: f32 = laid_out.iter().map(|line| line.size().y).sum::<f32>() + 10.0;
-        let left = if x + width + 8.0 <= rect.right() {
-            x + 8.0
-        } else {
-            (x - width - 8.0).max(rect.left())
-        };
-        let panel = Rect::from_min_size(pos2(left, rect.top() + 6.0), vec2(width, height));
-        painter.rect_filled(panel, 4.0, fill);
-        let mut top = panel.top() + 5.0;
-        for line in laid_out {
-            let step = line.size().y;
-            painter.galley(pos2(panel.left() + 7.0, top), line, Color32::PLACEHOLDER);
-            top += step;
+            + 12.0;
+        let left = if to_right { x + 7.0 } else { x - width - 7.0 };
+        let rect = Rect::from_min_size(pos2(left, panel.top), vec2(width, panel.height));
+        painter.rect_filled(rect, 3.0, fill);
+        let mut top = rect.top() + 3.0;
+        for (_, line) in rows {
+            painter.galley(pos2(left + 6.0, top), line.clone(), Color32::PLACEHOLDER);
+            top += line.size().y;
         }
+    }
+}
+
+struct LabelPanel {
+    rows: std::ops::Range<usize>,
+    top: f32,
+    height: f32,
+    first_y: f32,
+}
+
+fn label_panels(labels: impl Iterator<Item = (f32, f32)>, area: Rangef) -> Vec<LabelPanel> {
+    const PADDING: f32 = 6.0;
+    let mut panels: Vec<LabelPanel> = Vec::new();
+    let top_at =
+        |y: f32, height: f32| (y - height * 0.5).clamp(area.min, (area.max - height).max(area.min));
+    for (index, (y, height)) in labels.enumerate() {
+        let height = height + PADDING;
+        let mut panel = LabelPanel {
+            rows: index..index + 1,
+            top: top_at(y, height),
+            height,
+            first_y: y,
+        };
+        while panels
+            .last()
+            .is_some_and(|prev| prev.top + prev.height > panel.top)
+        {
+            let prev = panels.pop().expect("overlapping panel");
+            panel.height += prev.height - PADDING;
+            panel.first_y = prev.first_y;
+            panel.rows.start = prev.rows.start;
+            panel.top = top_at((prev.first_y + y) * 0.5, panel.height);
+        }
+        panels.push(panel);
+    }
+    panels
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_panels_merge_overlapping_labels_and_keep_separate_intersections() {
+        let panels = label_panels(
+            [(15.0, 12.0), (28.0, 12.0), (96.0, 12.0)].into_iter(),
+            Rangef::new(0.0, 100.0),
+        );
+        assert_eq!(
+            panels
+                .iter()
+                .map(|panel| panel.rows.clone())
+                .collect::<Vec<_>>(),
+            [0..2, 2..3]
+        );
+        assert_eq!(panels[1].top + panels[1].height, 100.0);
+        assert!(panels[0].top + panels[0].height < panels[1].top);
     }
 }
 

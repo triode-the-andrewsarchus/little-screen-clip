@@ -8,8 +8,11 @@ use little_clip_core::engineering::{
 };
 use std::ops::Range;
 
-pub(in crate::file_manager) fn spectrum_rect(ui: &mut Ui) -> (Rect, egui::Response) {
-    let height = (ui.available_height() - 29.0).max(65.0);
+pub(in crate::file_manager) fn spectrum_rect(
+    ui: &mut Ui,
+    min_height: f32,
+) -> (Rect, egui::Response) {
+    let height = (ui.available_height() - 29.0).max(min_height);
     let (area, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
     (

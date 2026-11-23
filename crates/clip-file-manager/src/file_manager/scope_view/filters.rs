@@ -3,7 +3,7 @@ use crate::file_manager::signal_view::{
     filter_editor::{StageList, filter_menu},
     take_query_result,
 };
-use egui::{Color32, Painter, Rect, Stroke, Ui, vec2};
+use egui::{Painter, Rect, Ui};
 use little_clip_core::engineering::{
     analysis::FilterKind,
     scope::{Channel, MAX_SAMPLES_PER_READ},
@@ -153,16 +153,14 @@ impl Viewer {
         lane.stages.add(kind, rate, &span, self.spectrum_marker);
     }
 
-    pub(super) fn draw_filters(&self, painter: &Painter, clip: &Painter, rect: Rect, ink: Color32) {
+    pub(super) fn draw_filters(&self, painter: &Painter, clip: &Painter, rect: Rect) {
         let first = self.physical_lanes() + usize::from(self.math_state.numeric().is_some());
         for (slot, (&index, derived)) in self.filters.visible().enumerate() {
-            let lane = plot::lane(rect, first + slot, self.lane_count()).shrink2(vec2(0.0, 5.0));
+            let lane = self.lane(rect, first + slot);
+            if !painter.clip_rect().intersects(lane.frame) {
+                continue;
+            }
             let channel = &self.overview.channels[index];
-            clip.hline(
-                lane.x_range(),
-                lane.top(),
-                Stroke::new(1.0, ink.gamma_multiply(0.32)),
-            );
             let output = derived.ready();
             let status = match output {
                 Some(_) => "",
@@ -170,18 +168,16 @@ impl Viewer {
                 None => " · filtering…",
             };
             if let Some(output) = output {
-                draw_output(clip, lane, &self.span, channel, output);
-                super::axes_y(painter, lane, output.bounds, &channel.unit, ink);
+                draw_output(
+                    &clip.with_clip_rect(lane.plot),
+                    lane.plot,
+                    &self.span,
+                    channel,
+                    output,
+                );
+                lane.scale(painter, output.bounds, &channel.unit, FILTER_COLOR);
             }
-            super::hover::selection_label(
-                clip,
-                lane,
-                lane.left(),
-                lane.top() + 3.0,
-                &format!("{}{status}", derived.name),
-                FILTER_COLOR,
-                Color32::from_black_alpha(210),
-            );
+            lane.label(painter, &format!("{}{status}", derived.name), FILTER_COLOR);
         }
     }
 
@@ -205,17 +201,24 @@ impl Filters {
 
     pub(super) fn visibility_controls(&mut self, ui: &mut Ui) {
         for lane in self.lanes.values_mut() {
-            ui.checkbox(&mut lane.visible, &lane.name);
+            let action = if lane.visible { "Hide" } else { "Show" };
+            if ui.button(format!("{action} {}", lane.name)).clicked() {
+                lane.visible = !lane.visible;
+            }
         }
     }
 
-    pub(super) fn values(&self, time: f64) -> impl Iterator<Item = (usize, &str, Option<f32>)> {
-        self.visible().map(move |(&index, lane)| {
-            let value = lane
-                .ready()
-                .and_then(|output| output.samples.raw.value_at(time));
-            (index, lane.name.as_str(), value)
-        })
+    pub(super) fn probes(
+        &self,
+        time: f64,
+    ) -> impl Iterator<Item = (usize, usize, &str, Peak, f32)> {
+        self.visible()
+            .enumerate()
+            .filter_map(move |(slot, (&index, lane))| {
+                let output = lane.ready()?;
+                let value = output.samples.raw.value_at(time)?;
+                Some((slot, index, lane.name.as_str(), output.bounds, value))
+            })
     }
 
     pub(super) fn has_lane(&self, channel: usize) -> bool {

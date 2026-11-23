@@ -14,11 +14,14 @@ The branch adds four floating interfaces for adding a recording, editing equatio
 
 ## 2. Make scope and equation state readable at the trace
 
-- [ ] Give stacked channels individually labeled plots, separated scales, units and direct visibility buttons. Keep overlay available for comparable units.
-- [ ] Put a display offset control and reset on each applicable trace. Indicate a nonzero offset with its unit. Use original samples for measurement, filtering, equations, copying and snapping.
-- [ ] Draw a hover value at each visible trace intersection. Group labels only when their measured bounds collide and keep labels within the viewport. Check separated and coincident traces, missing samples, zoom, fixed ranges and the screen edges.
+- [x] Give stacked channels individually labeled plots, separated scales, units and direct visibility buttons. Keep overlay available for comparable units.
+- [x] Put a display offset control and reset on each applicable trace. Indicate a nonzero offset with its unit. Use original samples for measurement, filtering, equations, copying and snapping.
+- [x] Draw a hover value at each visible trace intersection. Group labels where the panels would overlap and clamp them to the viewport. Confirm separated labels in stacked view and grouped labels in overlay using the four-channel Rigol recording.
+- [ ] Exercise hover with missing samples and selections at the limits of the visible zoom range.
 - [ ] Show each math lane's equation beside its result. Support independent editing, add and remove, naming, inline errors, and direct spectrum targeting for every numeric lane. Keep source aliases, predicates, decoded inputs, filters, resampling and feedback connected to their existing evaluators. Preserve surviving bindings when an equation changes.
 - [ ] Keep spectrum, source visibility, math editing and filter actions recognizable as buttons. Use in-place rows and panels for the existing floating interactions. Test the four-channel Rigol capture, PWM and I²S inputs, a bad equation and its recovery, condition-based measurements and a short window.
+
+Place each equation next to the trace it produces, with a direct Spectrum action on the same row. The new-equation action should bring the inline editor into view and focus it. Keep an unapplied draft local to the edited row, and validate the complete dependency graph before replacing the last applied result. Walk through adding two equations, fixing a bad edit in one, and switching their spectra while retaining the other lane's decoder, filter and time selection.
 
 ## 3. Save and reopen an analysis
 

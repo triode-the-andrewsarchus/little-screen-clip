@@ -7,39 +7,42 @@ use crate::file_manager::signal_view::{
     frequency_plot::{Display, choose_region, choose_window, spectrum_readout, spectrum_rect},
     timeline::{self, Link},
 };
-use egui::Ui;
+use egui::{Label, RichText, Ui};
 use std::ops::Range;
 
 impl Viewer {
     pub(super) fn spectrum_ui(&mut self, ui: &mut Ui, link: Option<&Link>) {
         let input = self.spectrum_input();
         self.spectrum_controls(ui, input.as_ref());
+        if !self.spectrum {
+            self.spectra.suspend();
+            return;
+        }
         let input = self.spectrum_input();
         let interval = self.spectrum_interval();
         let available = input.is_some();
         self.spectra
             .update(ui.ctx(), input, interval, self.spectrum_window);
-        let Some((input, result)) = self.spectra.ready() else {
-            ui.weak(if available {
-                "Computing spectrum…"
-            } else {
-                "Calculating the selected lane…"
-            });
-            return;
-        };
-        let survey = match result {
-            Ok(Some(value)) => value,
-            Ok(None) => {
-                ui.weak("No contiguous finite samples in this interval");
-                return;
+        let (rect, response) = spectrum_rect(ui, 220.0);
+        let ready = match self.spectra.ready() {
+            Some((input, Ok(Some(survey)))) => Ok((input, survey)),
+            Some((_, Ok(None))) => {
+                Err(RichText::new("No contiguous finite samples in this interval").weak())
             }
-            Err(error) => {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+            Some((_, Err(error))) => Err(RichText::new(error).color(ui.visuals().error_fg_color)),
+            None if available => Err(RichText::new("Computing spectrum…").weak()),
+            None => Err(RichText::new("Calculating the selected lane…").weak()),
+        };
+        let (input, survey) = match ready {
+            Ok(ready) => ready,
+            Err(status) => {
+                ui.painter()
+                    .rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+                ui.place(rect.shrink(8.0), Label::new(status));
                 return;
             }
         };
         let channel = input.channel();
-        let (rect, response) = spectrum_rect(ui);
         let mut display = Display {
             span: &mut self.spectrum_span,
             marker: &mut self.spectrum_marker,
@@ -126,6 +129,9 @@ impl Viewer {
             ui.toggle_value(&mut self.spectra.only, "Frequency only");
             if ui.button("Fit frequencies").clicked() {
                 self.spectrum_span = None;
+            }
+            if ui.button("Close spectrum").clicked() {
+                self.spectrum = false;
             }
         });
         if self.spectra.kind == LaneKind::Recorded {

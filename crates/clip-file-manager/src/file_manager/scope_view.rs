@@ -6,6 +6,7 @@ pub(super) use filters::{FilterSamples, FilteredChannel};
 #[cfg(test)]
 mod frame_benchmark;
 mod hover;
+mod lanes;
 mod logic_export;
 mod math;
 pub(super) mod plot;
@@ -53,6 +54,13 @@ struct CursorDrag {
     origin: egui::Pos2,
 }
 
+struct PlottedChannel {
+    index: usize,
+    plot: Rect,
+    bounds: Peak,
+    display_offset: f32,
+}
+
 pub(super) struct Viewer {
     recording: Arc<Recording>,
     overview: Overview,
@@ -63,6 +71,7 @@ pub(super) struct Viewer {
     marks: Vec<MarkedRange>,
     stacked: bool,
     visible: Vec<bool>,
+    display_offsets: Vec<f32>,
     hover: hover::Hover,
     conversion: logic_export::Conversion,
     drag: Option<CursorDrag>,
@@ -119,6 +128,7 @@ impl Viewer {
         let segmented = recording.triggered_segments();
         let mut visible = vec![!segmented; overview.channels.len()];
         visible[0] = true;
+        let display_offsets = vec![0.0; visible.len()];
         let span = if segmented {
             time_span(&overview.channels[..1])
         } else {
@@ -134,6 +144,7 @@ impl Viewer {
             marks: Vec::new(),
             stacked: true,
             visible,
+            display_offsets,
             hover: hover::Hover::default(),
             conversion: logic_export::Conversion::default(),
             drag: None,
@@ -209,18 +220,35 @@ impl Viewer {
         copies: &mut Copies,
         link: Option<&Link>,
     ) -> Option<f64> {
+        if link.is_none() {
+            return egui::ScrollArea::vertical()
+                .id_salt("scope-content")
+                .auto_shrink([false, false])
+                .show(ui, |ui| self.capture_ui(ui, palette, copies, None))
+                .inner;
+        }
+        self.capture_ui(ui, palette, copies, link)
+    }
+
+    fn capture_ui(
+        &mut self,
+        ui: &mut Ui,
+        palette: &AppPalette,
+        copies: &mut Copies,
+        link: Option<&Link>,
+    ) -> Option<f64> {
         self.poll(ui.ctx());
         if self.logic_subview(ui, palette, copies) {
             return None;
         }
-        self.toolbar(ui, copies);
+        let spectrum_opened = self.toolbar(ui, copies);
         self.power_totals(ui);
         let show_time = !self.spectrum || !self.spectra.only;
         let probe = if show_time {
             let height = if self.spectrum {
                 (ui.available_height() * 0.32).max(68.0)
             } else {
-                (ui.available_height() - 57.0).max(80.0)
+                (ui.available_height() - 72.0).max(80.0)
             };
             let probe = self.waveform(ui, height, link);
             self.overview_ui(ui);
@@ -231,7 +259,10 @@ impl Viewer {
             None
         };
         if self.spectrum {
-            self.spectrum_ui(ui, link);
+            let view = ui.scope(|ui| self.spectrum_ui(ui, link));
+            if spectrum_opened {
+                view.response.scroll_to_me(None);
+            }
         } else {
             self.spectra.suspend();
         }
@@ -250,19 +281,25 @@ impl Viewer {
         probe
     }
 
-    fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) {
+    fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) -> bool {
+        let mut spectrum_opened = false;
         ui.horizontal_wrapped(|ui| {
             ui.strong(&self.overview.model);
             ui.weak(display_value(self.overview.duration_seconds(), "s"));
             ui.separator();
-            self.channel_picker(ui);
             if ui.button("Fit").clicked() {
                 self.span = self.domain.clone();
             }
             if self.recording.triggered_segments() && ui.button("Fit segment").clicked() {
                 self.fit_active();
             }
-            ui.toggle_value(&mut self.spectrum, "Spectrum");
+            if ui
+                .add(egui::Button::new("Spectrum").selected(self.spectrum))
+                .clicked()
+            {
+                self.spectrum = !self.spectrum;
+                spectrum_opened = self.spectrum;
+            }
             let same_units = self
                 .overview
                 .channels
@@ -270,18 +307,15 @@ impl Viewer {
                 .all(|pair| pair[0].unit == pair[1].unit);
             if same_units
                 && ui
-                    .button(if self.stacked { "Stacked" } else { "Overlay" })
-                    .on_hover_text("Switch between stacked and overlaid traces")
+                    .button(if self.stacked {
+                        "Overlay traces"
+                    } else {
+                        "Stack traces"
+                    })
                     .clicked()
             {
                 self.stacked = !self.stacked;
             }
-            ui.menu_button("Visible channels", |ui| {
-                for (channel, visible) in self.overview.channels.iter().zip(&mut self.visible) {
-                    ui.checkbox(visible, &channel.name);
-                }
-                self.filters.visibility_controls(ui);
-            });
             let range = self.selection();
             if ui
                 .add_enabled(
@@ -298,8 +332,11 @@ impl Viewer {
                 });
             }
         });
+        self.channel_controls(ui);
+        ui.horizontal_wrapped(|ui| self.filters.visibility_controls(ui));
         self.math_controls(ui);
         self.logic_menu(ui, copies);
+        spectrum_opened
     }
 
     fn math_controls(&mut self, ui: &mut Ui) {
@@ -353,17 +390,15 @@ impl Viewer {
     }
 
     fn waveform(&mut self, ui: &mut Ui, height: f32, link: Option<&Link>) -> Option<f64> {
-        let (outer, response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), height.max(40.0)),
-            Sense::click_and_drag(),
-        );
+        let height = height.max(lanes::MIN_HEIGHT * self.lane_count().max(1) as f32 + 20.0);
+        let (outer, frame) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
         let rect = Rect::from_min_max(
-            outer.min + egui::vec2(if link.is_some() { 78.0 } else { 56.0 }, 4.0),
+            outer.min + egui::vec2(78.0, 4.0),
             outer.max - egui::vec2(9.0, 16.0),
         );
-        if let Some(span) =
-            timeline::navigate(ui.ctx(), rect, &response, &self.span, link.is_some())
-        {
+        let response = ui.interact(rect, frame.id.with("waveform"), Sense::click_and_drag());
+        if let Some(span) = timeline::navigate(ui.ctx(), rect, &response, &self.span, true) {
             let domain = link.map_or(&self.domain, |link| &link.domain);
             self.span = timeline::fit(
                 domain,
@@ -373,19 +408,32 @@ impl Viewer {
         }
         self.move_cursors(ui, rect, &response);
         let painter = ui.painter_at(outer);
-        painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+        let lane_count = self.lane_count();
+        let lanes = (0..lane_count)
+            .map(|slot| lanes::Lane::new(rect, slot, lane_count))
+            .filter(|lane| painter.clip_rect().intersects(lane.frame));
+        for lane in lanes.clone() {
+            lane.background(ui, &painter);
+        }
         let ink = ui.visuals().weak_text_color();
         let axis = timeline::translate(&self.span, link.map_or(0.0, |link| link.offset));
-        plot::axes(&painter, rect, &axis, ink);
+        plot::x_axis_with_grid(
+            &painter,
+            rect,
+            &axis,
+            "s",
+            ink,
+            lanes.map(|lane| lane.plot.y_range()),
+        );
         let clipped = painter.with_clip_rect(rect);
         let probe = response
             .hover_pos()
             .filter(|point| rect.contains(*point))
             .map(|point| plot::at(rect, &self.span, point.x));
         self.hover.time = probe.or(link.and_then(|link| link.probe));
-        self.draw_channels(&painter, &clipped, rect, ink);
-        self.draw_math(&painter, &clipped, rect, ink);
-        self.draw_filters(&painter, &clipped, rect, ink);
+        let channels = self.draw_channels(ui, &painter, rect, ink);
+        self.draw_math(&painter, &clipped, rect);
+        self.draw_filters(&painter, &clipped, rect);
         self.paint_marks(ui, &clipped, rect);
         if let Some(link) = link {
             timeline::paint_reference(&clipped, rect, &self.span, link.reference);
@@ -416,78 +464,97 @@ impl Viewer {
             ui.visuals().text_color(),
             ui.visuals().window_fill(),
             link.map_or(0.0, |link| link.offset),
+            &channels,
         );
-        response.on_hover_text("Scroll to zoom · Middle drag to pan · Drag to add a range · Right-click a range to remove · Shift bypasses zero-crossing snap");
         probe
     }
 
     fn draw_channels(
-        &self,
+        &mut self,
+        ui: &mut Ui,
         painter: &egui::Painter,
-        clipped: &egui::Painter,
         rect: Rect,
         ink: Color32,
-    ) {
-        let channels = &self.overview.channels;
+    ) -> Vec<PlottedChannel> {
         let envelopes = self.index.as_ref().unwrap_or(&self.overview.envelopes);
-        for (slot, index) in self.visible_channels().enumerate() {
-            let channel = &channels[index];
+        let overlay = (!self.stacked).then(|| {
+            let mut bounds = Peak::default();
+            for index in self.visible_channels() {
+                bounds.merge(envelopes[index].extrema());
+            }
+            bounds
+        });
+        let detail = self
+            .detail
+            .as_ref()
+            .filter(|(cover, _)| {
+                contains(
+                    cover,
+                    &(self.span.start.max(self.domain.start)..self.span.end.min(self.domain.end)),
+                )
+            })
+            .map(|(_, detail)| detail);
+        let mut plotted = Vec::with_capacity(self.visible_channels().count());
+        for (slot, index) in self
+            .visible
+            .iter()
+            .enumerate()
+            .filter_map(|(i, show)| show.then_some(i))
+            .enumerate()
+        {
+            let channel = &self.overview.channels[index];
             let envelope = &envelopes[index];
-            let (lane, bounds) = self.channel_lane(rect, slot, index);
+            let lane = self.lane(rect, if self.stacked { slot } else { 0 });
+            if !ui.is_rect_visible(lane.frame) {
+                continue;
+            }
+            let bounds = overlay.unwrap_or_else(|| envelope.extrema());
+            let color = plot::color(index);
+            let offset = if self.stacked {
+                let offset = &mut self.display_offsets[index];
+                lane.trace_heading(ui, channel, index, offset, bounds);
+                *offset
+            } else {
+                if slot == 0 {
+                    lane.label(painter, "Shared scale", ink);
+                }
+                0.0
+            };
+            let scale = lanes::Scale::new(bounds, offset);
+            if self.stacked || slot == 0 {
+                lane.scale(
+                    painter,
+                    scale.display,
+                    &channel.unit,
+                    if self.stacked { color } else { ink },
+                );
+            }
+            let bounds = scale.samples;
             if !bounds.valid() {
                 continue;
             }
-            let channel_color = plot::color(index);
-            if self.stacked || slot == 0 {
-                axes_y(painter, lane, bounds, &channel.unit, ink);
-                if bounds.min <= 0.0 && bounds.max >= 0.0 {
-                    let y = plot::y_at(lane, bounds, 0.0);
-                    clipped.hline(
-                        lane.x_range(),
-                        y,
-                        Stroke::new(1.0, ink.gamma_multiply(0.38)),
-                    );
-                }
-            }
-            let detail = self
-                .detail
-                .as_ref()
-                .filter(|(cover, _)| {
-                    contains(
-                        cover,
-                        &(self.span.start.max(self.domain.start)
-                            ..self.span.end.min(self.domain.end)),
-                    )
-                })
-                .map(|(_, detail)| detail);
+            let plot = lane.plot;
+            let clipped = painter.with_clip_rect(plot);
             if let Some(raw) = detail.and_then(|detail| detail.raw(index)) {
                 let (start, samples) = raw.visible(&self.span);
                 plot::draw_raw(
-                    clipped,
-                    lane,
-                    &self.span,
-                    start,
-                    raw.step,
-                    samples,
-                    bounds,
-                    channel_color,
+                    &clipped, plot, &self.span, start, raw.step, samples, bounds, color,
                 );
             } else {
                 let envelope = match detail {
                     Some(PlotData::Summary(envelopes)) => &envelopes[index],
                     _ => envelope,
                 };
-                plot::draw_envelope(
-                    clipped,
-                    lane,
-                    &self.span,
-                    channel,
-                    envelope,
-                    bounds,
-                    channel_color,
-                );
+                plot::draw_envelope(&clipped, plot, &self.span, channel, envelope, bounds, color);
             }
+            plotted.push(PlottedChannel {
+                index,
+                plot,
+                bounds,
+                display_offset: offset,
+            });
         }
+        plotted
     }
 
     fn visible_channels(&self) -> impl Iterator<Item = usize> + '_ {
@@ -511,23 +578,6 @@ impl Viewer {
             + self.filters.len()
     }
 
-    fn channel_lane(&self, rect: Rect, slot: usize, index: usize) -> (Rect, Peak) {
-        let envelopes = self.index.as_ref().unwrap_or(&self.overview.envelopes);
-        let (slot, bounds) = if self.stacked {
-            (slot, envelopes[index].extrema())
-        } else {
-            let mut bounds = Peak::default();
-            for index in self.visible_channels() {
-                bounds.merge(envelopes[index].extrema());
-            }
-            (0, bounds)
-        };
-        (
-            plot::lane(rect, slot, self.lane_count()).shrink2(egui::vec2(0.0, 5.0)),
-            bounds,
-        )
-    }
-
     fn calculated(&self) -> Option<&(Arc<RawChannel>, Peak)> {
         let key = self.measurement_key.as_ref()?;
         if key.expression != self.math || key.channel != self.active {
@@ -547,15 +597,15 @@ impl Viewer {
         }
     }
 
-    fn draw_math(&self, painter: &egui::Painter, clip: &egui::Painter, rect: Rect, ink: Color32) {
+    fn draw_math(&self, painter: &egui::Painter, clip: &egui::Painter, rect: Rect) {
         if let Some(slot) = self
             .visible_channels()
             .position(|index| index == self.active)
         {
-            let (lane, _) = self.channel_lane(rect, slot, self.active);
+            let lane = self.lane(rect, if self.stacked { slot } else { 0 });
             self.math_state.paint(
                 clip,
-                lane,
+                lane.plot,
                 &self.span,
                 &self.overview.channels[self.active],
                 self.math_envelope(),
@@ -564,42 +614,33 @@ impl Viewer {
         if self.math_state.numeric().is_none() {
             return;
         }
-        let lane = plot::lane(rect, self.physical_lanes(), self.lane_count())
-            .shrink2(egui::vec2(0.0, 5.0));
-        clip.hline(
-            lane.x_range(),
-            lane.top(),
-            Stroke::new(1.0, ink.gamma_multiply(0.32)),
-        );
+        let lane = self.lane(rect, self.physical_lanes());
+        if !painter.clip_rect().intersects(lane.frame) {
+            return;
+        }
         let calculated = self.calculated();
-        let label = match calculated {
+        let status = match calculated {
             Some((raw, _))
                 if raw.start > self.span.start + 2.0 * raw.step
                     || raw.time(raw.samples.len()) < self.span.end - 2.0 * raw.step =>
             {
-                "Math · bounded sample window"
+                " · bounded sample window"
             }
-            Some(_) => "Math",
-            None => "Calculating math…",
+            Some(_) => "",
+            None => " · calculating…",
         };
-        painter.text(
-            lane.left_top() + egui::vec2(6.0, 3.0),
-            egui::Align2::LEFT_TOP,
-            label,
-            egui::FontId::monospace(12.0),
-            MATH_COLOR,
-        );
+        lane.label(painter, &format!("{}{}", self.math, status), MATH_COLOR);
         if let Some((raw, bounds)) = calculated.filter(|(_, bounds)| bounds.valid()) {
-            axes_y(painter, lane, *bounds, &self.math_unit(), ink);
+            lane.scale(painter, *bounds, &self.math_unit(), MATH_COLOR);
             let (start, samples) = raw.visible(&self.span);
             let stride = samples
                 .len()
-                .div_ceil((lane.width() as usize).max(8))
+                .div_ceil((lane.plot.width() as usize).max(8))
                 .max(1);
             let display = samples.iter().copied().step_by(stride).collect::<Vec<_>>();
             plot::draw_raw(
-                clip,
-                lane,
+                &clip.with_clip_rect(lane.plot),
+                lane.plot,
                 &self.span,
                 start,
                 raw.step * stride as f64,
@@ -742,6 +783,9 @@ impl Viewer {
                     display_value(width, "s"),
                     display_value(width.recip(), "Hz")
                 ));
+                ui.weak("Right-click a range to remove it · Shift bypasses cursor snap");
+            } else {
+                ui.weak("Scroll to zoom · Middle-drag to pan · Drag to measure");
             }
             if let Some(measured) = &self.measurements
                 && self
@@ -1064,18 +1108,6 @@ impl Viewer {
         self.analysis_job = Some(Task::start(&JOBS, Duration::from_secs(15), move |cancel| {
             reads::analyze(&recording, request, cancel)
         }));
-    }
-}
-
-fn axes_y(painter: &egui::Painter, lane: Rect, bounds: Peak, unit: &str, ink: Color32) {
-    for (y, value) in [(lane.top(), bounds.max), (lane.bottom(), bounds.min)] {
-        painter.text(
-            pos2(lane.left() - 5.0, y),
-            egui::Align2::RIGHT_CENTER,
-            display_value(f64::from(value), unit),
-            egui::FontId::monospace(10.0),
-            ink,
-        );
     }
 }
 

@@ -54,15 +54,32 @@ pub(in crate::file_manager) fn labelled_x_axis(
     unit: &str,
     foreground: Color32,
 ) {
+    x_axis_with_grid(
+        painter,
+        rect,
+        span,
+        unit,
+        foreground,
+        std::iter::once(rect.y_range()),
+    );
+}
+
+pub(super) fn x_axis_with_grid(
+    painter: &Painter,
+    rect: Rect,
+    span: &Range<f64>,
+    unit: &str,
+    foreground: Color32,
+    grid: impl Iterator<Item = egui::Rangef> + Clone,
+) {
     let divisions = (rect.width() / 90.0).round().clamp(2.0, 6.0) as usize;
     let spacing = (span.end - span.start) / divisions as f64;
     for bin in 0..=divisions {
         let fraction = bin as f32 / divisions as f32;
         let x = rect.left() + rect.width() * fraction;
-        painter.line_segment(
-            [pos2(x, rect.top()), pos2(x, rect.bottom())],
-            Stroke::new(1.0, foreground.gamma_multiply(0.21)),
-        );
+        for range in grid.clone() {
+            painter.vline(x, range, Stroke::new(1.0, foreground.gamma_multiply(0.21)));
+        }
         let align = match bin {
             0 => Align2::LEFT_TOP,
             bin if bin == divisions => Align2::RIGHT_TOP,

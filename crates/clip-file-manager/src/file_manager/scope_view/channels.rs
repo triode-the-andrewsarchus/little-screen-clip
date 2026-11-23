@@ -3,34 +3,76 @@ use egui::{Color32, Painter, Rect, Ui, pos2};
 use std::ops::Range;
 
 impl Viewer {
-    pub(super) fn channel_picker(&mut self, ui: &mut Ui) {
-        let mut active = self.active;
-        if self.recording.triggered_segments() || self.overview.channels.len() > 8 {
-            egui::ComboBox::from_id_salt("scope-channel")
-                .selected_text(self.channel_label(active))
-                .width(220.0)
-                .show_ui(ui, |ui| {
-                    for index in 0..self.overview.channels.len() {
-                        ui.selectable_value(&mut active, index, self.channel_label(index));
-                    }
-                });
+    pub(super) fn channel_controls(&mut self, ui: &mut Ui) {
+        let spacing = ui.spacing().item_spacing.x;
+        let name_width = if self.recording.power_recording() {
+            104.0
         } else {
-            for index in 0..self.overview.channels.len() {
-                let selected = index == active;
-                let text = egui::RichText::new(self.channel_label(index));
-                let text = if selected {
-                    text
-                } else {
-                    text.color(plot::color(index))
-                };
-                if ui.selectable_label(selected, text).clicked() {
-                    active = index;
+            141.0
+        };
+        let group_width = name_width + 52.0 + 2.0 * spacing + 7.0;
+        let columns = ((ui.available_width() + spacing) / group_width)
+            .floor()
+            .max(1.0) as usize;
+        let count = self.overview.channels.len();
+        let rows = count.div_ceil(columns);
+        if count <= 8 {
+            self.channel_rows(ui, 0..rows, columns, name_width);
+        } else {
+            let height = ui.spacing().interact_size.y;
+            egui::ScrollArea::vertical()
+                .id_salt("scope-channels")
+                .max_height(2.0 * height + ui.spacing().item_spacing.y)
+                .auto_shrink([false, true])
+                .show_rows(ui, height, rows, |ui, rows| {
+                    self.channel_rows(ui, rows, columns, name_width);
+                });
+        }
+    }
+
+    fn channel_rows(&mut self, ui: &mut Ui, rows: Range<usize>, columns: usize, name_width: f32) {
+        let count = self.overview.channels.len();
+        for row in rows {
+            ui.horizontal(|ui| {
+                for index in row * columns..((row + 1) * columns).min(count) {
+                    self.channel_buttons(ui, index, name_width);
                 }
+            });
+        }
+    }
+
+    fn channel_buttons(&mut self, ui: &mut Ui, index: usize, name_width: f32) {
+        ui.horizontal(|ui| {
+            let selected = self.active == index;
+            let text = egui::RichText::new(self.channel_label(index));
+            let text = if selected {
+                text
+            } else {
+                text.color(plot::color(index))
+            };
+            let height = ui.spacing().interact_size.y;
+            if ui
+                .add_sized(
+                    [name_width, height],
+                    egui::Button::new(text).selected(selected).truncate(),
+                )
+                .on_hover_text("Use for cursors, measurements and sample export")
+                .clicked()
+                && !selected
+            {
+                self.activate_channel(index);
             }
-        }
-        if active != self.active {
-            self.activate_channel(active);
-        }
+            let visible = &mut self.visible[index];
+            let action = if *visible { "Hide" } else { "Show" };
+            if ui
+                .add_sized([52.0, height], egui::Button::new(action))
+                .on_hover_text(format!("{action} {}", self.overview.channels[index].name))
+                .clicked()
+            {
+                *visible = !*visible;
+            }
+        });
+        ui.add_space(7.0);
     }
 
     fn channel_label(&self, index: usize) -> String {

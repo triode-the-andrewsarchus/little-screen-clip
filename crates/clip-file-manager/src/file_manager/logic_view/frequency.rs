@@ -110,7 +110,7 @@ impl Frequency {
                 return None;
             }
         };
-        let (rect, response) = spectrum_rect(ui);
+        let (rect, response) = spectrum_rect(ui, 65.0);
         let mut plot = Display {
             span: &mut self.span,
             marker: &mut self.marker,

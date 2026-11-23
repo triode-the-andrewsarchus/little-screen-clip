@@ -108,7 +108,7 @@ impl Frequency {
         let mut add = None;
         let target = ui
             .allocate_ui(egui::vec2(ui.available_width(), 215.0), |ui| {
-                let (rect, response) = spectrum_rect(ui);
+                let (rect, response) = spectrum_rect(ui, 65.0);
                 let mut span = self.span.clone().unwrap_or(0.0..rate * 0.5);
                 let color = if self.filtered_spectrum {
                     FILTER_COLOR
