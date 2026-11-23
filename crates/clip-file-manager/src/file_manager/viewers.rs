@@ -821,29 +821,8 @@ fn load_file_session(
     position: Option<super::DocumentPosition>,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
-    use super::DocumentPosition::{
-        ArchiveMember, CanFrame, CapturedPacket, FlowgraphBlock, IqSamples, LogicRegion,
-        PulseSignal, RadioChannel, RawIq, ScopeSamples, TagRecord, TouchstoneBand, VideoAudioRange,
-        VideoAudioTrack,
-    };
-    let revision = match position {
-        Some(
-            ArchiveMember(_, revision)
-            | VideoAudioRange { revision, .. }
-            | ScopeSamples { revision, .. }
-            | TouchstoneBand { revision, .. }
-            | LogicRegion { revision, .. }
-            | CapturedPacket { revision, .. }
-            | CanFrame { revision, .. }
-            | PulseSignal { revision, .. }
-            | TagRecord { revision, .. }
-            | RadioChannel { revision, .. }
-            | FlowgraphBlock { revision, .. }
-            | IqSamples { revision, .. }
-            | RawIq { revision },
-        ) => Some(revision),
-        _ => None,
-    };
+    use super::DocumentPosition::{self, RawIq, VideoAudioRange, VideoAudioTrack};
+    let revision = position.and_then(DocumentPosition::source_revision);
     if let Some(revision) = revision {
         super::filesystem::check_revision(source, revision)?;
     }

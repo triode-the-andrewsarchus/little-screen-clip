@@ -1,76 +1,37 @@
 use super::{activity, direction, hex, kind};
-use crate::ui_appearance::WorkbenchColors;
-use egui::{Align2, FontId, Rect, ScrollArea, Sense, Ui, pos2, vec2};
+use crate::{
+    file_manager::capture_browse::table::{Columns, Page, Response},
+    ui_appearance::WorkbenchColors,
+};
+use egui::{Rect, ScrollArea, Ui};
 use little_clip_core::engineering::can::{Frame, FrameKind};
-use std::ops::Range;
 
-const ROW_HEIGHT: f32 = 21.0;
-const HEADINGS: [&str; 7] = ["Frame", "Time", "Bus", "ID", "Type", "Bytes", "Data"];
-const FRACTIONS: [f32; 7] = [0.09, 0.15, 0.13, 0.14, 0.15, 0.07, 0.27];
-
-pub(super) struct Page<'a> {
-    pub offset: u64,
-    pub count: usize,
-    pub origin: i128,
-    pub selected: Option<u64>,
-    pub selection: Option<&'a Range<u64>>,
-    pub scroll_to: Option<usize>,
-    pub generation: u64,
-    pub height: f32,
-}
-
-pub(super) struct Response {
-    pub visible: Range<u64>,
-    pub clicked: Option<(u64, bool)>,
-}
+const COLUMNS: Columns<7> = Columns {
+    id: "can-frames",
+    headings: ["Frame", "Time", "Bus", "ID", "Type", "Bytes", "Data"],
+    fractions: [0.09, 0.15, 0.13, 0.14, 0.15, 0.07, 0.27],
+    min_height: 48.0,
+    selected_fill: 0.45,
+    hover_fill: 0.19,
+};
 
 pub(super) fn show<'a>(
     ui: &mut Ui,
     page: Page<'_>,
+    origin: i128,
     colors: WorkbenchColors,
     frame: impl Fn(u64) -> Option<&'a Frame>,
 ) -> Response {
-    let header = ui
-        .allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover())
-        .0;
-    cells(ui, header, HEADINGS, colors.text_muted);
-    let mut area = ScrollArea::vertical()
-        .id_salt(("can-frames", page.offset, page.generation))
-        .auto_shrink([false, false])
-        .max_height((page.height - ROW_HEIGHT).max(48.0));
-    if let Some(row) = page.scroll_to {
-        area = area.vertical_scroll_offset(row as f32 * (ROW_HEIGHT + ui.spacing().item_spacing.y));
-    }
-    let mut output = Response {
-        visible: page.offset..page.offset,
-        clicked: None,
-    };
-    area.show_rows(ui, ROW_HEIGHT, page.count, |ui, rows| {
-        output.visible = page.offset + rows.start as u64..page.offset + rows.end as u64;
-        for number in output.visible.clone() {
-            let (rect, response) =
-                ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
-            let Some(frame) = frame(number) else {
-                let row = format!("{}", number + 1);
-                cells(ui, rect, [&row, "…", "", "", "", "", ""], colors.text_muted);
-                continue;
-            };
-            let selected = page.selected == Some(frame.row);
-            let ranged = page
-                .selection
-                .is_some_and(|range| range.contains(&frame.row));
-            if selected || ranged || response.hovered() {
-                let factor = if selected { 0.45 } else { 0.19 };
-                ui.painter()
-                    .rect_filled(rect, 2.0, colors.focus.gamma_multiply(factor));
-            }
-            if response.clicked() {
-                output.clicked = Some((frame.row, ui.input(|input| input.modifiers.shift)));
-            }
-            contents(ui, rect, frame, page.origin, colors);
-        }
-    });
-    output
+    COLUMNS.show(
+        ui,
+        page,
+        colors,
+        frame,
+        |frame| frame.row,
+        |ui, rect, frame| {
+            contents(ui, rect, frame, origin, colors);
+        },
+    )
 }
 
 fn contents(ui: &Ui, rect: Rect, frame: &Frame, origin: i128, colors: WorkbenchColors) {
@@ -95,28 +56,12 @@ fn contents(ui: &Ui, rect: Rect, frame: &Frame, origin: i128, colors: WorkbenchC
     } else {
         colors.text_primary
     };
-    cells(
+    COLUMNS.cells(
         ui,
         rect,
         [&row, &time, &bus, &id, &variation, &bytes, &data],
         color,
     );
-}
-
-fn cells(ui: &Ui, rect: Rect, values: [&str; 7], color: egui::Color32) {
-    let mut left = rect.left();
-    for (value, fraction) in values.into_iter().zip(FRACTIONS) {
-        let right = left + fraction * rect.width();
-        let cell = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
-        ui.painter().with_clip_rect(cell).text(
-            pos2(left + 3.0, rect.center().y),
-            Align2::LEFT_CENTER,
-            value,
-            FontId::monospace(10.5),
-            color,
-        );
-        left = right;
-    }
 }
 
 pub(super) fn details(ui: &mut Ui, frame: &Frame, origin: i128, height: f32) {

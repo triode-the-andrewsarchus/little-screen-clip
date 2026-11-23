@@ -44,6 +44,7 @@ mod pdf_strip;
 mod photo_ratings;
 use little_clip_core::jobs::task as preview_job;
 mod can_view;
+mod capture_browse;
 mod flowgraph_view;
 mod iq_view;
 mod logic_view;
@@ -186,6 +187,27 @@ pub(super) enum DocumentPosition {
         end_hz_bits: u64,
         revision: u64,
     },
+}
+
+impl DocumentPosition {
+    fn source_revision(self) -> Option<u64> {
+        match self {
+            Self::ArchiveMember(_, revision)
+            | Self::VideoAudioRange { revision, .. }
+            | Self::ScopeSamples { revision, .. }
+            | Self::TouchstoneBand { revision, .. }
+            | Self::LogicRegion { revision, .. }
+            | Self::CapturedPacket { revision, .. }
+            | Self::CanFrame { revision, .. }
+            | Self::PulseSignal { revision, .. }
+            | Self::TagRecord { revision, .. }
+            | Self::RadioChannel { revision, .. }
+            | Self::FlowgraphBlock { revision, .. }
+            | Self::IqSamples { revision, .. }
+            | Self::RawIq { revision } => Some(revision),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]

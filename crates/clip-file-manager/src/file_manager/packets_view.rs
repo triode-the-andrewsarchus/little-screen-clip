@@ -7,8 +7,13 @@ pub(super) mod strip;
 mod table;
 
 use super::{
+    capture_browse::{
+        Job, PAGE_ROWS, keyed_poll, poll,
+        rows::{RowWindows, needed_window},
+        start,
+        table::Page,
+    },
     preview_copy::{self, Copies},
-    preview_job::Task,
 };
 use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
 use capture::{Capture, Filter, Filtered};
@@ -19,7 +24,6 @@ use little_clip_core::{
     palette::AppPalette,
 };
 use std::{
-    collections::VecDeque,
     ops::Range,
     path::Path,
     sync::{Arc, LazyLock, atomic::AtomicBool},
@@ -27,15 +31,6 @@ use std::{
 };
 
 static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(3, 5));
-const PAGE_ROWS: u64 = 8192;
-const READ_ROWS: u64 = 256;
-type Job<T> = Task<Result<T, String>>;
-
-struct RowWindow {
-    range: Range<u64>,
-    rows: Vec<PacketRow>,
-}
-
 pub(super) struct Viewer {
     capture: Arc<Capture>,
     summary: Summary,
@@ -47,9 +42,7 @@ pub(super) struct Viewer {
     scroll_to: Option<usize>,
     generation: u64,
     packet_number: u64,
-    windows: VecDeque<RowWindow>,
-    rows_job: Option<(Range<u64>, Job<Vec<PacketRow>>)>,
-    window_failed: Option<Range<u64>>,
+    windows: RowWindows<PacketRow>,
     selected: Option<u64>,
     range: Option<Range<u64>>,
     anchor: Option<u64>,
@@ -81,9 +74,7 @@ impl Viewer {
             generation: 0,
             scroll_to: None,
             packet_number: 1,
-            windows: VecDeque::new(),
-            rows_job: None,
-            window_failed: None,
+            windows: RowWindows::new(3),
             selected,
             range: None,
             anchor: selected,
@@ -372,16 +363,16 @@ impl Viewer {
         let scroll = self.scroll_to.take();
         let output = table::show(
             ui,
-            table::Request {
+            Page {
                 count,
-                page: self.page,
-                origin: self.origin(),
+                offset: self.page,
                 selected: self.selected,
-                range: self.range.clone(),
-                scroll,
+                selection: self.range.as_ref(),
+                scroll_to: scroll,
                 generation: self.generation,
                 height,
             },
+            self.origin(),
             colors,
             |index| self.row_at(index),
         );
@@ -443,12 +434,7 @@ impl Viewer {
         self.summary
             .packets
             .get(usize::try_from(ordinal).ok()?)
-            .or_else(|| {
-                self.windows
-                    .iter()
-                    .find(|window| window.range.contains(&ordinal))
-                    .and_then(|window| window.rows.get((ordinal - window.range.start) as usize))
-            })
+            .or_else(|| self.windows.get(ordinal))
     }
 
     fn selected_time(&self) -> Option<i128> {
@@ -555,7 +541,7 @@ impl Viewer {
         self.filter = Some(filter.clone());
         self.error = None;
         let capture = self.capture.clone();
-        self.filter_job = Some(start(ctx, Duration::from_secs(90), move |cancel| {
+        self.filter_job = Some(start(&JOBS, ctx, Duration::from_secs(90), move |cancel| {
             capture.filter(&index, &filter, cancel)
         }));
     }
@@ -565,35 +551,31 @@ impl Viewer {
             return;
         }
         let capture = self.capture.clone();
-        self.index_job = Some(start(ctx, Duration::from_secs(180), move |cancel| {
+        self.index_job = Some(start(&JOBS, ctx, Duration::from_secs(180), move |cancel| {
             capture.index(cancel)
         }));
     }
 
     fn request_rows(&mut self, ctx: &Context, visible: Range<u64>) {
-        if self.rows_job.is_some() || self.filtered.is_some() || visible.is_empty() {
+        if self.windows.pending() || self.filtered.is_some() || visible.is_empty() {
             return;
         }
         let Some(index) = self.index.clone() else {
             return;
         };
-        let end = visible.end.min(index.points());
-        let Some(first) = (visible.start..end).find(|row| self.source_row(*row).is_none()) else {
+        let Some(range) = needed_window(visible, index.points(), |row| {
+            self.source_row(row).is_some()
+        }) else {
             return;
         };
-        let first = first / READ_ROWS * READ_ROWS;
-        let range = first..(first + READ_ROWS).min(index.points());
-        if self.window_failed.as_ref() == Some(&range) {
-            return;
-        }
-        let source_range = range.clone();
         let capture = self.capture.clone();
-        self.rows_job = Some((
+        self.windows.request(
+            &JOBS,
+            ctx,
+            Duration::from_secs(75),
             range,
-            start(ctx, Duration::from_secs(75), move |cancel| {
-                capture.rows(&index, source_range, cancel)
-            }),
-        ));
+            move |rows, cancel| capture.rows(&index, rows, cancel),
+        );
     }
 
     fn request_packet(&mut self, ctx: &Context) {
@@ -612,7 +594,7 @@ impl Viewer {
         let index = self.index.clone();
         self.packet_job = Some((
             row,
-            start(ctx, Duration::from_secs(75), move |cancel| {
+            start(&JOBS, ctx, Duration::from_secs(75), move |cancel| {
                 capture.packet(index.as_deref(), row, cancel)
             }),
         ));
@@ -628,17 +610,8 @@ impl Viewer {
                 }
             }
         }
-        if let Some((range, result)) = keyed_poll(&mut self.rows_job) {
-            match result {
-                Ok(rows) => {
-                    self.windows.push_front(RowWindow { range, rows });
-                    self.windows.truncate(3);
-                }
-                Err(error) => {
-                    self.window_failed = Some(range);
-                    self.error = Some(error);
-                }
-            }
+        if let Some(error) = self.windows.poll_error() {
+            self.error = Some(error);
         }
         if let Some((row, result)) = keyed_poll(&mut self.packet_job) {
             match result {
@@ -671,44 +644,8 @@ impl Viewer {
 
     fn pending(&self) -> bool {
         self.index_job.is_some()
-            || self.rows_job.is_some()
+            || self.windows.pending()
             || self.packet_job.is_some()
             || self.filter_job.is_some()
     }
-}
-
-fn start<T: Send + 'static>(
-    ctx: &Context,
-    timeout: Duration,
-    work: impl FnOnce(&AtomicBool) -> Result<T, String> + Send + 'static,
-) -> Job<T> {
-    let ctx = ctx.clone();
-    Task::start(&JOBS, timeout, move |cancel| {
-        let result = work(cancel);
-        ctx.request_repaint();
-        result
-    })
-}
-
-fn poll<T: Send + 'static>(job: &mut Option<Job<T>>) -> Option<Result<T, String>> {
-    let result = job.as_ref()?.poll()?;
-    *job = None;
-    Some(
-        result
-            .map_err(|error| error.to_string())
-            .and_then(|result| result),
-    )
-}
-
-fn keyed_poll<K, T: Send + 'static>(
-    job: &mut Option<(K, Job<T>)>,
-) -> Option<(K, Result<T, String>)> {
-    let result = job.as_ref()?.1.poll()?;
-    let (key, _) = job.take()?;
-    Some((
-        key,
-        result
-            .map_err(|error| error.to_string())
-            .and_then(|result| result),
-    ))
 }

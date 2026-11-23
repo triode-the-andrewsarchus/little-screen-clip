@@ -5,17 +5,27 @@ mod capture;
 pub(super) mod strip;
 mod table;
 
-use super::{preview_copy::Copies, preview_job::Task};
+use super::{
+    capture_browse::{
+        Job, PAGE_ROWS, keyed_poll, poll,
+        rows::{RowWindows, needed_window},
+        start,
+        table::Page,
+    },
+    preview_copy::Copies,
+};
 use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
 use capture::{Capture, Selection};
 use egui::{Context, PointerButton, Sense, Ui, vec2};
 use little_clip_core::{
     BackgroundJobs,
-    engineering::can::{Direction, Filter, Filtered, Frame, FrameKind, Identifier, Index, Summary},
+    engineering::can::{
+        Direction, Filter, Filtered, Frame, FrameKind, Identifier, IdentifierSummary, Index,
+        Summary,
+    },
     palette::AppPalette,
 };
 use std::{
-    collections::VecDeque,
     ops::Range,
     path::Path,
     sync::{Arc, LazyLock, atomic::AtomicBool},
@@ -23,24 +33,13 @@ use std::{
 };
 
 static JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(3, 5));
-const PAGE_ROWS: u64 = 8192;
-const WINDOW_ROWS: u64 = 256;
-type Job<T> = Task<Result<T, String>>;
-
-struct Window {
-    range: Range<u64>,
-    frames: Vec<Frame>,
-}
-
 pub(super) struct Viewer {
     capture: Arc<Capture>,
     prefix: Summary,
     index: Option<Arc<Index>>,
     index_job: Option<Job<Index>>,
     index_failed: bool,
-    windows: VecDeque<Window>,
-    window_job: Option<(Range<u64>, Job<Vec<Frame>>)>,
-    window_failed: Option<Range<u64>>,
+    windows: RowWindows<Frame>,
     detail: Option<Frame>,
     detail_job: Option<(u64, Job<Vec<Frame>>)>,
     detail_failed: Option<u64>,
@@ -76,9 +75,7 @@ impl Viewer {
             index: None,
             index_job: None,
             index_failed: false,
-            windows: VecDeque::new(),
-            window_job: None,
-            window_failed: None,
+            windows: RowWindows::new(4),
             detail: None,
             detail_job: None,
             detail_failed: None,
@@ -128,7 +125,7 @@ impl Viewer {
         self.request_index(ui.ctx());
         self.request_detail(ui.ctx());
         if self.index_job.is_some()
-            || self.window_job.is_some()
+            || self.windows.pending()
             || self.detail_job.is_some()
             || self.filter_job.is_some()
         {
@@ -197,79 +194,60 @@ impl Viewer {
             .index
             .as_ref()
             .map_or(&self.prefix, |index| &index.summary);
-        let mut apply = false;
-        let mut clear = false;
-        ui.horizontal_wrapped(|ui| {
-            egui::ComboBox::from_id_salt("can-bus-filter")
-                .selected_text(
-                    self.filter
-                        .channel
-                        .as_ref()
-                        .map_or_else(|| "All buses".into(), ToString::to_string),
-                )
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.filter.channel, None, "All buses");
-                    for bus in &summary.channels {
-                        ui.selectable_value(
-                            &mut self.filter.channel,
-                            Some(bus.channel.clone()),
-                            format!("{} · {}", bus.channel, bus.frames),
-                        );
-                    }
-                });
-            let id = ui.add(
-                egui::TextEdit::singleline(&mut self.id_input)
-                    .id_salt("can-identifier-filter")
-                    .desired_width(94.0)
-                    .char_limit(12)
-                    .hint_text("ID in hex"),
-            );
-            if id.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                apply = true;
-            }
-            if !summary.identifiers.is_empty() {
-                ui.menu_button("Top IDs", |ui| {
-                    egui::ScrollArea::vertical()
-                        .max_height(225.0)
-                        .show(ui, |ui| {
-                            for item in summary.identifiers.iter().take(64) {
-                                if ui
-                                    .button(format!(
-                                        "{}  {}  ×{}",
-                                        item.channel, item.id, item.frames
-                                    ))
-                                    .clicked()
-                                {
-                                    self.filter.channel = Some(item.channel.clone());
-                                    self.id_input = item.id.to_string();
-                                    apply = true;
-                                    ui.close();
-                                }
-                            }
-                        });
-                });
-            }
-            ui.checkbox(&mut self.filter.errors_only, "Errors only");
-            apply |= ui
-                .add_enabled(self.index.is_some(), egui::Button::new("Filter"))
-                .clicked();
-            clear = (self.filtered.is_some() || self.filter_job.is_some())
-                && ui.button("Clear filter").clicked();
-            if self.filter_job.is_some() {
-                ui.weak("Finding matches…");
-            }
-            if let Some(result) = &self.filtered {
-                if result.complete {
-                    ui.weak(format!("{} matches", result.frames.len()));
-                } else {
-                    ui.weak(format!(
-                        "{} matches in first {} frames",
-                        result.frames.len(),
-                        result.scanned
-                    ));
+        let (apply, clear) = ui
+            .horizontal_wrapped(|ui| {
+                egui::ComboBox::from_id_salt("can-bus-filter")
+                    .selected_text(
+                        self.filter
+                            .channel
+                            .as_ref()
+                            .map_or_else(|| "All buses".into(), ToString::to_string),
+                    )
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.filter.channel, None, "All buses");
+                        for bus in &summary.channels {
+                            ui.selectable_value(
+                                &mut self.filter.channel,
+                                Some(bus.channel.clone()),
+                                format!("{} · {}", bus.channel, bus.frames),
+                            );
+                        }
+                    });
+                let id = ui.add(
+                    egui::TextEdit::singleline(&mut self.id_input)
+                        .id_salt("can-identifier-filter")
+                        .desired_width(94.0)
+                        .char_limit(12)
+                        .hint_text("ID in hex"),
+                );
+                let submitted =
+                    id.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                let top = top_identifier(ui, &summary.identifiers);
+                if let Some(item) = top {
+                    self.filter.channel = Some(item.channel.clone());
+                    self.id_input = item.id.to_string();
                 }
-            }
-        });
+                ui.checkbox(&mut self.filter.errors_only, "Errors only");
+                let clicked = ui
+                    .add_enabled(self.index.is_some(), egui::Button::new("Filter"))
+                    .clicked();
+                let clear = (self.filtered.is_some() || self.filter_job.is_some())
+                    && ui.button("Clear filter").clicked();
+                if self.filter_job.is_some() {
+                    ui.weak("Finding matches…");
+                }
+                if let Some(result) = &self.filtered {
+                    let count = result.frames.len();
+                    let label = if result.complete {
+                        format!("{count} matches")
+                    } else {
+                        format!("{count} matches in first {} frames", result.scanned)
+                    };
+                    ui.weak(label);
+                }
+                (submitted || top.is_some() || clicked, clear)
+            })
+            .inner;
         if clear {
             self.clear_filter();
             if let Some(row) = self.selected {
@@ -294,37 +272,7 @@ impl Viewer {
             }
         }
 
-        let time = response
-            .interact_pointer_pos()
-            .or_else(|| response.hover_pos())
-            .map(|point| activity::at(rect, &visible, point.x));
-        if let Some(time) = time {
-            if response.drag_started_by(PointerButton::Primary) {
-                let start = ui
-                    .input(|input| input.pointer.press_origin())
-                    .map_or(time, |point| activity::at(rect, &visible, point.x));
-                self.brush_anchor = Some(start);
-            }
-            if let Some(anchor) = self.brush_anchor
-                && (response.dragged_by(PointerButton::Primary)
-                    || response.drag_stopped_by(PointerButton::Primary))
-            {
-                let span = anchor.min(time)..anchor.max(time) + 1;
-                if response.drag_stopped_by(PointerButton::Primary) {
-                    self.brush_anchor = None;
-                    if let Some(ordinal) = self.frame_near(span.start) {
-                        self.focus_frame(ordinal);
-                    }
-                }
-                self.selection = Some(Selection::Time(span));
-            } else if response.clicked_by(PointerButton::Primary)
-                && let Some(ordinal) = self.frame_near(time)
-            {
-                self.brush_anchor = None;
-                self.focus_frame(ordinal);
-            }
-        }
-
+        let time = self.timeline_selection(ui, rect, &response, &visible);
         let painter = ui.painter_at(rect);
         activity::draw(&painter, rect, &visible, &self.summary().activity, colors);
         if let Some(span) = self.selected_span() {
@@ -358,6 +306,44 @@ impl Viewer {
                 self.selection = None;
             }
         });
+    }
+
+    fn timeline_selection(
+        &mut self,
+        ui: &Ui,
+        rect: egui::Rect,
+        response: &egui::Response,
+        visible: &activity::Domain,
+    ) -> Option<i128> {
+        let at = |point: egui::Pos2| activity::at(rect, visible, point.x);
+        let time = at(response
+            .interact_pointer_pos()
+            .or_else(|| response.hover_pos())?);
+        if response.drag_started_by(PointerButton::Primary) {
+            self.brush_anchor = Some(
+                ui.input(|input| input.pointer.press_origin())
+                    .map_or(time, at),
+            );
+        }
+        let released = response.drag_stopped_by(PointerButton::Primary);
+        if let Some(anchor) = self.brush_anchor
+            && (released || response.dragged_by(PointerButton::Primary))
+        {
+            let span = anchor.min(time)..anchor.max(time) + 1;
+            if released {
+                self.brush_anchor = None;
+                if let Some(ordinal) = self.frame_near(span.start) {
+                    self.focus_frame(ordinal);
+                }
+            }
+            self.selection = Some(Selection::Time(span));
+        } else if response.clicked_by(PointerButton::Primary)
+            && let Some(ordinal) = self.frame_near(time)
+        {
+            self.brush_anchor = None;
+            self.focus_frame(ordinal);
+        }
+        Some(time)
     }
 
     fn frame_near(&self, time: i128) -> Option<u64> {
@@ -443,10 +429,9 @@ impl Viewer {
         };
         let table = table::show(
             ui,
-            table::Page {
+            Page {
                 offset: self.page,
                 count,
-                origin,
                 selected: self.selected,
                 selection: match &self.selection {
                     Some(Selection::Rows(rows)) => Some(rows),
@@ -456,6 +441,7 @@ impl Viewer {
                 generation: self.generation,
                 height: (height - details - 7.0).max(72.0),
             },
+            origin,
             colors,
             |position| self.table_frame(position),
         );
@@ -498,13 +484,7 @@ impl Viewer {
             .as_ref()
             .filter(|frame| frame.row == row)
             .or_else(|| self.prefix.sample.get(row as usize))
-            .or_else(|| {
-                let window = self
-                    .windows
-                    .iter()
-                    .find(|window| window.range.contains(&row))?;
-                window.frames.get((row - window.range.start) as usize)
-            })
+            .or_else(|| self.windows.get(row))
     }
 
     fn select(&mut self, row: u64, extend: bool) {
@@ -553,8 +533,7 @@ impl Viewer {
 
     fn set_page(&mut self, page: u64) {
         if self.page != page {
-            self.window_job = None;
-            self.window_failed = None;
+            self.windows.clear_request();
             self.page = page;
             self.scroll_to = Some(0);
         }
@@ -565,7 +544,7 @@ impl Viewer {
             return;
         }
         let capture = self.capture.clone();
-        self.index_job = Some(start(ctx, Duration::from_secs(180), move |cancel| {
+        self.index_job = Some(start(&JOBS, ctx, Duration::from_secs(180), move |cancel| {
             capture.index(cancel)
         }));
     }
@@ -577,27 +556,19 @@ impl Viewer {
         let Some(index) = self.index.clone() else {
             return;
         };
-        let end = visible.end.min(index.summary.frames);
-        let Some(row) = (visible.start..end).find(|row| self.source_frame(*row).is_none()) else {
+        let Some(range) = needed_window(visible, index.summary.frames, |row| {
+            self.source_frame(row).is_some()
+        }) else {
             return;
         };
-        let first = row / WINDOW_ROWS * WINDOW_ROWS;
-        let range = first..(first + WINDOW_ROWS).min(index.summary.frames);
-        if self
-            .window_job
-            .as_ref()
-            .is_some_and(|(active, _)| active == &range)
-            || self.window_failed.as_ref() == Some(&range)
-        {
-            return;
-        }
         let capture = self.capture.clone();
-        self.window_job = Some((
-            range.clone(),
-            start(ctx, Duration::from_secs(30), move |cancel| {
-                capture.rows(&index, range, cancel)
-            }),
-        ));
+        self.windows.request(
+            &JOBS,
+            ctx,
+            Duration::from_secs(30),
+            range,
+            move |rows, cancel| capture.rows(&index, rows, cancel),
+        );
     }
 
     fn request_detail(&mut self, ctx: &Context) {
@@ -614,7 +585,7 @@ impl Viewer {
         let capture = self.capture.clone();
         self.detail_job = Some((
             row,
-            start(ctx, Duration::from_secs(30), move |cancel| {
+            start(&JOBS, ctx, Duration::from_secs(30), move |cancel| {
                 capture.rows(&index, row..row + 1, cancel)
             }),
         ));
@@ -636,7 +607,7 @@ impl Viewer {
         self.error = None;
         let capture = self.capture.clone();
         let filter = self.filter.clone();
-        self.filter_job = Some(start(ctx, Duration::from_secs(120), move |cancel| {
+        self.filter_job = Some(start(&JOBS, ctx, Duration::from_secs(120), move |cancel| {
             capture.filter(&index, &filter, cancel)
         }));
     }
@@ -660,17 +631,8 @@ impl Viewer {
                 }
             }
         }
-        if let Some((range, result)) = keyed_poll(&mut self.window_job) {
-            match result {
-                Ok(frames) => {
-                    self.windows.push_front(Window { range, frames });
-                    self.windows.truncate(4);
-                }
-                Err(error) => {
-                    self.window_failed = Some(range);
-                    self.error = Some(error);
-                }
-            }
+        if let Some(error) = self.windows.poll_error() {
+            self.error = Some(error);
         }
         if let Some((row, result)) = keyed_poll(&mut self.detail_job) {
             match result {
@@ -715,6 +677,35 @@ impl Viewer {
             }
         }
     }
+}
+
+fn top_identifier<'a>(
+    ui: &mut Ui,
+    identifiers: &'a [IdentifierSummary],
+) -> Option<&'a IdentifierSummary> {
+    if identifiers.is_empty() {
+        return None;
+    }
+    ui.menu_button("Top IDs", |ui| {
+        egui::ScrollArea::vertical()
+            .max_height(225.0)
+            .show(ui, |ui| {
+                let mut selected = None;
+                for item in identifiers.iter().take(64) {
+                    if ui
+                        .button(format!("{}  {}  ×{}", item.channel, item.id, item.frames))
+                        .clicked()
+                    {
+                        ui.close();
+                        selected = Some(item);
+                    }
+                }
+                selected
+            })
+            .inner
+    })
+    .inner
+    .flatten()
 }
 
 fn parse_identifier(value: &str) -> Option<Identifier> {
@@ -762,40 +753,4 @@ fn direction(direction: Direction) -> &'static str {
         Direction::Tx => "Tx",
         Direction::Unknown => "",
     }
-}
-
-fn start<T: Send + 'static>(
-    ctx: &Context,
-    timeout: Duration,
-    work: impl FnOnce(&AtomicBool) -> Result<T, String> + Send + 'static,
-) -> Job<T> {
-    let ctx = ctx.clone();
-    Task::start(&JOBS, timeout, move |cancel| {
-        let result = work(cancel);
-        ctx.request_repaint();
-        result
-    })
-}
-
-fn poll<T: Send + 'static>(job: &mut Option<Job<T>>) -> Option<Result<T, String>> {
-    let result = job.as_ref()?.poll()?;
-    *job = None;
-    Some(
-        result
-            .map_err(|error| error.to_string())
-            .and_then(|result| result),
-    )
-}
-
-fn keyed_poll<K, T: Send + 'static>(
-    job: &mut Option<(K, Job<T>)>,
-) -> Option<(K, Result<T, String>)> {
-    let result = job.as_ref()?.1.poll()?;
-    let (key, _) = job.take()?;
-    Some((
-        key,
-        result
-            .map_err(|error| error.to_string())
-            .and_then(|result| result),
-    ))
 }
