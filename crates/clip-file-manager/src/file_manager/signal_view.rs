@@ -169,15 +169,9 @@ impl Viewer {
         shell.render_header(ui, |_| {});
         self.controls(ui);
         self.align_recordings(ui.ctx());
-        let inputs = if self.derived.editor_open() {
-            self.sources.iter().flat_map(Source::inputs).collect()
-        } else {
-            Vec::new()
-        };
-        self.derived.editor(ui, &inputs, &self.span);
         if let [source] = &mut self.sources[..]
             && source.offset == 0.0
-            && !self.derived.active()
+            && !self.derived.open()
         {
             source.capture.content(ui, palette, copies, None);
             self.span = source.capture.span().clone();
@@ -295,7 +289,7 @@ impl Viewer {
                         ui.separator();
                     });
                 }
-                let inputs = if self.derived.active() {
+                let inputs = if self.derived.open() {
                     self.sources.iter().flat_map(Source::inputs).collect()
                 } else {
                     Vec::new()

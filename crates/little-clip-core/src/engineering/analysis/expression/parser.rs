@@ -114,6 +114,40 @@ struct Lexer<'a> {
     source_len: usize,
 }
 
+pub(in crate::engineering::analysis) fn rename_reference(
+    source: &str,
+    previous: &str,
+    renamed: &str,
+) -> Result<String> {
+    let mut lexer = Lexer {
+        rest: source,
+        source_len: source.len(),
+    };
+    let mut output = String::with_capacity(source.len());
+    let mut copied = 0;
+    let mut subscript = false;
+    loop {
+        let Lexeme { token, at } = lexer.next()?;
+        match token {
+            Token::End => break,
+            Token::IndexOpen => subscript = true,
+            Token::IndexClose => subscript = false,
+            Token::Name(name)
+                if !subscript
+                    && name.eq_ignore_ascii_case(previous)
+                    && !lexer.rest.trim_start().starts_with('(') =>
+            {
+                output.push_str(&source[copied..at]);
+                output.push_str(renamed);
+                copied = at + name.len();
+            }
+            _ => {}
+        }
+    }
+    output.push_str(&source[copied..]);
+    Ok(output)
+}
+
 impl<'a> Lexer<'a> {
     fn next(&mut self) -> Result<Lexeme<'a>> {
         self.rest = self.rest.trim_start();

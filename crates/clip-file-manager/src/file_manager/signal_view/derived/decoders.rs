@@ -22,6 +22,12 @@ pub(super) struct Decoders {
 }
 
 impl Decoders {
+    pub(super) fn remap(&mut self, digital: &[Option<usize>]) {
+        self.panel.remap_channels(digital);
+        self.frame = None;
+        self.cursor = None;
+    }
+
     pub(super) fn controls(&mut self, ui: &mut Ui, frame: &Arc<Frame>, span: &Range<f64>) {
         if frame.digital.is_empty() {
             return;
@@ -53,17 +59,19 @@ impl Decoders {
         ui: &Ui,
         painter: &Painter,
         band: Rect,
-        plot_rect: Rect,
+        plots: impl IntoIterator<Item = Rect>,
         span: &Range<f64>,
     ) {
         if let Some(event) = self.panel.cursor_event(span, self.cursor) {
-            crate::file_manager::scope_view::plot::highlight(
-                painter,
-                plot_rect,
-                span,
-                event.time.clone(),
-                ui.visuals().selection.bg_fill.gamma_multiply(0.24),
-            );
+            for rect in plots {
+                crate::file_manager::scope_view::plot::highlight(
+                    painter,
+                    rect,
+                    span,
+                    event.time.clone(),
+                    ui.visuals().selection.bg_fill.gamma_multiply(0.24),
+                );
+            }
         }
         plot::annotations(
             painter,

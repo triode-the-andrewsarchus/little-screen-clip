@@ -27,31 +27,39 @@ pub(super) struct Frequency {
     linear: bool,
     filters: Filters,
     filtered_spectrum: bool,
+    reveal: bool,
 }
 
 impl Frequency {
-    pub(super) fn controls(&mut self, ui: &mut Ui, frame: &Frame) {
+    pub(super) fn update_filters(&mut self, ui: &Ui, frame: &Frame) {
         self.filters.update(ui.ctx(), frame);
-        ui.menu_button("Spectrum", |ui| {
-            if ui.selectable_value(&mut self.lane, None, "Off").clicked() {
-                self.spectra.suspend();
-                ui.close();
-            }
-            for (index, lane) in frame.lanes.iter().enumerate() {
-                if ui
-                    .selectable_value(&mut self.lane, Some(index), lane.name())
-                    .clicked()
-                {
-                    self.span = None;
-                    self.marker = None;
-                    self.filtered_spectrum = false;
-                    ui.close();
-                }
-            }
-        });
-        if self.lane.is_some() {
-            ui.toggle_value(&mut self.spectra.only, "Frequency only");
+    }
+
+    pub(super) fn remap(&mut self, lanes: &[Option<usize>]) {
+        self.lane = self
+            .lane
+            .and_then(|index| lanes.get(index).copied().flatten());
+        self.spectra.clear_result();
+        self.filters.remap(lanes);
+    }
+
+    pub(super) fn button(&mut self, ui: &mut Ui, index: usize) {
+        let selected = self.lane == Some(index);
+        if ui
+            .add(egui::Button::new("Spectrum").small().selected(selected))
+            .clicked()
+        {
+            self.lane = (!selected).then_some(index);
+            self.span = None;
+            self.marker = None;
+            self.filtered_spectrum = false;
+            self.spectra.clear_result();
+            self.reveal = !selected;
         }
+    }
+
+    pub(super) fn take_reveal(&mut self) -> bool {
+        std::mem::take(&mut self.reveal)
     }
 
     pub(super) fn filtered_lanes(&self, frame: &Frame) -> Vec<PlotLane<'_>> {
@@ -73,6 +81,7 @@ impl Frequency {
         let lane = frame.lanes.get(index)?;
         let rate = frame.step.recip();
         let interval = self.measurement_controls(ui, lane, index, rate, selected, visible);
+        self.lane?;
         let input = if self.filtered_spectrum {
             self.filters
                 .lanes()
@@ -165,6 +174,17 @@ impl Frequency {
             if ui.button("Fit frequencies").clicked() {
                 self.span = None;
             }
+            let only = self.spectra.only;
+            if ui
+                .add(egui::Button::new("Frequency only").selected(only))
+                .clicked()
+            {
+                self.spectra.only = !only;
+            }
+            if ui.button("Close spectrum").clicked() {
+                self.lane = None;
+                self.spectra.suspend();
+            }
         });
         let interval = self.spectra.region.interval(selected, visible);
         if matches!(lane, Lane::Analog { .. }) {
@@ -207,7 +227,12 @@ impl Frequency {
                 self.filtered_spectrum = false;
                 return;
             }
-            ui.toggle_value(&mut self.filtered_spectrum, "Filtered spectrum");
+            if ui
+                .add(egui::Button::new("Filtered spectrum").selected(self.filtered_spectrum))
+                .clicked()
+            {
+                self.filtered_spectrum = !self.filtered_spectrum;
+            }
             if ui
                 .add_enabled(
                     settings.interval != *interval,

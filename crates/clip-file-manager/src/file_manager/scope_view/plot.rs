@@ -1,7 +1,9 @@
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, pos2};
 use little_clip_core::engineering::{
     scope::Channel,
-    waveforms::{Envelope, Overview, Peak, display_axis_value, sample_span, time_span},
+    waveforms::{
+        Envelope, Overview, Peak, display_axis_value, display_value, sample_span, time_span,
+    },
 };
 use std::ops::Range;
 
@@ -64,7 +66,7 @@ pub(in crate::file_manager) fn labelled_x_axis(
     );
 }
 
-pub(super) fn x_axis_with_grid(
+pub(in crate::file_manager) fn x_axis_with_grid(
     painter: &Painter,
     rect: Rect,
     span: &Range<f64>,
@@ -193,6 +195,40 @@ pub(in crate::file_manager) fn draw_raw(
             painter.add(egui::Shape::line(points, Stroke::new(1.3, color)));
         }
         first += segment.len() + 1;
+    }
+}
+
+pub(in crate::file_manager) fn paint_y_scale(
+    painter: &Painter,
+    rect: Rect,
+    bounds: Peak,
+    unit: &str,
+    color: Color32,
+) {
+    if !bounds.valid() {
+        return;
+    }
+    let tick = |y, value| {
+        painter.text(
+            pos2(rect.left() - 6.0, y),
+            Align2::RIGHT_CENTER,
+            display_value(f64::from(value), unit),
+            FontId::monospace(11.0),
+            color,
+        );
+    };
+    if bounds.min == bounds.max {
+        tick(rect.center().y, bounds.min);
+    } else {
+        tick(rect.top(), bounds.max);
+        tick(rect.bottom(), bounds.min);
+    }
+    if bounds.min <= 0.0 && bounds.max >= 0.0 {
+        painter.hline(
+            rect.x_range(),
+            y_at(rect, bounds, 0.0),
+            Stroke::new(1.0, color.gamma_multiply(0.30)),
+        );
     }
 }
 

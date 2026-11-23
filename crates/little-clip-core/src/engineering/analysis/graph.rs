@@ -1,5 +1,6 @@
 //! Compile and evaluate named equations over mixed-signal observations.
 
+use super::expression::rename_reference;
 use super::{Binding, Dimension, Expression, SignalType, Value};
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -47,6 +48,55 @@ pub struct SignalGraph {
 }
 
 impl SignalGraph {
+    /// Updates uses of a renamed lane in its own expression and later equations.
+    ///
+    /// `row` is the zero-based line containing the new declaration. The
+    /// returned program can be validated with [`Self::compile`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use little_clip_core::engineering::analysis::SignalGraph;
+    ///
+    /// let edited = "reference = 1V\ngain = signal * 2";
+    /// let updated = SignalGraph::rename_lane_uses(edited, 0, "signal")?;
+    /// assert_eq!(updated, "reference = 1V\ngain = reference * 2");
+    /// # Ok::<(), little_clip_core::engineering::analysis::GraphError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an error for a missing declaration or a lexical error in a
+    /// rewritten expression.
+    pub fn rename_lane_uses(
+        document: &str,
+        row: usize,
+        previous: &str,
+    ) -> Result<String, GraphError> {
+        let (label, _) = document
+            .lines()
+            .nth(row)
+            .and_then(|line| line.split_once('='))
+            .ok_or_else(|| problem(row + 1, "Expected name = expression"))?;
+        let (name, _) = declaration(label, row + 1)?;
+        if name == previous {
+            return Ok(document.to_owned());
+        }
+        let mut program = String::with_capacity(document.len());
+        for (index, line) in document.split_inclusive('\n').enumerate() {
+            if let Some((declaration, source)) = line.split_once('=').filter(|_| index >= row) {
+                program.push_str(declaration);
+                program.push('=');
+                program.push_str(
+                    &rename_reference(source, previous, name)
+                        .map_err(|error| problem(index + 1, error.to_string()))?,
+                );
+            } else {
+                program.push_str(line);
+            }
+        }
+        Ok(program)
+    }
+
     /// Compiles one `name = expression` assignment per nonblank line.
     ///
     /// Use `name[n-1]` to reference the previous sample. A lane that uses its
@@ -265,6 +315,21 @@ fn problem(line: usize, message: impl Into<String>) -> GraphError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rewrites_history_references_but_keeps_the_sample_index_and_units() {
+        let source = "phase: V = 0.5 * n[n-1] + 1V\ncurrent = N + phase";
+        let updated = super::SignalGraph::rename_lane_uses(source, 0, "n").unwrap();
+        assert_eq!(
+            updated,
+            "phase: V = 0.5 * phase[n-1] + 1V\ncurrent = phase + phase"
+        );
+        let source = "level = 1V\ncombined = V + 1 V + VA";
+        let updated = super::SignalGraph::rename_lane_uses(source, 0, "V").unwrap();
+        assert_eq!(updated, "level = 1V\ncombined = level + 1 V + VA");
+        let source = "level = 1V\ncombined = abs(abs) + abs_2\n";
+        let updated = super::SignalGraph::rename_lane_uses(source, 0, "abs").unwrap();
+        assert_eq!(updated, "level = 1V\ncombined = abs(level) + abs_2\n");
+    }
     use super::*;
 
     #[test]

@@ -46,9 +46,18 @@ impl Query {
 }
 
 impl View {
-    pub(super) fn reset(&mut self) {
+    pub(super) fn remap(&mut self, lanes: &[Option<usize>]) {
+        let mapped = |index| lanes.get(index).copied().flatten();
+        let signal = mapped(self.signal);
+        let condition = self.condition.and_then(mapped);
+        let selected = self
+            .selected
+            .filter(|_| signal.is_some() && condition.is_some() == self.condition.is_some());
         *self = Self {
             open: self.open,
+            signal: signal.unwrap_or(usize::MAX),
+            condition,
+            selected,
             ..Self::default()
         };
     }
@@ -59,7 +68,12 @@ impl View {
         if !self.selectable(frame) {
             return;
         }
-        ui.toggle_value(&mut self.open, "Measure lanes");
+        if ui
+            .add(egui::Button::new("Measure lanes").selected(self.open))
+            .clicked()
+        {
+            self.open = !self.open;
+        }
         if !self.open {
             self.pending = None;
             return;

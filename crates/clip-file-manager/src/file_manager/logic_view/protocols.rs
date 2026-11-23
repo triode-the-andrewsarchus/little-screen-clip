@@ -156,6 +156,30 @@ pub(in crate::file_manager) struct Panel {
 }
 
 impl Panel {
+    pub fn remap_channels(&mut self, lanes: &[Option<usize>]) {
+        let mapped = |index| lanes.get(index).copied().flatten().unwrap_or(usize::MAX);
+        for decoder in &mut self.decoders {
+            match decoder.mode {
+                Mode::I2c => {
+                    decoder.clock = mapped(decoder.clock);
+                    decoder.data = mapped(decoder.data);
+                }
+                Mode::Uart => decoder.uart = mapped(decoder.uart),
+                Mode::Pwm => decoder.pwm = mapped(decoder.pwm),
+                Mode::Spi => {
+                    decoder.spi.clock = mapped(decoder.spi.clock);
+                    decoder.spi.select = decoder.spi.select.map(mapped);
+                    decoder.spi.data = decoder.spi.data.map(|lane| lane.map(mapped));
+                }
+                Mode::I2s => decoder.i2s.channels = decoder.i2s.channels.map(mapped),
+            }
+            decoder.task = None;
+            decoder.request = None;
+            decoder.result = None;
+            decoder.follow = None;
+        }
+    }
+
     pub(super) fn recorded() -> Self {
         Self {
             pins: Some(Pins::default()),
@@ -836,6 +860,24 @@ pub(super) fn event_label(kind: Kind) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remap_moves_surviving_decoder_inputs_and_marks_missing_inputs() {
+        let mut decoder = Decoder::new(Mode::Spi, &[]);
+        decoder.spi.clock = 1;
+        decoder.spi.select = Some(0);
+        decoder.spi.data = [Some(2), None];
+        let mut panel = Panel {
+            decoders: vec![decoder],
+            selected: Some(0),
+            pins: None,
+        };
+        panel.remap_channels(&[None, Some(0), Some(1)]);
+        let spi = panel.current().unwrap().spi;
+        assert_eq!(spi.clock, 0);
+        assert_eq!(spi.select, Some(usize::MAX));
+        assert_eq!(spi.data, [Some(1), None]);
+    }
 
     #[test]
     fn address_labels_use_hex_and_distinguish_address_width() {

@@ -71,6 +71,15 @@ impl PartialEq for Request {
 }
 
 impl Filters {
+    pub fn remap(&mut self, lanes: &[Option<usize>]) {
+        self.settings = std::mem::take(&mut self.settings)
+            .into_iter()
+            .filter_map(|(index, settings)| Some((lanes.get(index).copied().flatten()?, settings)))
+            .collect();
+        self.task = None;
+        self.accepted = None;
+    }
+
     pub fn update(&mut self, ctx: &Context, frame: &Frame) {
         if let Some(result) = take_query_result(&mut self.task) {
             self.accepted = Some(result);

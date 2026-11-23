@@ -275,6 +275,12 @@ impl Spectra {
         self.requested = None;
     }
 
+    pub(super) fn clear_result(&mut self) {
+        self.suspend();
+        self.result = None;
+        self.request_after = 0.0;
+    }
+
     pub(in crate::file_manager) fn ready(&self) -> Option<ResultView<'_>> {
         let (query, _) = self.result.as_ref()?;
         if self.requested.as_ref() != Some(query) {

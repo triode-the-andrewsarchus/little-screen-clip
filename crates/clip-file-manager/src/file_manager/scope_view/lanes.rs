@@ -1,7 +1,5 @@
-use super::{Viewer, display_value, plot};
-use egui::{
-    Align, Align2, Color32, FontId, Layout, Painter, Rect, Stroke, Ui, UiBuilder, pos2, vec2,
-};
+use super::{Viewer, plot};
+use egui::{Align, Align2, Color32, FontId, Layout, Painter, Rect, Ui, UiBuilder, pos2, vec2};
 use little_clip_core::engineering::scope::Channel;
 use little_clip_core::engineering::waveforms::Peak;
 
@@ -50,31 +48,7 @@ impl Lane {
     }
 
     pub fn scale(self, painter: &Painter, bounds: Peak, unit: &str, color: Color32) {
-        if !bounds.valid() {
-            return;
-        }
-        let tick = |y, value| {
-            painter.text(
-                pos2(self.plot.left() - 6.0, y),
-                Align2::RIGHT_CENTER,
-                display_value(f64::from(value), unit),
-                FontId::monospace(11.0),
-                color,
-            );
-        };
-        if bounds.min == bounds.max {
-            tick(self.plot.center().y, bounds.min);
-        } else {
-            tick(self.plot.top(), bounds.max);
-            tick(self.plot.bottom(), bounds.min);
-        }
-        if bounds.min <= 0.0 && bounds.max >= 0.0 {
-            painter.hline(
-                self.plot.x_range(),
-                plot::y_at(self.plot, bounds, 0.0),
-                Stroke::new(1.0, color.gamma_multiply(0.30)),
-            );
-        }
+        plot::paint_y_scale(painter, self.plot, bounds, unit, color);
     }
 
     pub fn trace_heading(
