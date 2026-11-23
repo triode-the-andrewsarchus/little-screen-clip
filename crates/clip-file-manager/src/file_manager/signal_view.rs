@@ -14,14 +14,17 @@ use super::{
     scope_view,
 };
 use crate::file_source::ReadCheck;
-use egui::{Context, Ui};
-use little_clip_core::{engineering::waveforms::display_value, palette::AppPalette};
+use egui::Ui;
+use little_clip_core::{
+    engineering::{analysis::Clock, waveforms::display_value},
+    palette::AppPalette,
+};
 use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
 };
-use timeline::{Link, translate};
+use timeline::Link;
 
 pub(super) const MAX_SOURCES: usize = 8;
 
@@ -41,7 +44,7 @@ pub(super) struct Viewer {
 struct Source {
     id: u64,
     path: PathBuf,
-    offset: f64,
+    clock: Clock,
     capture: Capture,
 }
 
@@ -53,7 +56,7 @@ struct Reference {
 
 enum SourceAction {
     Pin(f64),
-    Align(f64),
+    Align(Clock),
     ClearReference,
     Remove,
     Relink(Source),
@@ -179,9 +182,9 @@ impl Viewer {
         );
         shell.render_header(ui, |_| {});
         self.controls(ui);
-        self.align_recordings(ui.ctx());
+        self.align_recordings(ui);
         if let [source] = &mut self.sources[..]
-            && source.offset == 0.0
+            && source.clock == Clock::default()
             && !self.derived.open()
             && self.reference.is_none()
             && !matches!(source.capture, Capture::Unavailable(_))
@@ -219,12 +222,18 @@ impl Viewer {
                 }
             }
             if self.sources.len() > 1 {
-                if ui.button("Match timing").clicked() {
+                if ui
+                    .add(egui::Button::selectable(
+                        self.alignment.open,
+                        "Clock alignment",
+                    ))
+                    .clicked()
+                {
                     let pinned = self.reference_time();
-                    self.alignment.open_at(&self.span, pinned);
+                    self.alignment.toggle(&self.span, pinned);
                 }
                 if ui.button("Fit all").clicked() {
-                    self.span = extent(&self.sources);
+                    self.span = extent_on(&self.sources, self.alignment.preview(&self.sources));
                 }
                 if let Some(probe) = self.probe {
                     ui.monospace(display_value(probe, "s"));
@@ -237,51 +246,58 @@ impl Viewer {
         self.save_form(ui);
     }
 
-    fn align_recordings(&mut self, ctx: &Context) {
-        if !self.alignment.open {
-            return;
-        }
-        let entries = self
-            .sources
-            .iter()
-            .flat_map(|source| {
-                source
-                    .inputs()
-                    .into_iter()
-                    .filter(|input| !input.is_awaiting_filter() && !input.unavailable())
-                    .map(|input| alignment::Entry {
-                        source: source.id,
-                        input,
-                    })
-            })
-            .collect::<Vec<_>>();
+    fn align_recordings(&mut self, ui: &mut Ui) {
         let pinned = self.reference_time();
-        let Some(suggestion) = self.alignment.window(ctx, &entries, &self.span, pinned) else {
-            return;
-        };
-        let applied = self
-            .sources
-            .iter_mut()
-            .find(|source| source.id == suggestion.source)
-            .filter(|source| source.offset == suggestion.base)
-            .is_some_and(|source| source.set_offset(suggestion.offset));
-        if !applied {
-            self.error =
-                Some("This offset cannot be represented on the current source timeline.".into());
+        match self.alignment.ui(ui, &self.sources, &self.span, pinned) {
+            Some(alignment::Action::Apply(suggestion)) => {
+                if let Some(source) = self
+                    .sources
+                    .iter_mut()
+                    .find(|source| source.id == suggestion.target())
+                {
+                    source.set_clock(suggestion.clock);
+                }
+                ui.ctx().request_repaint();
+            }
+            Some(alignment::Action::Reveal(visit)) => {
+                self.reveal_landmarks(visit);
+                ui.ctx().request_repaint();
+            }
+            None => {}
         }
-        ctx.request_repaint();
+    }
+
+    fn reveal_landmarks(&mut self, visit: alignment::Visit) {
+        let preview = self.alignment.preview(&self.sources);
+        let times = visit.endpoints.map(|(id, native)| {
+            self.sources
+                .iter()
+                .find(|source| source.id == id)
+                .map(|source| source.display_clock(preview).to_workspace(native))
+        });
+        if let [Some(first), Some(second)] = times {
+            let start = first.min(second);
+            let end = first.max(second);
+            let domain = extent_on(&self.sources, preview);
+            if start < self.span.start || end >= self.span.end {
+                let half = ((self.span.end - self.span.start) * 0.5).max((end - start) * 0.65);
+                let center = start.midpoint(end);
+                self.span = timeline::fit(&domain, center - half..center + half, 0.0);
+            }
+            self.reveal_source = Some(visit.source);
+        }
     }
 
     fn linked(&mut self, ui: &mut Ui, palette: &AppPalette, copies: &mut Copies) {
-        let domain = extent(&self.sources);
+        let preview = self.alignment.preview(&self.sources);
+        let domain = extent_on(&self.sources, preview);
         if self.span == self.domain {
             self.span = domain.clone();
         }
         self.domain = domain;
         let mut next_probe = None;
         let mut action = None;
-        let reference_time = self.reference_time();
-        let preview = self.alignment.preview();
+        let reference_time = self.reference_time_on(preview);
         let may_remove = self.sources.len() > 1;
         let height = (ui.available_height() / self.sources.len() as f32 - 50.0).max(205.0);
         let scroll = self.session.scroll.area(ui).show(ui, |ui| {
@@ -296,42 +312,58 @@ impl Viewer {
                         ui.separator();
                         return;
                     }
+                    let start = ui.next_widget_position();
                     let is_reference = self
                         .reference
                         .as_ref()
                         .is_some_and(|pin| pin.source == source.id);
-                    if let Some(request) =
-                        source.controls(ui, may_remove, reference_time, is_reference, preview)
-                    {
+                    if let Some(request) = source.controls(
+                        ui,
+                        may_remove,
+                        reference_time,
+                        is_reference,
+                        preview,
+                        &mut self.alignment,
+                    ) {
                         action = Some((index, request));
                     }
-                    let offset = source.display_offset(preview);
-                    let previous = translate(&self.span, -offset);
+                    let clock = source.display_clock(preview);
+                    let previous = clock.native_range(&self.span);
                     *source.capture.span() = previous.clone();
                     let link = Link {
-                        domain: translate(&self.domain, -offset),
-                        offset,
-                        probe: self.probe.map(|probe| probe - offset),
-                        reference: reference_time.map(|time| time - offset),
+                        domain: clock.native_range(&self.domain),
+                        clock,
+                        probe: self.probe.map(|probe| clock.to_native(probe)),
+                        reference: reference_time.map(|time| clock.to_native(time)),
+                        landmark: self.alignment.marker(source.id),
                     };
                     let height = height.max(source.capture.min_height());
                     ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
                         if let Some(probe) =
                             source.capture.content(ui, palette, copies, Some(&link))
                         {
-                            next_probe = Some(probe + offset);
+                            next_probe = Some(clock.to_workspace(probe));
                         }
                     });
+                    if self.reveal_source.take_if(|id| *id == source.id).is_some() {
+                        ui.scroll_to_rect(
+                            egui::Rect::from_min_size(start, egui::vec2(1.0, 22.0)),
+                            Some(egui::Align::TOP),
+                        );
+                    }
                     let view = source.capture.span();
                     if *view != previous {
-                        self.span = translate(view, offset);
+                        self.span = clock.workspace_range(view);
                         ui.ctx().request_repaint();
                     }
                     ui.separator();
                 });
             }
             let inputs = if self.derived.open() {
-                self.sources.iter().flat_map(Source::inputs).collect()
+                self.sources
+                    .iter()
+                    .flat_map(|source| source.inputs_on(source.display_clock(preview)))
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -366,11 +398,15 @@ impl Viewer {
     }
 
     fn reference_time(&self) -> Option<f64> {
+        self.reference_time_on(None)
+    }
+
+    fn reference_time_on(&self, preview: Option<alignment::Suggestion>) -> Option<f64> {
         let pin = self.reference.as_ref()?;
         let source = self.sources.iter().find(|source| {
             source.id == pin.source && !matches!(source.capture, Capture::Unavailable(_))
         })?;
-        Some(pin.native_time + source.offset)
+        Some(source.display_clock(preview).to_workspace(pin.native_time))
     }
 
     fn apply_source_action(&mut self, index: usize, action: SourceAction) {
@@ -381,8 +417,8 @@ impl Viewer {
                     native_time,
                 });
             }
-            SourceAction::Align(offset) => {
-                if !self.sources[index].set_offset(offset) {
+            SourceAction::Align(clock) => {
+                if !self.sources[index].set_clock(clock) {
                     self.error =
                         Some("The reference is outside this source's time precision.".into());
                 }
@@ -391,6 +427,7 @@ impl Viewer {
             SourceAction::Relink(source) => self.sources[index] = source,
             SourceAction::Remove => {
                 let removed = self.sources.remove(index);
+                self.alignment.forget(removed.id);
                 if self
                     .reference
                     .as_ref()
@@ -401,7 +438,7 @@ impl Viewer {
                 if let [source] = &mut self.sources[..]
                     && !matches!(source.capture, Capture::Unavailable(_))
                 {
-                    let previous = translate(&self.span, -source.offset);
+                    let previous = source.clock.native_range(&self.span);
                     *source.capture.span() = timeline::fit(&source.capture.domain(), previous, 0.0);
                     self.probe = None;
                 }
@@ -435,54 +472,48 @@ impl Source {
         Ok(Self {
             id: 0,
             path: path.to_path_buf(),
-            offset: 0.0,
+            clock: Clock::default(),
             capture,
         })
     }
 
     fn inputs(&self) -> Vec<inputs::Input> {
-        let label = self
-            .path
-            .file_name()
-            .unwrap_or(self.path.as_os_str())
-            .to_string_lossy();
+        self.inputs_on(self.clock)
+    }
+
+    fn inputs_on(&self, clock: Clock) -> Vec<inputs::Input> {
+        let label = self.name();
         match &self.capture {
-            Capture::Unavailable(source) => source.inputs(self.offset),
+            Capture::Unavailable(source) => source.inputs(clock),
             Capture::Analog(view) => {
                 let recording = view.recording();
-                let mut inputs = inputs::Input::analog(self.id, self.offset, &label, recording);
+                let mut inputs = inputs::Input::analog(self.id, clock, &label, recording);
                 inputs.extend(view.filtered_channels().filter_map(|filtered| {
-                    inputs::Input::filtered(
-                        self.id,
-                        self.offset,
-                        &label,
-                        recording.channels(),
-                        filtered,
-                    )
+                    inputs::Input::filtered(self.id, clock, &label, recording.channels(), filtered)
                 }));
                 inputs
             }
             Capture::Digital(view) => {
                 let (recording, lanes) = view.recording();
-                let mut inputs =
-                    inputs::Input::digital(self.id, self.offset, &label, recording, lanes);
+                let mut inputs = inputs::Input::digital(self.id, clock, &label, recording, lanes);
                 if let Some(pins) = view.decoded_pins() {
                     inputs.extend(pins.pcm().map(|(channel, generation, lane)| {
-                        inputs::Input::pcm(self.id, self.offset, &label, channel, generation, lane)
+                        inputs::Input::pcm(self.id, clock, &label, channel, generation, lane)
                     }));
                     if let Some((generation, lane)) = pins.pwm() {
-                        inputs.extend(inputs::Input::pwm(
-                            self.id,
-                            self.offset,
-                            &label,
-                            generation,
-                            lane,
-                        ));
+                        inputs.extend(inputs::Input::pwm(self.id, clock, &label, generation, lane));
                     }
                 }
                 inputs
             }
         }
+    }
+
+    fn name(&self) -> std::borrow::Cow<'_, str> {
+        self.path
+            .file_name()
+            .unwrap_or(self.path.as_os_str())
+            .to_string_lossy()
     }
 
     fn controls(
@@ -492,98 +523,110 @@ impl Source {
         reference: Option<f64>,
         is_reference: bool,
         preview: Option<alignment::Suggestion>,
+        alignment: &mut alignment::Alignment,
     ) -> Option<SourceAction> {
-        ui.horizontal(|ui| {
-            let name = self
-                .path
-                .file_name()
-                .unwrap_or(self.path.as_os_str())
-                .to_string_lossy();
-            ui.strong(name.as_ref())
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(self.name().as_ref())
                 .on_hover_text(self.path.to_string_lossy());
-            let mut proposed = self.offset;
-            let domain = self.capture.domain();
-            let interval = ((domain.end - domain.start) * 0.001).clamp(1e-12, 0.1);
-            ui.label("Offset");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut proposed)
-                        .speed(interval)
-                        .max_decimals(12)
-                        .suffix(" s"),
-                )
-                .on_hover_text("Positive offsets move this source later on the shared timeline.")
-                .changed()
-            {
-                self.set_offset(proposed);
+            self.clock_control(ui, preview);
+            let cursor = self
+                .capture
+                .cursor()
+                .filter(|time| self.capture.domain().contains(time));
+            alignment.cursor_button(ui, self.id, cursor);
+            let mut action = self.pin_controls(ui, reference, is_reference, cursor);
+            if self.clock != Clock::default() && ui.small_button("Reset clock").clicked() {
+                action = Some(SourceAction::Align(Clock::default()));
             }
-            let displayed = self.display_offset(preview);
-            if displayed != self.offset {
-                ui.monospace(format!("Preview {}", display_value(displayed, "s")));
-            }
-            let align = ui
-                .menu_button(if is_reference { "Reference" } else { "Align" }, |ui| {
-                    let cursor = self.capture.cursor();
-                    for (text, action) in [
-                        ("Pin cursor as reference", cursor.map(SourceAction::Pin)),
-                        (
-                            "Align cursor to reference",
-                            reference
-                                .zip(cursor)
-                                .filter(|_| !is_reference)
-                                .map(|(time, cursor)| SourceAction::Align(time - cursor)),
-                        ),
-                        (
-                            "Reset offset",
-                            (self.offset != 0.0).then_some(SourceAction::Align(0.0)),
-                        ),
-                        (
-                            "Clear reference",
-                            is_reference.then_some(SourceAction::ClearReference),
-                        ),
-                    ] {
-                        if ui
-                            .add_enabled(action.is_some(), egui::Button::new(text))
-                            .clicked()
-                        {
-                            ui.close();
-                            return action;
-                        }
-                    }
-                    None
-                })
-                .inner
-                .flatten();
             if may_remove
                 && ui
                     .small_button("Remove")
                     .on_hover_text("Remove source from this session")
                     .clicked()
             {
-                return Some(SourceAction::Remove);
+                action = Some(SourceAction::Remove);
             }
-            align
+            action
         })
         .inner
     }
 
-    fn display_offset(&self, preview: Option<alignment::Suggestion>) -> f64 {
+    fn clock_control(&mut self, ui: &mut Ui, preview: Option<alignment::Suggestion>) {
+        let mut offset = self.clock.epoch_offset();
+        let domain = self.capture.domain();
+        let speed = ((domain.end - domain.start) * 0.001).clamp(1e-12, 0.1);
+        ui.label("Offset");
+        if ui
+            .add(
+                egui::DragValue::new(&mut offset)
+                    .speed(speed)
+                    .max_decimals(12)
+                    .suffix(" s")
+                    .update_while_editing(false),
+            )
+            .on_hover_text("Displacement at the native reference epoch")
+            .changed()
+        {
+            self.set_clock(self.clock.shifted(offset - self.clock.epoch_offset()));
+        }
+        let displayed = self.display_clock(preview);
+        let ppm = (displayed.scale() - 1.0) * 1e6;
+        if displayed != self.clock {
+            ui.monospace(format!(
+                "Preview {} · {ppm:+.3} ppm",
+                display_value(displayed.epoch_offset(), "s")
+            ));
+        } else if ppm != 0.0 {
+            ui.monospace(format!("{ppm:+.3} ppm"));
+        }
+    }
+
+    fn pin_controls(
+        &self,
+        ui: &mut Ui,
+        reference: Option<f64>,
+        is_reference: bool,
+        cursor: Option<f64>,
+    ) -> Option<SourceAction> {
+        if is_reference {
+            return ui
+                .small_button("Clear pin")
+                .clicked()
+                .then_some(SourceAction::ClearReference);
+        }
+        if let Some((reference, cursor)) = reference.zip(cursor)
+            && ui.small_button("Align to pin").clicked()
+        {
+            let clock = self
+                .clock
+                .shifted(reference - self.clock.to_workspace(cursor));
+            return Some(SourceAction::Align(clock));
+        }
+        if ui
+            .add_enabled(cursor.is_some(), egui::Button::new("Pin cursor").small())
+            .clicked()
+        {
+            return cursor.map(SourceAction::Pin);
+        }
+        None
+    }
+
+    fn display_clock(&self, preview: Option<alignment::Suggestion>) -> Clock {
         preview
-            .filter(|preview| preview.source == self.id && preview.base == self.offset)
-            .filter(|preview| self.accepts_offset(preview.offset))
-            .map_or(self.offset, |preview| preview.offset)
+            .filter(|preview| preview.target() == self.id && preview.base == self.clock)
+            .filter(|preview| self.accepts_clock(preview.clock))
+            .map_or(self.clock, |preview| preview.clock)
     }
 
-    fn accepts_offset(&self, offset: f64) -> bool {
-        let extent = translate(&self.capture.domain(), offset);
-        !extent.is_empty() && extent.start.is_finite() && extent.end.is_finite()
+    fn accepts_clock(&self, clock: Clock) -> bool {
+        clock.maps_range(&self.capture.domain())
     }
 
-    fn set_offset(&mut self, offset: f64) -> bool {
-        if !self.accepts_offset(offset) {
+    fn set_clock(&mut self, clock: Clock) -> bool {
+        if !self.accepts_clock(clock) {
             return false;
         }
-        self.offset = offset;
+        self.clock = clock;
         true
     }
 }
@@ -637,9 +680,17 @@ impl Capture {
 }
 
 fn extent(sources: &[Source]) -> Range<f64> {
+    extent_on(sources, None)
+}
+
+fn extent_on(sources: &[Source], preview: Option<alignment::Suggestion>) -> Range<f64> {
     sources
         .iter()
-        .map(|source| translate(&source.capture.domain(), source.offset))
+        .map(|source| {
+            source
+                .display_clock(preview)
+                .workspace_range(&source.capture.domain())
+        })
         .fold(f64::INFINITY..f64::NEG_INFINITY, |extent, span| {
             extent.start.min(span.start)..extent.end.max(span.end)
         })

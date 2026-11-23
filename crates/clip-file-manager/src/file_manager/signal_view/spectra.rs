@@ -177,7 +177,7 @@ impl Input {
                     let samples = Samples::Digital {
                         trace,
                         native,
-                        offset: 0.0,
+                        clock: Default::default(),
                     };
                     Ok(rows
                         .map(|row| match samples.at(self.channel.time_at(row)) {

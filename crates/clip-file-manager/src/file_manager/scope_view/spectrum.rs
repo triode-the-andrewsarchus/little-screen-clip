@@ -18,6 +18,9 @@ impl Viewer {
             self.spectra.suspend();
             return;
         }
+        if link.is_some_and(|link| link.clock.scale() != 1.0) {
+            ui.weak("Frequency uses the recording clock");
+        }
         let input = self.spectrum_input();
         let interval = self.spectrum_interval();
         let available = input.is_some();
@@ -58,7 +61,7 @@ impl Viewer {
                 channel,
                 bin,
                 self.spectrum_db,
-                link.map_or(0.0, |link| link.offset),
+                Link::clock(link),
             )
         });
         if self.spectra.kind == LaneKind::Recorded {

@@ -255,7 +255,7 @@ impl Viewer {
             };
             let probe = self.waveform(ui, height, link);
             self.overview_ui(ui);
-            self.cursor_readout(ui);
+            self.cursor_readout(ui, Link::clock(link));
             probe
         } else {
             self.hover.time = None;
@@ -419,7 +419,7 @@ impl Viewer {
             lane.background(ui, &painter);
         }
         let ink = ui.visuals().weak_text_color();
-        let axis = timeline::translate(&self.span, link.map_or(0.0, |link| link.offset));
+        let axis = Link::clock(link).workspace_range(&self.span);
         plot::x_axis_with_grid(
             &painter,
             rect,
@@ -437,9 +437,10 @@ impl Viewer {
         let channels = self.draw_channels(ui, &painter, rect, ink);
         self.draw_math(&painter, &clipped, rect);
         self.draw_filters(&painter, &clipped, rect);
-        self.paint_marks(ui, &clipped, rect);
+        let clock = Link::clock(link);
+        self.paint_marks(ui, &clipped, rect, clock.scale());
         if let Some(link) = link {
-            timeline::paint_reference(&clipped, rect, &self.span, link.reference);
+            link.paint_markers(&clipped, rect, &self.span);
         }
         for (label, time) in ["A", "B"]
             .into_iter()
@@ -466,7 +467,7 @@ impl Viewer {
             rect,
             ui.visuals().text_color(),
             ui.visuals().window_fill(),
-            link.map_or(0.0, |link| link.offset),
+            clock,
             &channels,
         );
         probe
@@ -654,7 +655,7 @@ impl Viewer {
         }
     }
 
-    fn paint_marks(&self, ui: &Ui, painter: &egui::Painter, rect: Rect) {
+    fn paint_marks(&self, ui: &Ui, painter: &egui::Painter, rect: Rect, time_scale: f64) {
         let active = self.active_mark();
         let ink = ui.visuals().text_color();
         let fill = ui.visuals().window_fill();
@@ -664,7 +665,7 @@ impl Viewer {
             }
             let color = plot::color(index).gamma_multiply(0.25);
             plot::highlight(painter, rect, &self.span, mark.span.clone(), color);
-            let length = mark.span.end - mark.span.start;
+            let length = (mark.span.end - mark.span.start) * time_scale;
             let mut label = format!(
                 "{}  Δt {}  1/Δt {}",
                 index + 1,
@@ -756,7 +757,7 @@ impl Viewer {
         });
     }
 
-    fn cursor_readout(&self, ui: &mut Ui) {
+    fn cursor_readout(&self, ui: &mut Ui, clock: little_clip_core::engineering::analysis::Clock) {
         ui.horizontal_wrapped(|ui| {
             let unit = &self.overview.channels[self.active].unit;
             for (label, time) in ["A", "B"].into_iter().zip(self.cursors) {
@@ -774,13 +775,13 @@ impl Viewer {
                         });
                     ui.label(format!(
                         "{label}  {}  {}",
-                        display_value(time, "s"),
+                        display_value(clock.to_workspace(time), "s"),
                         display_value(value.map_or(f64::NAN, f64::from), unit)
                     ));
                 }
             }
             if let Some(range) = self.selection() {
-                let width = range.end - range.start;
+                let width = (range.end - range.start) * clock.scale();
                 ui.label(format!(
                     "Δt  {}    1/Δt  {}",
                     display_value(width, "s"),

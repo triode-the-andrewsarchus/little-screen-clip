@@ -1,19 +1,44 @@
 use egui::{Context, PointerButton, Rect, Response};
+use little_clip_core::engineering::analysis::Clock;
 use std::ops::Range;
 
 use crate::file_manager::scope_view::plot;
 
-// File-backed readers keep their own clock. Positive offsets move a source
-// later on the workspace timeline without resampling it.
-pub(in crate::file_manager) fn translate(span: &Range<f64>, offset: f64) -> Range<f64> {
-    span.start + offset..span.end + offset
-}
-
 pub(in crate::file_manager) struct Link {
     pub domain: Range<f64>,
-    pub offset: f64,
+    pub clock: Clock,
     pub probe: Option<f64>,
     pub reference: Option<f64>,
+    pub landmark: Option<LandmarkMarker>,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::file_manager) struct LandmarkMarker {
+    pub time: f64,
+    pub reference: bool,
+}
+
+impl Link {
+    pub fn clock(link: Option<&Self>) -> Clock {
+        link.map(|link| link.clock).unwrap_or_default()
+    }
+
+    pub fn paint_markers(&self, painter: &egui::Painter, rect: Rect, span: &Range<f64>) {
+        if let Some(landmark) = self.landmark.filter(|mark| span.contains(&mark.time)) {
+            let (label, color) = if landmark.reference {
+                ("Reference landmark", egui::Color32::from_rgb(85, 181, 235))
+            } else {
+                ("Target landmark", egui::Color32::from_rgb(229, 173, 90))
+            };
+            paint_marker(painter, rect, span, landmark.time, label, color);
+        }
+        if self
+            .landmark
+            .is_none_or(|mark| Some(mark.time) != self.reference)
+        {
+            paint_reference(painter, rect, span, self.reference);
+        }
+    }
 }
 
 pub(in crate::file_manager) fn paint_reference(
@@ -23,17 +48,33 @@ pub(in crate::file_manager) fn paint_reference(
     reference: Option<f64>,
 ) {
     if let Some(time) = reference.filter(|time| span.contains(time)) {
-        let x = plot::x_at(rect, span, time);
         let color = egui::Color32::from_rgb(222, 175, 247);
-        painter.vline(x, rect.y_range(), egui::Stroke::new(1.3, color));
-        painter.text(
-            egui::pos2(x + 4.0, rect.top() + 3.0),
-            egui::Align2::LEFT_TOP,
-            "Reference",
-            egui::FontId::monospace(10.0),
-            color,
-        );
+        paint_marker(painter, rect, span, time, "Reference", color);
     }
+}
+
+fn paint_marker(
+    painter: &egui::Painter,
+    rect: Rect,
+    span: &Range<f64>,
+    time: f64,
+    label: &str,
+    color: egui::Color32,
+) {
+    let x = plot::x_at(rect, span, time);
+    painter.vline(x, rect.y_range(), egui::Stroke::new(1.3, color));
+    let (label_x, align) = if x > rect.left() + rect.width() * 0.66 {
+        (x - 4.0, egui::Align2::RIGHT_TOP)
+    } else {
+        (x + 4.0, egui::Align2::LEFT_TOP)
+    };
+    painter.text(
+        egui::pos2(label_x, rect.top() + 3.0),
+        align,
+        label,
+        egui::FontId::monospace(11.0),
+        color,
+    );
 }
 
 pub(in crate::file_manager) fn fit(
@@ -85,9 +126,10 @@ mod tests {
     #[test]
     fn native_trigger_time_shifts_to_workspace_and_back() {
         let native = -0.125..0.375;
-        let aligned = translate(&native, 0.5);
+        let clock = Clock::offset(0.5);
+        let aligned = clock.workspace_range(&native);
         assert_eq!(aligned, 0.375..0.875);
-        assert_eq!(translate(&aligned, -0.5), native);
+        assert_eq!(clock.native_range(&aligned), native);
     }
 
     #[test]

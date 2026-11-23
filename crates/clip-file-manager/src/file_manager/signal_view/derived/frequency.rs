@@ -356,7 +356,7 @@ fn measurement_readout(
     match ready {
         Some((_, Ok(Some(_)))) => {
             let (survey, channel, bin) = cursor?;
-            return spectrum_readout(ui, survey, channel, bin, db, 0.0);
+            return spectrum_readout(ui, survey, channel, bin, db, Default::default());
         }
         Some((_, Ok(None))) => {
             ui.weak("No contiguous finite samples in this interval");

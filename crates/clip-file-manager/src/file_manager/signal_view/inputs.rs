@@ -1,7 +1,6 @@
-use super::timeline::translate;
 use crate::file_manager::scope_view::{FilterSamples, FilteredChannel, reads::RawChannel};
 use little_clip_core::engineering::{
-    analysis::{Binding, Dimension, SignalType, Value},
+    analysis::{Binding, Clock, Dimension, SignalType, Value},
     logic::{Level, Trace},
     logic_decode::{PcmLane, PwmLane, PwmMeasurement},
     logic_preview,
@@ -20,14 +19,14 @@ const MAX_EDGES: usize = MAX_INPUT_SAMPLES as usize;
 pub(super) struct Input {
     pub alias: String,
     pub label: String,
-    offset: f64,
+    clock: Clock,
     source: Source,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct Signature {
     alias: String,
-    offset: u64,
+    clock: [u64; 3],
     generation: Option<u64>,
     missing: bool,
 }
@@ -71,20 +70,20 @@ pub(super) enum Samples {
         channel: Channel,
         first: u64,
         values: Vec<f32>,
-        offset: f64,
+        clock: Clock,
     },
     Filtered {
         raw: Arc<RawChannel>,
-        offset: f64,
+        clock: Clock,
     },
     Digital {
         trace: Trace,
         native: Range<f64>,
-        offset: f64,
+        clock: Clock,
     },
     Measured {
         lane: Measurement,
-        offset: f64,
+        clock: Clock,
     },
     Empty,
 }
@@ -111,10 +110,18 @@ impl Measurement {
         }
     }
 
-    fn value_at(&self, time: f64) -> Option<f64> {
+    fn value_at(&self, workspace: f64, clock: Clock) -> Option<f64> {
+        let time = clock.to_native(workspace);
         match self {
             Self::Pcm(lane) => lane.value_at(time),
-            Self::Pwm(lane, measure) => lane.value_at(time, *measure),
+            Self::Pwm(lane, measure) => {
+                let measured = lane.value_at(time, *measure)?;
+                Some(match measure {
+                    PwmMeasurement::Frequency => measured / clock.scale(),
+                    PwmMeasurement::ActiveTime | PwmMeasurement::Period => measured * clock.scale(),
+                    PwmMeasurement::Duty => measured,
+                })
+            }
         }
     }
 }
@@ -125,15 +132,15 @@ impl Input {
             alias: self.alias.clone(),
             label: self.label.clone(),
             kind: self.binding().signal_type,
-            rate: self.rate(),
+            rate: self.native_rate(),
         }
     }
 
-    pub(super) fn missing(saved: &SavedInput, offset: f64) -> Self {
+    pub(super) fn missing(saved: &SavedInput, clock: Clock) -> Self {
         Self {
             alias: saved.alias.clone(),
             label: format!("{} (unavailable)", saved.label),
-            offset,
+            clock,
             source: Source::Missing {
                 kind: saved.kind,
                 rate: saved.rate,
@@ -141,7 +148,7 @@ impl Input {
         }
     }
 
-    pub(super) fn analog(id: u64, offset: f64, label: &str, reader: &Arc<Recording>) -> Vec<Self> {
+    pub(super) fn analog(id: u64, clock: Clock, label: &str, reader: &Arc<Recording>) -> Vec<Self> {
         reader
             .channels()
             .iter()
@@ -151,7 +158,7 @@ impl Input {
                 Some(Self {
                     alias: format!("s{id}_c{}", index + 1),
                     label: format!("{label} · {}", channel.name),
-                    offset,
+                    clock,
                     source: Source::Analog {
                         reader: reader.clone(),
                         index,
@@ -163,7 +170,7 @@ impl Input {
 
     pub(super) fn filtered(
         id: u64,
-        offset: f64,
+        clock: Clock,
         label: &str,
         channels: &[Channel],
         filtered: FilteredChannel<'_>,
@@ -174,7 +181,7 @@ impl Input {
         Some(Self {
             alias: format!("s{id}_f{}", index + 1),
             label: format!("{label} · {name}"),
-            offset,
+            clock,
             source: Source::Filtered {
                 dimension: Dimension::from_unit(&channel.unit)?,
                 rate: channel.interval_seconds.recip(),
@@ -185,7 +192,7 @@ impl Input {
 
     pub(super) fn digital(
         id: u64,
-        offset: f64,
+        clock: Clock,
         label: &str,
         reader: &Arc<logic_preview::Recording>,
         lanes: &[little_clip_core::engineering::logic::Lane],
@@ -196,7 +203,7 @@ impl Input {
             .map(|(index, lane)| Self {
                 alias: format!("s{id}_c{}", index + 1),
                 label: format!("{label} · {}", lane.name),
-                offset,
+                clock,
                 source: Source::Digital {
                     reader: reader.clone(),
                     index,
@@ -206,13 +213,13 @@ impl Input {
             .collect()
     }
 
-    pub(super) fn offset(&self) -> f64 {
-        self.offset
+    pub(super) fn clock(&self) -> Clock {
+        self.clock
     }
 
     pub(super) fn pcm(
         id: u64,
-        offset: f64,
+        clock: Clock,
         label: &str,
         channel: usize,
         generation: u64,
@@ -226,7 +233,7 @@ impl Input {
         Self {
             alias: format!("s{id}_pcm_{suffix}"),
             label: format!("{label} · {side} PCM (full scale)"),
-            offset,
+            clock,
             source: Source::Measured {
                 lane: Measurement::Pcm(lane.clone()),
                 generation,
@@ -236,7 +243,7 @@ impl Input {
 
     pub(super) fn pwm(
         id: u64,
-        offset: f64,
+        clock: Clock,
         label: &str,
         generation: u64,
         lane: &Arc<PwmLane>,
@@ -250,7 +257,7 @@ impl Input {
         .map(|(measure, suffix, name)| Self {
             alias: format!("s{id}_pwm_{suffix}"),
             label: format!("{label} · PWM {name}"),
-            offset,
+            clock,
             source: Source::Measured {
                 lane: Measurement::Pwm(lane.clone(), measure),
                 generation,
@@ -266,7 +273,7 @@ impl Input {
         };
         Signature {
             alias: self.alias.clone(),
-            offset: self.offset.to_bits(),
+            clock: self.clock.key(),
             generation,
             missing: matches!(self.source, Source::Missing { .. }),
         }
@@ -298,6 +305,12 @@ impl Input {
     }
 
     pub(super) fn rate(&self) -> Option<f64> {
+        self.native_rate()
+            .map(|rate| rate / self.clock.scale())
+            .filter(|rate| rate.is_finite() && *rate > 0.0)
+    }
+
+    fn native_rate(&self) -> Option<f64> {
         match &self.source {
             Source::Missing { rate, .. } => *rate,
             Source::Analog { reader, index } => {
@@ -311,7 +324,7 @@ impl Input {
     }
 
     pub(super) fn read(&self, span: &Range<f64>, cancel: &AtomicBool) -> Result<Samples, String> {
-        let native = translate(span, -self.offset);
+        let native = self.clock.native_range(span);
         match &self.source {
             Source::Missing { .. } => Ok(Samples::Empty),
             Source::Analog { reader, index } => self.read_analog(reader, *index, native, cancel),
@@ -320,7 +333,7 @@ impl Input {
                     .as_ref()
                     .map_or(Samples::Empty, |samples| Samples::Filtered {
                         raw: samples.raw.clone(),
-                        offset: self.offset,
+                        clock: self.clock,
                     }))
             }
             Source::Digital { reader, index, .. } => reader.checked(cancel, |capture| {
@@ -335,12 +348,12 @@ impl Input {
                 Ok(Samples::Digital {
                     trace,
                     native,
-                    offset: self.offset,
+                    clock: self.clock,
                 })
             }),
             Source::Measured { lane, .. } => Ok(Samples::Measured {
                 lane: lane.clone(),
-                offset: self.offset,
+                clock: self.clock,
             }),
         }
     }
@@ -373,7 +386,7 @@ impl Input {
             channel: channel.clone(),
             first,
             values,
-            offset: self.offset,
+            clock: self.clock,
         })
     }
 }
@@ -385,21 +398,22 @@ impl Samples {
                 channel,
                 first,
                 values,
-                offset,
+                clock,
             } => {
-                let position = (time - offset - channel.time_at(*first)) / channel.interval_seconds;
+                let position =
+                    (clock.to_native(time) - channel.time_at(*first)) / channel.interval_seconds;
                 interpolate(values, position).map(Value::Numeric)
             }
-            Self::Filtered { raw, offset } => {
-                let position = (time - offset - raw.start) / raw.step;
+            Self::Filtered { raw, clock } => {
+                let position = (clock.to_native(time) - raw.start) / raw.step;
                 interpolate(&raw.samples, position).map(Value::Numeric)
             }
             Self::Digital {
                 trace,
                 native,
-                offset,
+                clock,
             } => {
-                let time = time - offset;
+                let time = clock.to_native(time);
                 if !native.contains(&time) || time >= trace.inspected_until {
                     return None;
                 }
@@ -416,7 +430,7 @@ impl Samples {
                     _ => None,
                 }
             }
-            Self::Measured { lane, offset } => lane.value_at(time - offset).map(Value::Numeric),
+            Self::Measured { lane, clock } => lane.value_at(time, *clock).map(Value::Numeric),
             Self::Empty => None,
         }
     }
@@ -461,7 +475,8 @@ mod tests {
             &(0.0..0.004),
         )
         .unwrap();
-        let inputs = Input::pwm(2, 0.01, "Driver", 1, &Arc::new(pin));
+        let pin = Arc::new(pin);
+        let inputs = Input::pwm(2, Clock::offset(0.01), "Driver", 1, &pin);
         let bindings = inputs.each_ref().map(Input::binding);
         let graph = SignalGraph::compile(
             "gate = s2_pwm_freq > 500Hz\nvoltage = s2_pwm_active / s2_pwm_period * 4V",
@@ -481,6 +496,14 @@ mod tests {
             evaluator.evaluate(|index| data[index].at(0.011)),
             &[None, None]
         );
+
+        let clock = Clock::anchored(0.0, 0.01, 2.0).unwrap();
+        let mut frequency = Input::pwm(2, clock, "Driver", 1, &pin)[1].clone();
+        let data = frequency.read(&(0.0..0.02), &cancel).unwrap();
+        assert_eq!(data.at(0.015), Some(Value::Numeric(500.0)));
+        let signature = frequency.signature();
+        frequency.clock = Clock::offset(0.01);
+        assert!(frequency.signature() != signature);
     }
 
     #[test]
@@ -501,7 +524,7 @@ mod tests {
         let input = |generation: Option<u64>| {
             Input::filtered(
                 3,
-                1.0,
+                Clock::offset(1.0),
                 "capture",
                 &channels,
                 FilteredChannel {

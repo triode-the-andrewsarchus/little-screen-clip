@@ -35,6 +35,9 @@ pub(super) struct SavedFrequency {
 
 impl Viewer {
     pub(super) fn frequency(&mut self, ui: &mut Ui, link: Option<&Link>) {
+        if link.is_some_and(|link| link.clock.scale() != 1.0) {
+            ui.weak("Frequency uses the recording clock");
+        }
         let index = self.active;
         let lane = &self.overview.lanes[index];
         let default_rate = (32_768.0 / (self.span.end - self.span.start)).clamp(1.0, 1e12);
@@ -151,13 +154,6 @@ impl Frequency {
         };
         let span = plot.navigate(ui, rect, &response, survey, link.is_some());
         let bin = plot.paint(ui, rect, survey, &span, "")?;
-        spectrum_readout(
-            ui,
-            survey,
-            input.channel(),
-            bin,
-            true,
-            link.map_or(0.0, |link| link.offset),
-        )
+        spectrum_readout(ui, survey, input.channel(), bin, true, Link::clock(link))
     }
 }

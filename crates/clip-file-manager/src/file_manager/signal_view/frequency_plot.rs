@@ -117,7 +117,7 @@ pub(in crate::file_manager) fn spectrum_readout(
     channel: &Channel,
     bin: usize,
     db: bool,
-    offset: f64,
+    clock: little_clip_core::engineering::analysis::Clock,
 ) -> Option<Range<f64>> {
     let measured = survey.peak_interval(bin)?;
     let interval = channel.time_at(measured.start)..channel.time_at(measured.end);
@@ -134,8 +134,8 @@ pub(in crate::file_manager) fn spectrum_readout(
         ));
         let window = format!(
             "{} to {}",
-            display_value(interval.start + offset, "s"),
-            display_value(interval.end + offset, "s")
+            display_value(clock.to_workspace(interval.start), "s"),
+            display_value(clock.to_workspace(interval.end), "s")
         );
         let reveal = ui
             .button("Reveal peak interval")

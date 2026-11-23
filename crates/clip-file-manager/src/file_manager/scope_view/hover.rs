@@ -124,7 +124,7 @@ impl Viewer {
         rect: Rect,
         ink: Color32,
         fill: Color32,
-        offset: f64,
+        clock: little_clip_core::engineering::analysis::Clock,
         channels: &[PlottedChannel],
     ) {
         let Some(time) = self.hover.time else { return };
@@ -140,7 +140,7 @@ impl Viewer {
                 visible,
                 x,
                 rect.top() + 5.0,
-                &display_value(time + offset, "s"),
+                &display_value(clock.to_workspace(time), "s"),
                 ink,
                 fill,
             );

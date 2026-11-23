@@ -1,6 +1,7 @@
 //! Numerical tools for inspecting bounded windows of captured signals.
 
 mod alignment;
+mod clock;
 mod expression;
 mod filter;
 mod graph;
@@ -9,6 +10,7 @@ mod spectrum;
 mod survey;
 
 pub use alignment::{Correlation, correlate, strongest_peaks};
+pub use clock::{Clock, Landmark, fit_clock};
 pub use expression::{Binding, Dimension, Expression, ExpressionError, SignalType, Value};
 pub use filter::{FilterChain, FilterKind, FilterStage};
 pub use graph::{DerivedLane, Evaluator, GraphError, SignalGraph};

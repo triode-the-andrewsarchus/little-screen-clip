@@ -1,12 +1,13 @@
 //! Recipes for recorded signal workspaces.
 use super::{
     Capture, Reference, Source, SourceAction, Viewer, derived, extent, inputs, logic_view,
-    scope_view, translate,
+    scope_view,
 };
 use crate::file_source::FileSource;
 use egui::{Context, Ui};
 use little_clip_core::{
     BackgroundJobs, JobError,
+    engineering::analysis::Clock,
     file_source::{create_file_in, read_file_snapshot_with_source},
     kernel_interface::pin_content_directory,
     path_address::{decode_file_name, decode_path, display_path},
@@ -24,7 +25,7 @@ use std::{
     time::Duration,
 };
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 pub(super) const EXTENSION: &str = "clip-analysis";
 
@@ -59,6 +60,8 @@ struct Recipe {
     scroll_offset: f32,
     reference: Option<Reference>,
     derived: derived::SessionSettings,
+    #[serde(default)]
+    alignment: super::alignment::Settings,
 }
 
 #[derive(Deserialize)]
@@ -73,7 +76,10 @@ struct SavedSource {
     revision: Vec<u8>,
     channels: Vec<(String, String)>,
     native_domain: Range<f64>,
-    offset: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clock: Option<Clock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    offset: Option<f64>,
     inputs: Vec<inputs::SavedInput>,
     capture: Display,
 }
@@ -100,11 +106,11 @@ impl Unavailable {
         &mut self.saved.native_domain
     }
 
-    pub(super) fn inputs(&self, offset: f64) -> Vec<inputs::Input> {
+    pub(super) fn inputs(&self, clock: Clock) -> Vec<inputs::Input> {
         self.saved
             .inputs
             .iter()
-            .map(|input| inputs::Input::missing(input, offset))
+            .map(|input| inputs::Input::missing(input, clock))
             .collect()
     }
 
@@ -183,7 +189,7 @@ impl Recipe {
             read_file_snapshot_with_source(path, MAX_BYTES).map_err(|error| error.to_string())?;
         let header: Header = serde_json::from_slice(&bytes)
             .map_err(|error| format!("Invalid analysis session: {error}"))?;
-        if header.version != VERSION {
+        if !(1..=VERSION).contains(&header.version) {
             return Err(format!(
                 "Analysis session version {} is unsupported.",
                 header.version
@@ -199,7 +205,7 @@ impl Recipe {
             || recipe
                 .sources
                 .iter()
-                .any(|source| !ids.insert(source.id) || !source.valid())
+                .any(|source| !ids.insert(source.id) || !source.valid(recipe.version))
         {
             return Err("Invalid source identifiers or timeline in the analysis session".into());
         }
@@ -219,6 +225,7 @@ impl Recipe {
             scroll_offset: viewer.session.scroll.offset,
             reference: viewer.reference.clone(),
             derived: viewer.derived.session_settings(),
+            alignment: viewer.alignment.save(),
         }
     }
 
@@ -257,12 +264,23 @@ fn valid_span(span: &Range<f64>) -> bool {
 }
 
 impl SavedSource {
-    fn valid(&self) -> bool {
+    fn clock(&self) -> Clock {
+        self.clock
+            .unwrap_or_else(|| Clock::offset(self.offset.unwrap_or(0.0)))
+    }
+
+    fn valid(&self, version: u32) -> bool {
+        let clock = self.clock();
         let prefix = format!("s{}_", self.id);
         self.id > 0
             && self.id < u64::MAX / 2
             && valid_span(&self.native_domain)
-            && valid_span(&translate(&self.native_domain, self.offset))
+            && match version {
+                1 => self.offset.is_some() && self.clock.is_none(),
+                VERSION => self.clock.is_some() && self.offset.is_none(),
+                _ => false,
+            }
+            && clock.maps_range(&self.native_domain)
             && self.revision.len() == 56
             && self.channels.len() <= 1024
             && self.inputs.len() <= 2048
@@ -276,6 +294,8 @@ impl SavedSource {
         if let Capture::Unavailable(unavailable) = &source.capture {
             let mut saved = unavailable.saved.clone();
             saved.path = display_path(&source.path);
+            saved.clock = Some(source.clock);
+            saved.offset = None;
             return saved;
         }
         let file = source.capture.file().expect("available capture");
@@ -290,7 +310,8 @@ impl SavedSource {
             revision: file.revision_key(),
             channels: source.capture.channels(),
             native_domain: source.capture.domain(),
-            offset: source.offset,
+            clock: Some(source.clock),
+            offset: None,
             inputs: source
                 .inputs()
                 .iter()
@@ -323,7 +344,7 @@ impl SavedSource {
             _ => return Err("The recording type differs from the saved source".into()),
         }
         source.id = self.id;
-        if !source.set_offset(self.offset) {
+        if !source.set_clock(self.clock()) {
             return Err("The recording offset cannot be represented".into());
         }
         Ok(source)
@@ -334,7 +355,7 @@ impl SavedSource {
         Source {
             id: self.id,
             path,
-            offset: self.offset,
+            clock: self.clock(),
             capture: Capture::Unavailable(Box::new(Unavailable {
                 saved: self,
                 error,
@@ -346,7 +367,7 @@ impl SavedSource {
 }
 
 impl Capture {
-    fn file(&self) -> Option<&FileSource> {
+    pub(super) fn file(&self) -> Option<&FileSource> {
         match self {
             Self::Analog(view) => Some(view.recording().source()),
             Self::Digital(view) => Some(view.recording().0.source()),
@@ -528,10 +549,13 @@ impl Viewer {
             },
         };
         viewer.derived.restore_session(recipe.derived)?;
+        viewer
+            .alignment
+            .restore(recipe.alignment, &viewer.sources)?;
         if let [source] = &mut viewer.sources[..]
             && !matches!(source.capture, Capture::Unavailable(_))
         {
-            *source.capture.span() = translate(&viewer.span, -source.offset);
+            *source.capture.span() = source.clock.native_range(&viewer.span);
         }
         Ok(viewer)
     }
@@ -659,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn session_preserves_paths_source_ids_offset_and_working_interval() {
+    fn session_preserves_paths_source_ids_calibration_and_working_interval() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         let first = root.join("removed.vcd");
@@ -671,7 +695,25 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let mut viewer = Viewer::load_sources(vec![first, second.clone(), third], &cancel).unwrap();
         viewer.sources.remove(0);
-        assert!(viewer.sources[0].set_offset(0.125));
+        let clock = Clock::anchored(0.125, 0.25, 1.001).unwrap();
+        assert!(viewer.sources[0].set_clock(clock));
+        let alignment = serde_json::json!({
+            "recordings": {"reference": 3, "target": 2},
+            "sets": [{
+                "recordings": {"reference": 3, "target": 2},
+                "pairs": [
+                    {"native": [0.001, 0.001], "included": true},
+                    {"native": [0.002, 0.002], "included": false}
+                ]
+            }]
+        });
+        viewer
+            .alignment
+            .restore(
+                serde_json::from_value(alignment.clone()).unwrap(),
+                &viewer.sources,
+            )
+            .unwrap();
         viewer.span = 0.0..0.125;
         viewer.session.scroll.offset = 240.0;
         viewer.reference = Some(Reference {
@@ -698,11 +740,34 @@ mod tests {
             [2, 3]
         );
         assert_eq!(loaded.sources[0].path, second);
-        assert_eq!(loaded.sources[0].offset, 0.125);
+        assert_eq!(loaded.sources[0].clock, clock);
+        assert_eq!(
+            serde_json::to_value(loaded.alignment.save()).unwrap(),
+            alignment
+        );
         assert_eq!(loaded.span, 0.0..0.125);
         assert_eq!(loaded.session.scroll.restore, Some(240.0));
         assert_eq!(loaded.reference_time(), Some(0.001));
         assert_eq!(loaded.sources[0].inputs()[0].alias, "s2_c1");
+    }
+
+    #[test]
+    fn opens_version_one_recipes_with_constant_offsets() {
+        let directory = tempfile::tempdir().unwrap();
+        let recording = directory.path().join("recording.vcd");
+        logic_fixture(&recording);
+        let cancel = AtomicBool::new(false);
+        let viewer = Viewer::load(&recording, super::super::Format::LogicCapture, &cancel).unwrap();
+        let mut recipe = serde_json::to_value(Recipe::take(&viewer)).unwrap();
+        recipe["version"] = 1.into();
+        recipe.as_object_mut().unwrap().remove("alignment");
+        let source = recipe["sources"][0].as_object_mut().unwrap();
+        source.remove("clock");
+        source.insert("offset".into(), 0.125.into());
+        let path = directory.path().join("legacy.clip-analysis");
+        fs::write(&path, serde_json::to_vec(&recipe).unwrap()).unwrap();
+        let loaded = Viewer::load_session(&path, &cancel).unwrap();
+        assert_eq!(loaded.sources[0].clock, Clock::offset(0.125));
     }
 
     #[test]
@@ -776,7 +841,7 @@ mod tests {
                 .unwrap()
                 .contains("Invalid analysis session")
         );
-        fs::write(&path, br#"{"version":2}"#).unwrap();
-        assert!(Recipe::read(&path).err().unwrap().contains("version 2"));
+        fs::write(&path, br#"{"version":3}"#).unwrap();
+        assert!(Recipe::read(&path).err().unwrap().contains("version 3"));
     }
 }

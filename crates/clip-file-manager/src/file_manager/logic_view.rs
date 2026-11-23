@@ -198,7 +198,7 @@ impl Viewer {
     ) -> Option<f64> {
         self.poll(ui.ctx());
         self.refine(ui.ctx(), link.is_none());
-        self.toolbar(ui, copies);
+        self.toolbar(ui, copies, Link::clock(link));
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
             ui.weak(message);
         }
@@ -234,7 +234,12 @@ impl Viewer {
         probe
     }
 
-    fn toolbar(&mut self, ui: &mut Ui, copies: &mut Copies) {
+    fn toolbar(
+        &mut self,
+        ui: &mut Ui,
+        copies: &mut Copies,
+        clock: little_clip_core::engineering::analysis::Clock,
+    ) {
         ui.horizontal_wrapped(|ui| {
             ui.strong(self.overview.label);
             ui.weak(format!("{} channels", self.overview.lanes.len()));
@@ -277,10 +282,13 @@ impl Viewer {
                 });
             }
             if let Some(cursor) = self.cursor {
-                ui.label(display_value(cursor, "s"));
+                ui.label(display_value(clock.to_workspace(cursor), "s"));
             }
             if let Some(range) = &self.selected {
-                ui.weak(format!("Δ {}", display_value(range.end - range.start, "s")));
+                ui.weak(format!(
+                    "Δ {}",
+                    display_value((range.end - range.start) * clock.scale(), "s")
+                ));
             }
         });
     }
@@ -339,12 +347,12 @@ impl Viewer {
             }
         }
         painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-        let axis = timeline::translate(&self.span, link.map_or(0.0, |link| link.offset));
+        let axis = Link::clock(link).workspace_range(&self.span);
         timing::axes(&painter, rect, &axis, ink);
         let clipped = painter.with_clip_rect(rect);
         self.draw_channels(&painter, &clipped, rect, ink);
         if let Some(link) = link {
-            timeline::paint_reference(&clipped, rect, &self.span, link.reference);
+            link.paint_markers(&clipped, rect, &self.span);
         }
         if let Some(selected) = &self.selected {
             timing::highlight(
