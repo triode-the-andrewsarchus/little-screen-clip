@@ -12,7 +12,7 @@ pub use details::{Field, Layer};
 mod source;
 
 pub use index::{ActivityBin, Index};
-pub use protocol::{Endpoint, Protocol, ProtocolFields};
+pub use protocol::{Endpoint, Protocol, ProtocolFields, TcpSegment};
 
 use source::{Source, cancelled};
 use std::{

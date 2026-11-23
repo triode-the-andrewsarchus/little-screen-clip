@@ -1,5 +1,5 @@
 //! Common display-filter expressions evaluated from capture rows, without a decoder subprocess.
-use little_clip_core::engineering::packets::{Endpoint, PacketRow, Protocol};
+use little_clip_core::engineering::packets::{Endpoint, PacketRow, Protocol, TcpSegment};
 use std::{cmp::Ordering, net::IpAddr, str::FromStr};
 
 pub(super) struct DisplayFilter(Expr);
@@ -99,6 +99,26 @@ enum Side {
 }
 
 #[derive(Clone, Copy)]
+enum TcpHeader {
+    Sequence,
+    Acknowledgment,
+    PayloadLength,
+    Window,
+}
+
+impl TcpHeader {
+    fn value(self, segment: TcpSegment) -> Option<u64> {
+        let number = match self {
+            Self::Sequence => segment.sequence,
+            Self::Acknowledgment => segment.acknowledgment,
+            Self::PayloadLength => segment.payload_len?,
+            Self::Window => u32::from(segment.advertised_window),
+        };
+        Some(u64::from(number))
+    }
+}
+
+#[derive(Clone, Copy)]
 enum Field {
     Protocol(Protocol),
     Ip(bool, Side),
@@ -108,6 +128,7 @@ enum Field {
     CapturedLength,
     Vlan,
     TcpFlags(Option<u16>),
+    TcpHeader(TcpHeader),
     IcmpKind(Protocol),
 }
 
@@ -131,6 +152,10 @@ impl Field {
             "icmpv6.type" => Self::IcmpKind(Protocol::Icmpv6),
             "vlan" | "vlan.id" => Self::Vlan,
             "tcp.flags" => Self::TcpFlags(None),
+            "tcp.seq_raw" => Self::TcpHeader(TcpHeader::Sequence),
+            "tcp.ack_raw" => Self::TcpHeader(TcpHeader::Acknowledgment),
+            "tcp.len" => Self::TcpHeader(TcpHeader::PayloadLength),
+            "tcp.window_size_value" => Self::TcpHeader(TcpHeader::Window),
             _ => return Self::parse_member(text),
         };
         Some(value)
@@ -204,6 +229,10 @@ impl Field {
             Self::TcpFlags(mask) => data.tcp_flags.map_or([None; 2], |flags| {
                 number(mask.map_or(u64::from(flags), |mask| u64::from(flags & mask != 0)))
             }),
+            Self::TcpHeader(field) => data
+                .tcp
+                .and_then(|segment| field.value(segment))
+                .map_or([None; 2], number),
             Self::IcmpKind(protocol) if protocol == data.protocol => data
                 .icmp_type
                 .map_or([None; 2], |value| number(u64::from(value))),
@@ -408,6 +437,13 @@ mod tests {
                 source_port: Some(3456),
                 destination_port: Some(443),
                 tcp_flags: Some(2),
+                tcp: Some(TcpSegment {
+                    sequence: u32::MAX - 1,
+                    acknowledgment: 0,
+                    flags: 2,
+                    advertised_window: 4096,
+                    payload_len: Some(8),
+                }),
                 ..Default::default()
             },
         };
@@ -420,6 +456,10 @@ mod tests {
         ));
         assert!(!matches("tcp.port != 443 or udp.port != 443"));
         assert!(matches("not udp.port == 443"));
+        assert!(matches(
+            "tcp.seq_raw == 4294967294 and tcp.ack_raw == 0 and tcp.len > 0 and tcp.window_size_value == 4096"
+        ));
+        assert!(!matches("tcp.len == 0 or tcp.seq_raw < 123"));
         assert!(DisplayFilter::compile("http.host contains \"example\"").is_none());
     }
 }

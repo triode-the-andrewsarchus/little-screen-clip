@@ -3,6 +3,55 @@ use std::io::Cursor;
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
+#[test]
+fn tcp_declared_payload_is_known_without_a_captured_payload() {
+    let mut ip = [0u8; 40];
+    ip[0] = 0x45;
+    ip[2..4].copy_from_slice(&85_u16.to_be_bytes());
+    ip[9] = 6;
+    ip[20..].copy_from_slice(&tcp_header());
+    let fields = protocol::inspect(228, &ip);
+    assert_eq!(
+        fields.tcp,
+        Some(TcpSegment {
+            sequence: 0xffff_fffe,
+            acknowledgment: 12,
+            flags: 0x18,
+            advertised_window: 4096,
+            payload_len: Some(41),
+        })
+    );
+    assert!(protocol::inspect(228, &ip[..39]).tcp.is_none());
+    ip[6] = 0x20; // More fragments means this IP length is only a fragment.
+    assert_eq!(protocol::inspect(228, &ip).tcp.unwrap().payload_len, None);
+}
+
+#[test]
+fn tcp_payload_length_excludes_ipv6_extensions_and_rejects_unknown_extents() {
+    let mut ip = [0u8; 68];
+    ip[0] = 0x60;
+    ip[4..6].copy_from_slice(&112_u16.to_be_bytes());
+    ip[6] = 60; // Destination options, eight bytes.
+    ip[40] = 6;
+    ip[48..].copy_from_slice(&tcp_header());
+    assert_eq!(
+        protocol::inspect(229, &ip).tcp.unwrap().payload_len,
+        Some(80)
+    );
+    ip[4..6].fill(0); // A possible jumbogram needs separate length metadata.
+    assert_eq!(protocol::inspect(229, &ip).tcp.unwrap().payload_len, None);
+}
+
+fn tcp_header() -> [u8; 20] {
+    let mut tcp = [0; 20];
+    tcp[4..8].copy_from_slice(&0xffff_fffe_u32.to_be_bytes());
+    tcp[8..12].copy_from_slice(&12_u32.to_be_bytes());
+    tcp[12] = 0x60; // 24-byte header including options.
+    tcp[13] = 0x18;
+    tcp[14..16].copy_from_slice(&4096_u16.to_be_bytes());
+    tcp
+}
+
 fn eth_udp() -> Vec<u8> {
     let mut eth = vec![
         0x02, 0, 0, 0, 0, 1, 0x02, 0, 0, 0, 0, 2, 0x81, 0, 0, 7, 0x08, 0,

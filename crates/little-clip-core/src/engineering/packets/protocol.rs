@@ -66,8 +66,20 @@ pub struct ProtocolFields {
     pub destination_port: Option<u16>,
     pub vlan: Option<u16>,
     pub tcp_flags: Option<u16>,
+    pub tcp: Option<TcpSegment>,
     pub icmp_type: Option<u8>,
     pub fragmented: bool,
+}
+
+/// Fixed TCP header fields available from a complete base header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TcpSegment {
+    pub sequence: u32,
+    pub acknowledgment: u32,
+    pub flags: u16,
+    pub advertised_window: u16,
+    /// Payload size declared by IP, which may extend beyond the captured bytes.
+    pub payload_len: Option<u32>,
 }
 
 pub(super) fn inspect(link: u16, bytes: &[u8]) -> ProtocolFields {
@@ -188,7 +200,7 @@ fn ipv4(bytes: &[u8], data: &mut ProtocolFields) -> Option<(u8, Range<usize>)> {
     if fragment & 0x1fff == 0
         && let Some(layer) = bytes.get(header..length.min(bytes.len()))
     {
-        transport(head[9], layer, data);
+        transport(head[9], layer, Some(length - header), data);
         return Some((head[9], header..header + layer.len()));
     }
     None
@@ -225,8 +237,10 @@ fn ipv6(bytes: &[u8], data: &mut ProtocolFields) -> Option<(u8, Range<usize>)> {
                 Some(8)
             }
             _ => {
-                transport(kind, rest, data);
-                return Some((kind, end - rest.len()..end));
+                let start = end - rest.len();
+                let declared_len = (length != 0).then(|| 40 + length - start);
+                transport(kind, rest, declared_len, data);
+                return Some((kind, start..end));
             }
         };
         let Some((next, tail)) = rest
@@ -242,7 +256,7 @@ fn ipv6(bytes: &[u8], data: &mut ProtocolFields) -> Option<(u8, Range<usize>)> {
     None
 }
 
-fn transport(kind: u8, layer: &[u8], data: &mut ProtocolFields) {
+fn transport(kind: u8, layer: &[u8], declared_len: Option<usize>, data: &mut ProtocolFields) {
     match kind {
         1 | 58 => {
             data.protocol = if kind == 1 {
@@ -263,7 +277,9 @@ fn transport(kind: u8, layer: &[u8], data: &mut ProtocolFields) {
             let header = if kind == 6 {
                 if let Some(flags) = word(layer, 12) {
                     data.tcp_flags = Some(flags & 0x01ff);
-                    usize::from(flags >> 12) * 4 + 2
+                    let offset = usize::from(flags >> 12) * 4;
+                    data.tcp = tcp_segment(layer, offset, declared_len, data.fragmented, flags);
+                    offset + 2
                 } else {
                     return;
                 }
@@ -279,4 +295,28 @@ fn transport(kind: u8, layer: &[u8], data: &mut ProtocolFields) {
         }
         _ => {}
     }
+}
+
+fn tcp_segment(
+    layer: &[u8],
+    header_len: usize,
+    declared_len: Option<usize>,
+    fragmented: bool,
+    flags: u16,
+) -> Option<TcpSegment> {
+    let base = layer.first_chunk::<20>()?;
+    if header_len < base.len() {
+        return None;
+    }
+    let payload_len = declared_len
+        .filter(|_| !fragmented)
+        .and_then(|length| length.checked_sub(header_len))
+        .and_then(|length| u32::try_from(length).ok());
+    Some(TcpSegment {
+        sequence: u32::from_be_bytes(extract(base, 4)?),
+        acknowledgment: u32::from_be_bytes(extract(base, 8)?),
+        advertised_window: word(base, 14)?,
+        flags: flags & 0x01ff,
+        payload_len,
+    })
 }
