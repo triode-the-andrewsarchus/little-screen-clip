@@ -49,6 +49,7 @@ mod metadata;
 mod packets_view;
 mod preview_copy;
 mod previews;
+mod pulse_view;
 mod scene_strip;
 mod scope_view;
 pub(crate) mod search;
@@ -137,6 +138,10 @@ pub(super) enum DocumentPosition {
     ScopeSamples {
         first: u64,
         end: u64,
+        revision: u64,
+    },
+    PulseSignal {
+        ordinal: usize,
         revision: u64,
     },
     CanFrame {

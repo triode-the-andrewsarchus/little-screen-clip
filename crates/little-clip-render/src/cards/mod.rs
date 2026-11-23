@@ -4,6 +4,7 @@ mod activity;
 mod audio;
 mod images;
 mod logic_capture;
+mod pulse_signals;
 mod rf_sweep;
 mod rich_media;
 mod splat;
@@ -523,6 +524,10 @@ impl ScreenRenderer {
             }
             Some(Preview::Can(summary)) => {
                 self.draw_can_activity(pixmap, summary, [rx, ry, rw, rh]);
+                true
+            }
+            Some(Preview::Pulses(capture)) => {
+                self.draw_pulse_signals(pixmap, capture, [rx, ry, rw, rh]);
                 true
             }
             Some(Preview::Midi(score)) => {

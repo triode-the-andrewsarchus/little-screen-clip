@@ -31,6 +31,7 @@ pub enum Format {
     LogicCapture,
     PacketCapture,
     CanCapture,
+    PulseSignals,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -56,6 +57,7 @@ impl Format {
             "jls" => Some(Self::PowerRecording),
             "sr" | "sal" | "vcd" => Some(Self::LogicCapture),
             "pcap" | "pcapng" => Some(Self::PacketCapture),
+            "ir" => Some(Self::PulseSignals),
             _ if crate::engineering::touchstone::extension_ports(path).is_some() => {
                 Some(Self::Touchstone)
             }
@@ -74,7 +76,7 @@ pub fn ambiguous_engineering_path(path: &Path) -> bool {
     packet_probe_path(path)
         || path.extension().is_some_and(|extension| {
             [
-                "csv", "bin", "ts", "dsl", "trace", "asc", "blf", "trc", "log", "candump",
+                "csv", "bin", "ts", "dsl", "trace", "asc", "blf", "trc", "log", "candump", "sub",
             ]
             .iter()
             .any(|candidate| extension.eq_ignore_ascii_case(candidate))
@@ -92,7 +94,7 @@ fn packet_probe_path(path: &Path) -> bool {
 /// validate its own pinned input, including any format-specific offsets.
 pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format> {
     use crate::{
-        engineering::{can, logic, packets, scope, touchstone},
+        engineering::{can, logic, packets, pulses, scope, touchstone},
         file_source::ReadCheck,
     };
 
@@ -124,6 +126,11 @@ pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format>
         _ if packet => packets::recognizes(&bytes, path).then_some(Format::PacketCapture),
         _ if can => can::identify(&bytes).map(|_| Format::CanCapture),
         "ts" => touchstone::recognizes(&bytes, path).then_some(Format::Touchstone),
+        "sub" => matches!(
+            pulses::identify(&bytes),
+            Some(pulses::Format::RadioRaw | pulses::Format::RadioDecoded)
+        )
+        .then_some(Format::PulseSignals),
         "dsl" => (bytes.starts_with(b"PK\x03\x04") && logic::probe(&file, path))
             .then_some(Format::LogicCapture),
         "bin" if logic::matches_binary_header(&bytes) => Some(Format::LogicCapture),

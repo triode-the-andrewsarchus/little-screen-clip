@@ -38,6 +38,7 @@ pub(crate) enum Preview {
     Logic(little_clip_core::engineering::logic_preview::Overview),
     Packets(little_clip_core::engineering::packets::Summary),
     Can(little_clip_core::engineering::can::Summary),
+    Pulses(little_clip_core::engineering::pulses::Capture),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -57,6 +58,7 @@ enum Kind {
     Logic,
     Packets,
     Can,
+    Pulses,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -196,6 +198,7 @@ impl crate::ScreenRenderer {
             Some(Format::LogicCapture) => return load(path, Kind::Logic, extension),
             Some(Format::PacketCapture) => return load(path, Kind::Packets, extension),
             Some(Format::CanCapture) => return load(path, Kind::Can, extension),
+            Some(Format::PulseSignals) => return load(path, Kind::Pulses, extension),
             _ => {}
         }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
@@ -308,6 +311,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Logic
     } else if Format::for_path(path) == Some(Format::PacketCapture) {
         Kind::Packets
+    } else if Format::for_path(path) == Some(Format::PulseSignals) {
+        Kind::Pulses
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
@@ -378,6 +383,11 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             let summary = capture.preview(&cancel).ok()?;
             source.check_file(&file).ok()?;
             Some(Preview::Can(summary))
+        }
+        Kind::Pulses => {
+            little_clip_core::engineering::pulses::Capture::preview(path, &AtomicBool::new(false))
+                .ok()
+                .map(Preview::Pulses)
         }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);

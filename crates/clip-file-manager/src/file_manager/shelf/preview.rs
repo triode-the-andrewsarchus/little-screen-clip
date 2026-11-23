@@ -67,6 +67,7 @@ pub(in crate::file_manager) enum Source {
     LogicCapture(PathBuf),
     PacketCapture(PathBuf),
     CanCapture(PathBuf),
+    PulseSignals(PathBuf),
     Embroidery(PathBuf),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
@@ -146,6 +147,7 @@ impl Source {
             super::super::document_format::Format::LogicCapture => Source::LogicCapture(path),
             super::super::document_format::Format::PacketCapture => Source::PacketCapture(path),
             super::super::document_format::Format::CanCapture => Source::CanCapture(path),
+            super::super::document_format::Format::PulseSignals => Source::PulseSignals(path),
             super::super::document_format::Format::Toolpath => Source::Toolpath(path),
             super::super::document_format::Format::Embroidery => Source::Embroidery(path),
             super::super::document_format::Format::VcvPatch => Source::VcvPatch(path),
@@ -189,6 +191,7 @@ impl Source {
             | Self::LogicCapture(_)
             | Self::PacketCapture(_)
             | Self::CanCapture(_)
+            | Self::PulseSignals(_)
             | Self::Embroidery(_)
             | Self::Multisample(_)
             | Self::Mail(_)
@@ -313,6 +316,7 @@ impl Source {
             Source::LogicCapture(path) => super::super::logic_view::strip::load(&path, token),
             Source::PacketCapture(path) => super::super::packets_view::strip::load(&path, token),
             Source::CanCapture(path) => super::super::can_view::strip::load(&path, token),
+            Source::PulseSignals(path) => super::super::pulse_view::strip::load(&path, token),
             Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),
             Source::Multisample(path) => super::super::multisample::load(&path, token),

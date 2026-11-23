@@ -257,6 +257,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::LogicCapture(_)
         | ViewerSession::PacketCapture(_)
         | ViewerSession::CanCapture(_)
+        | ViewerSession::PulseSignals(_)
         | ViewerSession::Embroidery(_)
         | ViewerSession::VcvPatch(_)
         | ViewerSession::Database(_)

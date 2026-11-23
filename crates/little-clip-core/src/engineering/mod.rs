@@ -6,6 +6,7 @@ pub mod jls;
 pub mod logic;
 pub mod logic_preview;
 pub mod packets;
+pub mod pulses;
 pub mod scope;
 pub mod touchstone;
 pub mod waveforms;

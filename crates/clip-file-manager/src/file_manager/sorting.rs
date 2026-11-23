@@ -87,6 +87,7 @@ pub(super) enum Category {
     LogicCapture,
     PacketCapture,
     CanCapture,
+    PulseSignals,
     Video,
     Scene,
     Font,
@@ -145,6 +146,7 @@ fn extension_category(entry: &Entry) -> Category {
         Some(Format::LogicCapture) => return Category::LogicCapture,
         Some(Format::PacketCapture) => return Category::PacketCapture,
         Some(Format::CanCapture) => return Category::CanCapture,
+        Some(Format::PulseSignals) => return Category::PulseSignals,
         _ => {}
     }
     if entry.is_geography() {
@@ -192,6 +194,7 @@ impl Category {
             Self::LogicCapture => "Logic captures",
             Self::PacketCapture => "Packet captures",
             Self::CanCapture => "CAN logs",
+            Self::PulseSignals => "Infrared and Sub-GHz captures",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",
