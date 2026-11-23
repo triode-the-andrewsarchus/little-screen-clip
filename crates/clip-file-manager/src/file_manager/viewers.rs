@@ -54,6 +54,7 @@ enum Loaded {
     },
     Path,
     Waveform(Box<super::scope_view::Viewer>),
+    Touchstone(Box<super::touchstone_view::Viewer>),
     Video(super::media::VideoMetadata),
     VideoAudio(video_audio::Prepared),
     External,
@@ -82,6 +83,7 @@ enum ViewerSession {
     Model(Model3dViewerState),
     Scene(SplatViewerState),
     Waveform(Box<super::scope_view::Viewer>),
+    Touchstone(Box<super::touchstone_view::Viewer>),
     Video(video::Video),
 }
 struct Loading {
@@ -394,6 +396,16 @@ impl Viewers {
             ) => {
                 state.focus_samples(first, end);
             }
+            (
+                Some(ViewerSession::Touchstone(state)),
+                Some(super::DocumentPosition::TouchstoneBand {
+                    start_hz_bits,
+                    end_hz_bits,
+                    ..
+                }),
+            ) => {
+                state.focus_band([f64::from_bits(start_hz_bits), f64::from_bits(end_hz_bits)]);
+            }
             (Some(ViewerSession::Text(state)), Some(super::DocumentPosition::SubtitleCue(cue))) => {
                 state.preview.select_subtitle(cue)
             }
@@ -433,6 +445,7 @@ impl Viewers {
                 | ViewerSession::Toolpath(_)
                 | ViewerSession::Embroidery(_)
                 | ViewerSession::Waveform(_)
+                | ViewerSession::Touchstone(_)
                 | ViewerSession::Sheet(_),
             )
             | None => {}
@@ -746,12 +759,15 @@ fn load_file_session(
     position: Option<super::DocumentPosition>,
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(Loaded, Option<FileSource>), String> {
-    use super::DocumentPosition::{ArchiveMember, ScopeSamples, VideoAudioRange, VideoAudioTrack};
+    use super::DocumentPosition::{
+        ArchiveMember, ScopeSamples, TouchstoneBand, VideoAudioRange, VideoAudioTrack,
+    };
     let revision = match position {
         Some(
             ArchiveMember(_, revision)
             | VideoAudioRange { revision, .. }
-            | ScopeSamples { revision, .. },
+            | ScopeSamples { revision, .. }
+            | TouchstoneBand { revision, .. },
         ) => Some(revision),
         _ => None,
     };
@@ -844,6 +860,9 @@ fn load(
                 .map(Box::new)
                 .map(Loaded::Waveform)
         }
+        Kind::Document(Format::Touchstone) => super::touchstone_view::Viewer::load(path, cancelled)
+            .map(Box::new)
+            .map(Loaded::Touchstone),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
@@ -954,6 +973,10 @@ fn session(
             viewer.set_check(check);
             ViewerSession::Waveform(viewer)
         }
+        Loaded::Touchstone(mut viewer) => {
+            viewer.set_check(check);
+            ViewerSession::Touchstone(viewer)
+        }
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
@@ -1055,6 +1078,7 @@ fn render(
         ViewerSession::Model(state) => state.render_ui(ui, palette, close),
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
         ViewerSession::Waveform(state) => state.ui(ui, close, palette, copies),
+        ViewerSession::Touchstone(state) => state.ui(ui, close, palette, copies),
         ViewerSession::Video(state) => state.ui(ui, close, palette, copies),
     }
 }

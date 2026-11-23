@@ -3,4 +3,5 @@
 pub mod analysis;
 pub mod jls;
 pub mod scope;
+pub mod touchstone;
 pub mod waveforms;

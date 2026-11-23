@@ -58,6 +58,7 @@ pub(crate) mod system;
 mod system_route;
 mod text_editor;
 mod text_strip;
+mod touchstone_view;
 mod transfers;
 mod video_playback;
 mod video_timeline;
@@ -133,6 +134,11 @@ pub(super) enum DocumentPosition {
     ScopeSamples {
         first: u64,
         end: u64,
+        revision: u64,
+    },
+    TouchstoneBand {
+        start_hz_bits: u64,
+        end_hz_bits: u64,
         revision: u64,
     },
 }

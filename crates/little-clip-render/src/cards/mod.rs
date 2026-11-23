@@ -2,6 +2,7 @@
 
 mod audio;
 mod images;
+mod rf_sweep;
 mod rich_media;
 mod splat;
 mod structured;
@@ -504,6 +505,10 @@ impl ScreenRenderer {
             }
             Some(Preview::Scope(scope)) => {
                 self.draw_scope_card(pixmap, scope, [rx, ry, rw, rh]);
+                true
+            }
+            Some(Preview::Touchstone(sweep)) => {
+                self.draw_rf_sweep_card(pixmap, sweep, [rx, ry, rw, rh]);
                 true
             }
             Some(Preview::Midi(score)) => {

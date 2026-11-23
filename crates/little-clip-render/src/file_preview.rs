@@ -34,6 +34,7 @@ pub(crate) enum Preview {
     },
     Midi(MidiData),
     Scope(little_clip_core::engineering::waveforms::Overview),
+    Touchstone(little_clip_core::engineering::touchstone::Summary),
     Brush(BrushLibrary),
     Map(super::map_preview::Map),
     Text {
@@ -49,6 +50,7 @@ enum Kind {
     Spreadsheet,
     Midi,
     Scope,
+    Touchstone,
     EngineeringCandidate,
     Brush,
     Embroidery,
@@ -182,10 +184,10 @@ impl crate::ScreenRenderer {
         if kind == Kind::Geography {
             return self.earth_preview(&Document::from_path(path).ok()?);
         }
-        if little_clip_core::file_format::recognize_engineering(path, &AtomicBool::new(false))
-            == Some(Format::Oscilloscope)
-        {
-            return load(path, Kind::Scope, extension);
+        match little_clip_core::file_format::recognize_engineering(path, &AtomicBool::new(false)) {
+            Some(Format::Oscilloscope) => return load(path, Kind::Scope, extension),
+            Some(Format::Touchstone) => return load(path, Kind::Touchstone, extension),
+            _ => {}
         }
         if let Ok(Some(trajectory)) = Trajectory::read_if_identified(path, &AtomicBool::new(false))
         {
@@ -291,6 +293,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Some(Format::Oscilloscope | Format::PowerRecording)
     ) {
         Kind::Scope
+    } else if Format::for_path(path) == Some(Format::Touchstone) {
+        Kind::Touchstone
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
     } else if spreadsheet::is_spreadsheet_file(path) {
@@ -329,6 +333,14 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             )
             .ok()?;
             recording.overview(&cancel).ok().map(Preview::Scope)
+        }
+        Kind::Touchstone => {
+            use little_clip_core::{engineering::touchstone, file_source::ReadCheck};
+            let cancel = AtomicBool::new(false);
+            let (file, source) = ReadCheck::default().open(path, None, &cancel).ok()?;
+            let sweep = touchstone::summary(&file, path, 800, &cancel).ok()?;
+            source.check_file(&file).ok()?;
+            Some(Preview::Touchstone(sweep))
         }
         Kind::Embroidery => {
             let cancelled = AtomicBool::new(false);

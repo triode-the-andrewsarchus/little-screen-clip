@@ -83,6 +83,7 @@ pub(super) enum Category {
     Brushes,
     Oscilloscope,
     PowerRecording,
+    RfSweep,
     Video,
     Scene,
     Font,
@@ -137,6 +138,7 @@ fn extension_category(entry: &Entry) -> Category {
     match entry.document_format() {
         Some(Format::Oscilloscope) => return Category::Oscilloscope,
         Some(Format::PowerRecording) => return Category::PowerRecording,
+        Some(Format::Touchstone) => return Category::RfSweep,
         _ => {}
     }
     if entry.is_geography() {
@@ -180,6 +182,7 @@ impl Category {
             Self::Brushes => "Brushes",
             Self::Oscilloscope => "Oscilloscope captures",
             Self::PowerRecording => "Power recordings",
+            Self::RfSweep => "RF measurements",
             Self::Video => "Video",
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",

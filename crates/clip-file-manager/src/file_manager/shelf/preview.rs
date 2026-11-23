@@ -63,6 +63,7 @@ pub(in crate::file_manager) enum Source {
     Minecraft(PathBuf, u64),
     Toolpath(PathBuf),
     Waveform(PathBuf),
+    Touchstone(PathBuf),
     Embroidery(PathBuf),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
@@ -138,6 +139,7 @@ impl Source {
             super::super::document_format::Format::Geography => Source::Geography(path),
             super::super::document_format::Format::Oscilloscope
             | super::super::document_format::Format::PowerRecording => Source::Waveform(path),
+            super::super::document_format::Format::Touchstone => Source::Touchstone(path),
             super::super::document_format::Format::Toolpath => Source::Toolpath(path),
             super::super::document_format::Format::Embroidery => Source::Embroidery(path),
             super::super::document_format::Format::VcvPatch => Source::VcvPatch(path),
@@ -177,6 +179,7 @@ impl Source {
             | Self::Geography(_)
             | Self::Toolpath(_)
             | Self::Waveform(_)
+            | Self::Touchstone(_)
             | Self::Embroidery(_)
             | Self::Multisample(_)
             | Self::Mail(_)
@@ -297,6 +300,7 @@ impl Source {
             }
             Source::System(path) => super::super::system::load(&path, token),
             Source::Waveform(path) => super::super::scope_view::strip::load(&path, token),
+            Source::Touchstone(path) => super::super::touchstone_view::strip::load(&path, token),
             Source::Subtitle(path) => super::super::subtitle_strip::load(&path, token),
             Source::Notebook(path) => super::super::notebook::load(&path, token),
             Source::Multisample(path) => super::super::multisample::load(&path, token),

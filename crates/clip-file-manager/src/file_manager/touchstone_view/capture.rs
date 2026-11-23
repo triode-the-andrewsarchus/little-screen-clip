@@ -1,0 +1,172 @@
+use crate::file_source::{FileSource, ReadCheck};
+use little_clip_core::engineering::touchstone::{self, Index, Point, Reader, Summary, TracePoint};
+use std::{
+    fmt::Write,
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+pub(super) type Trace = [usize; 2];
+pub(super) type Band = [f64; 2];
+
+const MAX_MATRIX_VALUES: usize = 512 * 1024;
+const MAX_DETAIL: usize = 4096;
+pub(super) const MAX_COPY: u64 = 16_384;
+
+pub(super) struct Capture {
+    path: PathBuf,
+    revision: FileSource,
+    pub check: ReadCheck,
+}
+
+impl Capture {
+    pub fn open(path: &Path, rows: usize, cancel: &AtomicBool) -> Result<(Self, Summary), String> {
+        let check = ReadCheck::default();
+        let (input, revision) = check.open(path, None, cancel)?;
+        let summary = touchstone::summary(&input, path, rows, cancel).map_err(as_string)?;
+        let capture = Self {
+            path: path.to_owned(),
+            revision,
+            check,
+        };
+        capture.validate(&input, cancel)?;
+        Ok((capture, summary))
+    }
+
+    fn validate(&self, input: &File, cancel: &AtomicBool) -> Result<(), String> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Touchstone read cancelled".into());
+        }
+        self.revision.check_file(input)?;
+        if FileSource::capture(&self.path)? != self.revision {
+            return Err("Touchstone source changed; reopen the sweep".into());
+        }
+        self.check.validate(cancel)
+    }
+
+    fn read<T>(
+        &self,
+        cancel: &AtomicBool,
+        work: impl FnOnce(&mut Reader<BufReader<&File>>) -> Result<T, touchstone::Error>,
+    ) -> Result<T, String> {
+        let (input, _) = self.check.open(&self.path, Some(&self.revision), cancel)?;
+        let mut reader = Reader::open(BufReader::new(&input), &self.path).map_err(as_string)?;
+        let result = work(&mut reader).map_err(as_string)?;
+        self.validate(&input, cancel)?;
+        Ok(result)
+    }
+
+    pub fn index(&self, trace: Trace, cancel: &AtomicBool) -> Result<Index, String> {
+        self.read(cancel, |reader| reader.build_trace_index(trace, cancel))
+    }
+
+    pub fn marker(&self, index: &Index, hz: f64, cancel: &AtomicBool) -> Result<Point, String> {
+        self.read(cancel, |reader| reader.nearest(index, hz, cancel))
+    }
+
+    pub fn row(&self, index: &Index, row: u64, cancel: &AtomicBool) -> Result<Point, String> {
+        self.read(cancel, |reader| {
+            reader
+                .read_window(index, row..row + 1, cancel)?
+                .pop()
+                .ok_or(touchstone::Error::Invalid("row outside sweep"))
+        })
+    }
+
+    pub fn detail(
+        &self,
+        index: &Index,
+        band: Band,
+        trace: Trace,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<TracePoint>, String> {
+        self.read(cancel, |reader| {
+            let first = reader.nearest(index, band[0], cancel)?.index;
+            let last = reader.nearest(index, band[1], cancel)?.index;
+            let start = first.saturating_sub(1);
+            let end = last.saturating_add(2).min(index.points());
+            let ports = reader.metadata().ports;
+            let limit = MAX_DETAIL.min(MAX_MATRIX_VALUES / (ports * ports)) as u64;
+            if end.saturating_sub(start) > limit {
+                return Ok(Vec::new());
+            }
+            let points = reader.read_window(index, start..end, cancel)?;
+            Ok(trace_points(&points, trace))
+        })
+    }
+
+    pub fn copy(
+        &self,
+        index: &Index,
+        rows: [u64; 2],
+        trace: Trace,
+        cancel: &AtomicBool,
+    ) -> Result<String, String> {
+        let start = rows[0].min(rows[1]);
+        let end = rows[0].max(rows[1]).saturating_add(1);
+        if end - start > MAX_COPY {
+            return Err("Select at most 16,384 frequency records to copy".into());
+        }
+        let (csv, count) = self.read(cancel, |reader| {
+            let ports = reader.metadata().ports;
+            let page = (MAX_MATRIX_VALUES / (ports * ports)).min(2048) as u64;
+            let [response, stimulus] = trace;
+            let label = reader
+                .metadata()
+                .parameter_label(response, stimulus)
+                .ok_or(touchstone::Error::Invalid("matrix element outside sweep"))?;
+            let mut csv = format!("frequency_hz,\"{label} real\",\"{label} imaginary\"\n");
+            let mut row = start;
+            while row < end {
+                let next = (row + page).min(end);
+                let points = reader.read_window(index, row..next, cancel)?;
+                for point in &points {
+                    let value = point
+                        .value(response, stimulus)
+                        .ok_or(touchstone::Error::Invalid("matrix element outside sweep"))?;
+                    let _ = writeln!(csv, "{},{},{}", point.frequency_hz, value.re, value.im);
+                }
+                row = next;
+            }
+            Ok((csv, end - start))
+        })?;
+        little_clip_core::copy_text_to_system_clipboard(&csv).map_err(as_string)?;
+        Ok(format!("Copied {count} frequency records"))
+    }
+}
+
+pub(super) fn trace_points(points: &[Point], [response, stimulus]: Trace) -> Vec<TracePoint> {
+    points
+        .iter()
+        .filter_map(|point| {
+            Some(TracePoint {
+                index: point.index,
+                frequency_hz: point.frequency_hz,
+                value: point.value(response, stimulus)?,
+            })
+        })
+        .collect()
+}
+
+pub(super) fn envelope_points(index: &Index) -> Vec<TracePoint> {
+    let mut points = Vec::with_capacity(4 * index.overview().len());
+    for bucket in index.overview() {
+        let mut candidates = [bucket.first, bucket.minimum, bucket.maximum, bucket.last];
+        candidates.sort_unstable_by_key(|point| point.index);
+        for point in candidates {
+            if points
+                .last()
+                .is_none_or(|last: &TracePoint| last.index != point.index)
+            {
+                points.push(point);
+            }
+        }
+    }
+    points
+}
+
+fn as_string(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}

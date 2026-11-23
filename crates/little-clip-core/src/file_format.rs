@@ -27,6 +27,7 @@ pub enum Format {
     VcvPatch,
     Oscilloscope,
     PowerRecording,
+    Touchstone,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -50,6 +51,9 @@ impl Format {
             "gcode" => Some(Self::Toolpath),
             "wfm" => Some(Self::Oscilloscope),
             "jls" => Some(Self::PowerRecording),
+            _ if crate::engineering::touchstone::extension_ports(path).is_some() => {
+                Some(Self::Touchstone)
+            }
             ext if crate::embroidery::supports_extension(ext) => Some(Self::Embroidery),
             "sfz" | "sf2" | "nki" | "dspreset" | "dslibrary" | "multisample" | "xrni" => {
                 Some(Self::Multisample)
@@ -63,7 +67,9 @@ impl Format {
 /// Whether an extension requires positive content evidence to override routing.
 pub fn ambiguous_engineering_path(path: &Path) -> bool {
     path.extension().is_some_and(|extension| {
-        extension.eq_ignore_ascii_case("csv") || extension.eq_ignore_ascii_case("bin")
+        ["csv", "bin", "ts"]
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
     })
 }
 
@@ -72,24 +78,33 @@ pub fn ambiguous_engineering_path(path: &Path) -> bool {
 /// No hint leaves existing routing in place. The successful decoder must still
 /// validate its own pinned input, including any format-specific offsets.
 pub fn recognize_engineering(path: &Path, cancel: &AtomicBool) -> Option<Format> {
-    use crate::{engineering::scope, file_source::ReadCheck};
+    use crate::{
+        engineering::{scope, touchstone},
+        file_source::ReadCheck,
+    };
 
     if !ambiguous_engineering_path(path) || cancel.load(Ordering::Relaxed) {
         return None;
     }
+    let rf = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ts"));
+    let bound = if rf { 64 * 1024 } else { scope::HEADER_BYTES };
     let check = ReadCheck::default();
     let (file, source) = check.open(path, None, cancel).ok()?;
     let length = file.metadata().ok()?.len();
     let mut bytes = Vec::new();
-    (&file)
-        .take(scope::HEADER_BYTES as u64)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if cancel.load(Ordering::Relaxed) || !scope::matches_header_with_len(&bytes, length) {
+    (&file).take(bound as u64).read_to_end(&mut bytes).ok()?;
+    if cancel.load(Ordering::Relaxed) {
         return None;
     }
+    let format = if rf {
+        touchstone::recognizes(&bytes, path).then_some(Format::Touchstone)
+    } else {
+        scope::matches_header_with_len(&bytes, length).then_some(Format::Oscilloscope)
+    }?;
     source.check_file(&file).ok()?;
-    Some(Format::Oscilloscope)
+    Some(format)
 }
 
 /// Returns whether a path uses a Gaussian-capable scene container extension.
@@ -114,6 +129,26 @@ pub fn is_midi(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn touchstone_detection_leaves_typescript_sources_routed_as_text() {
+        let directory = tempfile::tempdir().unwrap();
+        let sweep = directory.path().join("sweep.ts");
+        std::fs::write(
+            &sweep,
+            "[Version] 2.0\n# Hz S RI R 50\n[Number of Ports] 1\n[Number of Frequencies] 1\n[Network Data]\n1000000 0.5 0\n[End]\n",
+        )
+        .unwrap();
+        let script = directory.path().join("script.ts");
+        std::fs::write(&script, "export const sweeps = [1, 2, 3];\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            recognize_engineering(&sweep, &cancel),
+            Some(Format::Touchstone)
+        );
+        assert_eq!(recognize_engineering(&script, &cancel), None);
+        assert!(crate::text_format::is_typescript_source(&script));
+    }
+
     #[test]
     fn recognized_scope_csv_changes_browser_routing_without_claiming_other_csv_or_binary() {
         let directory = tempfile::tempdir().unwrap();
