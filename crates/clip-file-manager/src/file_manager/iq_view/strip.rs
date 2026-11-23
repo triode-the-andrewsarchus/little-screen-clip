@@ -96,25 +96,10 @@ pub(in crate::file_manager) fn show(
         None,
     );
     let id = Id::unique(("iq-strip", &entry.path, entry.revision));
-    let response = ui.interact(rect, id, Sense::click_and_drag());
-    *row_response = row_response.clone().union(response.clone());
-    let modifier = ui.input(|input| input.modifiers.command || input.modifiers.alt);
-    let (engaged, range) = preview_copy::drag_range(ui, &response, id, modifier);
-    let selection_id = id.with("range");
-    let selection = ui.data_mut(|memory| {
-        if let Some(range) = range {
-            memory.insert_temp(selection_id, range);
-        } else if response.secondary_clicked() {
-            memory.remove::<(f32, f32)>(selection_id);
-        }
-        memory.get_temp::<(f32, f32)>(selection_id)
-    });
+    let (response, engaged, selection) = preview_copy::strip_range(ui, rect, id, row_response);
     let hovered = response
         .hover_pos()
         .map(|position| plot::sample_at(rect, span, position.x));
-    if let Some(selection) = selection {
-        preview_copy::paint_range(ui, rect, selection);
-    }
     if !response.dragged() {
         response.on_hover_ui(|ui| {
             if let Some(rate) = capture.rate {

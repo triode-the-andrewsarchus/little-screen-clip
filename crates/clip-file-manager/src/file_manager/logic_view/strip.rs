@@ -64,22 +64,7 @@ pub(in crate::file_manager) fn show(
     painter.rect_filled(rect, 2.0, colors.recessed);
     plot::draw_overview(&painter, rect.shrink2(vec2(3.0, 1.0)), capture, color);
     let id = Id::unique(("logic-strip", &entry.path, entry.revision));
-    let response = ui.interact(rect, id, Sense::click_and_drag());
-    *row_response = row_response.clone().union(response.clone());
-    let modified = ui.input(|input| input.modifiers.command || input.modifiers.alt);
-    let (engaged, range) = preview_copy::drag_range(ui, &response, id, modified);
-    let selection_id = id.with("range");
-    let selected = ui.data_mut(|memory| {
-        if let Some(range) = range {
-            memory.insert_temp(selection_id, range);
-        } else if response.clicked_by(egui::PointerButton::Secondary) {
-            memory.remove::<(f32, f32)>(selection_id);
-        }
-        memory.get_temp::<(f32, f32)>(selection_id)
-    });
-    if let Some(selected) = selected {
-        preview_copy::paint_range(ui, rect, selected);
-    }
+    let (response, engaged, selected) = preview_copy::strip_range(ui, rect, id, row_response);
     let hovered = response
         .hover_pos()
         .map(|pos| timing::at(rect, &capture.span, pos.x));

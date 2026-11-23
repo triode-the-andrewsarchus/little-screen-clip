@@ -97,22 +97,7 @@ pub(in crate::file_manager) fn show(
     preview.draw(&painter, rect.shrink2(vec2(1.0, 2.0)), colors, false);
 
     let id = Id::unique(("touchstone-strip", &entry.path, entry.revision));
-    let response = ui.interact(rect, id, Sense::click_and_drag());
-    *row_response = row_response.clone().union(response.clone());
-    let modified = ui.input(|input| input.modifiers.command || input.modifiers.alt);
-    let (engaged, drag) = preview_copy::drag_range(ui, &response, id, modified);
-    let selection_id = id.with("band");
-    let selection = ui.data_mut(|data| {
-        if let Some(range) = drag {
-            data.insert_temp(selection_id, range);
-        } else if response.clicked_by(egui::PointerButton::Secondary) {
-            data.remove::<(f32, f32)>(selection_id);
-        }
-        data.get_temp::<(f32, f32)>(selection_id)
-    });
-    if let Some(selection) = selection {
-        preview_copy::paint_range(ui, rect, selection);
-    }
+    let (response, engaged, selection) = preview_copy::strip_range(ui, rect, id, row_response);
 
     let hovered = response
         .hover_pos()

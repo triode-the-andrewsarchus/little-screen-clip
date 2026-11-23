@@ -131,6 +131,41 @@ pub(super) fn drag_range(
     (true, drag_fractions(ui, response))
 }
 
+/// Handles a row's own range selection while preserving its file-list response.
+pub(super) fn strip_range(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    id: egui::Id,
+    row: &mut egui::Response,
+) -> (egui::Response, bool, Option<(f32, f32)>) {
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
+    *row = row.clone().union(response.clone());
+    let modified = ui.input(|input| input.modifiers.command || input.modifiers.alt);
+    let (engaged, drag) = drag_range(ui, &response, id, modified);
+    let range = remember_range(ui, &response, drag);
+    if let Some(range) = range {
+        paint_range(ui, rect, range);
+    }
+    (response, engaged, range)
+}
+
+fn remember_range(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    drag: Option<(f32, f32)>,
+) -> Option<(f32, f32)> {
+    let clear = response.secondary_clicked();
+    let selection_id = response.id.with("range");
+    ui.data_mut(|data| {
+        if let Some(range) = drag {
+            data.insert_temp(selection_id, range);
+        } else if clear {
+            data.remove::<(f32, f32)>(selection_id);
+        }
+        data.get_temp(selection_id)
+    })
+}
+
 /// Ascending fractions, including the final pointer movement on release.
 fn drag_fractions(ui: &egui::Ui, response: &egui::Response) -> Option<(f32, f32)> {
     let fraction = |x: f32| ((x - response.rect.left()) / response.rect.width()).clamp(0.0, 1.0);
@@ -208,4 +243,52 @@ pub(super) fn paint_range_footer(
                     .wrap_mode(egui::TextWrapMode::Extend),
             )
             .clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remember_range;
+    use egui::{Event, Modifiers, PointerButton, RawInput, Sense, pos2, vec2};
+
+    #[test]
+    fn strip_range_survives_primary_click_and_clears_on_secondary_click() {
+        let ctx = egui::Context::default();
+        let pos = pos2(30.0, 24.0);
+        let selection = Some((0.2, 0.6));
+        let frame = |event: Event, drag| {
+            let mut current = None;
+            let _ = clip_ui::test_support::run_frame(
+                &ctx,
+                RawInput {
+                    events: vec![event],
+                    ..Default::default()
+                },
+                |ctx| {
+                    ctx.root_ui(|ui| {
+                        let response = ui.allocate_response(vec2(120.0, 50.0), Sense::click());
+                        current = remember_range(ui, &response, drag);
+                    });
+                },
+            );
+            current
+        };
+        let button_event = |button, pressed| Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+
+        assert_eq!(frame(Event::PointerMoved(pos), selection), selection);
+        frame(button_event(PointerButton::Primary, true), None);
+        assert_eq!(
+            frame(button_event(PointerButton::Primary, false), None),
+            selection,
+        );
+        frame(button_event(PointerButton::Secondary, true), None);
+        assert_eq!(
+            frame(button_event(PointerButton::Secondary, false), None),
+            None
+        );
+    }
 }
