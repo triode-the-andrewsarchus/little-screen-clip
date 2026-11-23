@@ -205,24 +205,15 @@ impl Digital {
                 Some((from..trace.1.inspected_until, &trace.1))
             });
             if let Some((time, trace)) = trace.filter(|(time, _)| !time.is_empty()) {
-                let clipped = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
-                logic_plot::draw_trace(&clipped, rect, span, &time, trace, ink);
-                if let Some(point) = response.hover_pos() {
-                    let at = plot::at(rect, span, point.x);
-                    if time.contains(&at) {
-                        let edge = trace.edges.partition_point(|edge| edge.time_seconds <= at);
-                        let level = edge
-                            .checked_sub(1)
-                            .map(|edge| trace.edges[edge].level)
-                            .or(trace.initial);
-                        let time = super::display_value(clock.to_workspace(at), "s");
-                        response.clone().on_hover_text(format!(
-                            "{} · {time} · {}",
-                            lane.name,
-                            level_label(level)
-                        ));
-                    }
-                }
+                paint_threshold_trace(
+                    &painter,
+                    &response,
+                    span,
+                    (&time, trace),
+                    &lane.name,
+                    clock,
+                    ink,
+                );
             }
         }
         if let Some((_, Err(error))) = window {
@@ -274,6 +265,36 @@ impl Digital {
         }
         picked
     }
+}
+
+fn paint_threshold_trace(
+    painter: &egui::Painter,
+    response: &egui::Response,
+    span: &Range<f64>,
+    (time, trace): (&Range<f64>, &Trace),
+    name: &str,
+    clock: Clock,
+    color: Color32,
+) {
+    let rect = response.rect;
+    let clipped = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
+    logic_plot::draw_trace(&clipped, rect, span, time, trace, color);
+    let Some(point) = response.hover_pos() else {
+        return;
+    };
+    let at = plot::at(rect, span, point.x);
+    if !time.contains(&at) {
+        return;
+    }
+    let edge = trace.edges.partition_point(|edge| edge.time_seconds <= at);
+    let level = edge
+        .checked_sub(1)
+        .map(|edge| trace.edges[edge].level)
+        .or(trace.initial);
+    let time = super::display_value(clock.to_workspace(at), "s");
+    response
+        .clone()
+        .on_hover_text(format!("{name} · {time} · {}", level_label(level)));
 }
 
 fn row(ui: &mut Ui, id: impl egui::AsIdSalt) -> (Rect, Rect, egui::Response) {
