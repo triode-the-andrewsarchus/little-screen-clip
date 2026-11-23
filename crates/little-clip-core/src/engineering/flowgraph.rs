@@ -1,19 +1,21 @@
 //! Static inspection of saved GNU Radio Companion signal flowgraphs.
 
 mod layout;
+mod rates;
 #[cfg(test)]
 mod tests;
 mod xml;
 mod yaml;
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs::File,
     os::unix::fs::FileExt,
     sync::atomic::{AtomicBool, Ordering},
 };
 
 pub use layout::{Layout, Position};
+pub use rates::{BlockRates, NominalRate, RateMeaning, RateOrigin, RateSetting, Rates, StreamRate};
 
 /// Prefix size for identifying a saved flowgraph.
 pub const HEADER_BYTES: usize = 8192;
@@ -162,6 +164,7 @@ pub struct Graph {
     /// Invalid or unresolved connection records, including prefix-only gaps.
     pub skipped_connections: usize,
     adjacency: Vec<Adjacent>,
+    ambiguous_names: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -363,6 +366,10 @@ impl RawGraph {
             .find_map(|name| setting(&self.options, name).filter(|value| !value.trim().is_empty()))
             .unwrap_or("GNU Radio flowgraph")
             .to_owned();
+        let ambiguous_names = by_name
+            .into_iter()
+            .filter_map(|(name, index)| index.is_none().then_some(name))
+            .collect();
         Graph {
             format,
             title,
@@ -374,6 +381,7 @@ impl RawGraph {
             skipped_blocks,
             skipped_connections,
             adjacency,
+            ambiguous_names,
         }
     }
 }

@@ -106,6 +106,14 @@ impl Expression {
         parser::parse(input, bindings, active, false)
     }
 
+    /// Compiles the numeric subset shared by scalar configuration expressions.
+    pub(crate) fn parse_scalar(
+        input: &str,
+        bindings: &[Binding<'_>],
+    ) -> Result<Self, ExpressionError> {
+        parser::parse_scalar(input, bindings)
+    }
+
     pub(super) fn parse_history(
         input: &str,
         bindings: &[Binding<'_>],
@@ -146,7 +154,7 @@ impl Expression {
         self.evaluate_bound(|index| numeric(channel_sample(index)?))
     }
 
-    pub(super) fn visit_inputs(&self, mut visit: impl FnMut(usize, u16)) {
+    pub(crate) fn visit_inputs(&self, mut visit: impl FnMut(usize, u16)) {
         self.root.visit_inputs(&mut visit);
     }
 

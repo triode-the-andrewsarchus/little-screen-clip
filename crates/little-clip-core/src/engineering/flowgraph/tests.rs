@@ -1,6 +1,6 @@
 use std::{fs::File, io::Write, sync::atomic::AtomicBool};
 
-use super::{Direction, Format, State, identify, preview, read};
+use super::{Direction, Format, RateMeaning, Rates, State, StreamRate, identify, preview, read};
 
 fn file(source: &str) -> File {
     let mut file = tempfile::tempfile().unwrap();
@@ -98,4 +98,78 @@ fn preview_recovers_a_bounded_prefix_and_excludes_ambiguous_wires() {
 fn xml_dtd_does_not_resolve_custom_entities() {
     let source = r#"<!DOCTYPE flow_graph [<!ENTITY unexpected SYSTEM "file:///tmp/unused">]><flow_graph><block><key>&unexpected;</key></block></flow_graph>"#;
     assert!(read(file(source), &AtomicBool::new(false)).is_err());
+}
+
+#[test]
+fn saved_sample_clocks_follow_variable_ratios_and_keep_the_display_scale_separate() {
+    let source = r#"options:
+  parameters: {id: rate_example}
+blocks:
+- {name: samp_rate, id: variable, parameters: {value: 'float(BASE) * 2'}}
+- {name: BASE, id: variable_qtgui_label, parameters: {type: real, value: '4.8e4'}}
+- {name: base, id: variable, parameters: {value: '250000'}}
+- {name: tone, id: analog_sig_source_x, parameters: {samp_rate: samp_rate}}
+- {name: filter, id: fir_filter_xxx, parameters: {decim: 4}}
+- {name: resampler, id: rational_resampler_xxx, parameters: {interp: 2, decim: 3}}
+- {name: spectrum, id: qtgui_freq_sink_x, parameters: {bw: '48e3'}}
+connections:
+- [tone, 0, filter, 0]
+- [filter, 0, resampler, 0]
+- [resampler, 0, spectrum, 0]
+- [spectrum, freq, tone, command]
+metadata: {file_format: 1}
+"#;
+    let graph = read(file(source), &AtomicBool::new(false)).unwrap();
+    let rates = Rates::inspect(&graph);
+    for (edge, expected) in [96_000.0, 24_000.0, 16_000.0].into_iter().enumerate() {
+        let Some(StreamRate::Nominal(clock)) = rates.wire(edge) else {
+            panic!("Missing stream rate on {edge}");
+        };
+        assert_eq!(clock.rate, expected);
+        assert_eq!(clock.origin.unwrap().block, 3);
+    }
+    assert_eq!(rates.wire(3), None);
+    let spectrum = rates.block(6).unwrap();
+    let StreamRate::Nominal(input) = spectrum.input else {
+        panic!("Missing the rate at the spectrum input");
+    };
+    let display = spectrum.setting.unwrap();
+    assert_eq!(display.meaning, RateMeaning::Display);
+    assert_eq!(display.rate, 48_000.0);
+    assert!(display.differs(input));
+}
+
+#[test]
+fn unresolved_expressions_and_conflicting_inputs_stay_visible() {
+    let source = r#"options:
+  parameters: {id: cautious_rates}
+blocks:
+- {name: a, id: variable, parameters: {value: b}}
+- {name: b, id: variable, parameters: {value: a}}
+- {name: cycle, id: analog_sig_source_x, parameters: {samp_rate: a}}
+- {name: unknown, id: analog_sig_source_x, parameters: {samp_rate: 'get_rate()'}}
+- {name: first, id: analog_sig_source_x, parameters: {samp_rate: 48000}}
+- {name: second, id: analog_sig_source_x, parameters: {samp_rate: 96000}}
+- {name: mix, id: blocks_add_xx}
+- {name: unlabelled, id: analog_noise_source_x}
+- {name: pace, id: blocks_throttle2, parameters: {samples_per_second: 12000}}
+- {name: next, id: qtgui_time_sink_x, parameters: {srate: 24000}}
+connections:
+- [first, 0, mix, 0]
+- [second, 0, mix, 1]
+- [mix, 0, next, 0]
+- [unlabelled, 0, pace, 0]
+metadata: {file_format: 1}
+"#;
+    let graph = read(file(source), &AtomicBool::new(false)).unwrap();
+    let rates = Rates::inspect(&graph);
+    assert_eq!(rates.block(2).unwrap().output, StreamRate::Unknown);
+    assert_eq!(rates.block(3).unwrap().output, StreamRate::Unknown);
+    assert_eq!(rates.block(6).unwrap().input, StreamRate::Conflicting);
+    assert_eq!(rates.wire(2), Some(StreamRate::Conflicting));
+    let StreamRate::Nominal(paced) = rates.block(8).unwrap().output else {
+        panic!("The throttle has an explicit pace");
+    };
+    assert_eq!(paced.rate, 12_000.0);
+    assert_eq!(paced.origin.unwrap().meaning, RateMeaning::Pacing);
 }

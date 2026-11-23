@@ -9,16 +9,32 @@ const MAX_DELAY: u16 = 8192;
 
 type Result<T> = std::result::Result<T, ExpressionError>;
 
+#[derive(Clone, Copy)]
+enum Mode {
+    Signal { active: usize, history: bool },
+    Scalar,
+}
+
 pub(super) fn parse(
     source: &str,
     channels: &[Binding<'_>],
     active: usize,
     history: bool,
 ) -> Result<Expression> {
+    parse_with(source, channels, Mode::Signal { active, history })
+}
+
+pub(super) fn parse_scalar(source: &str, bindings: &[Binding<'_>]) -> Result<Expression> {
+    parse_with(source, bindings, Mode::Scalar)
+}
+
+fn parse_with(source: &str, channels: &[Binding<'_>], mode: Mode) -> Result<Expression> {
     if source.len() > MAX_BYTES {
         return Err(error(0, "Expression is too long"));
     }
-    if active >= channels.len() {
+    if let Mode::Signal { active, .. } = mode
+        && active >= channels.len()
+    {
         return Err(error(0, "No active waveform"));
     }
     let mut lexer = Lexer {
@@ -28,6 +44,9 @@ pub(super) fn parse(
     let mut tokens = Vec::new();
     loop {
         let lexeme = lexer.next()?;
+        if matches!(mode, Mode::Scalar) && !lexeme.token.scalar() {
+            return Err(error(lexeme.at, "Expected decimal arithmetic"));
+        }
         if lexeme.token == Token::End {
             tokens.push(lexeme);
             break;
@@ -40,8 +59,7 @@ pub(super) fn parse(
     let mut parser = Parser {
         tokens: &tokens,
         channels,
-        active,
-        history,
+        mode,
     };
     let expression = parser.expression(1, 0)?;
     parser.expect(Token::End, "Unexpected text after the expression")?;
@@ -67,6 +85,22 @@ enum Token<'a> {
     Comma,
     Not,
     End,
+}
+
+impl Token<'_> {
+    fn scalar(self) -> bool {
+        matches!(
+            self,
+            Self::Number(_, Unit::Implicit)
+                | Self::Name(_)
+                | Self::Operator(
+                    Binary::Add | Binary::Subtract | Binary::Multiply | Binary::Divide
+                )
+                | Self::Open
+                | Self::Close
+                | Self::End
+        )
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -186,8 +220,7 @@ fn number_value(mut text: &str) -> Option<(f64, &str)> {
 struct Parser<'a, 'input> {
     tokens: &'a [Lexeme<'input>],
     channels: &'a [Binding<'a>],
-    active: usize,
-    history: bool,
+    mode: Mode,
 }
 
 impl<'input> Parser<'_, 'input> {
@@ -245,23 +278,33 @@ impl<'input> Parser<'_, 'input> {
             Token::Not => self.unary(true, at, depth),
             Token::Operator(Binary::Subtract) => self.unary(false, at, depth),
             Token::Operator(operator) if operator.precedence() == 3 => {
-                self.binary(operator, self.channel(self.active, 0), at, depth)
+                let Mode::Signal { active, .. } = self.mode else {
+                    return Err(error(at, "Scalar expressions use numeric arithmetic"));
+                };
+                self.binary(operator, self.channel(active, 0), at, depth)
             }
             _ => Err(error(at, "Expected a waveform, number, or expression")),
         }
     }
 
     fn named_value(&mut self, name: &str, at: usize) -> Result<Expression> {
-        let index = if name.eq_ignore_ascii_case("x") {
-            self.active
-        } else {
-            self.channels
+        let index = match self.mode {
+            Mode::Signal { active, .. } if name.eq_ignore_ascii_case("x") => Some(active),
+            Mode::Signal { .. } => self
+                .channels
                 .iter()
-                .position(|candidate| candidate.name.eq_ignore_ascii_case(name))
-                .ok_or_else(|| error(at, format!("Unknown waveform {name}")))?
-        };
+                .position(|candidate| candidate.name.eq_ignore_ascii_case(name)),
+            Mode::Scalar => self
+                .channels
+                .iter()
+                .position(|candidate| candidate.name == name),
+        }
+        .ok_or_else(|| match self.mode {
+            Mode::Signal { .. } => error(at, format!("Unknown waveform {name}")),
+            Mode::Scalar => error(at, format!("Unknown name {name}")),
+        })?;
         let delay = if self.peek().token == Token::IndexOpen {
-            if !self.history {
+            if !matches!(self.mode, Mode::Signal { history: true, .. }) {
                 return Err(error(
                     at,
                     "Sample history is available in the Derived lanes editor",
@@ -345,6 +388,15 @@ impl<'input> Parser<'_, 'input> {
     }
 
     fn function(&mut self, name: &str, at: usize, depth: usize) -> Result<Expression> {
+        if matches!(self.mode, Mode::Scalar) {
+            if name != "float" || self.channels.iter().any(|binding| binding.name == name) {
+                return Err(error(at, format!("Unsupported numeric call {name}")));
+            }
+            self.take(); // Opening parenthesis
+            let result = self.expression(1, depth + 1)?;
+            self.expect(Token::Close, "Expected a closing parenthesis")?;
+            return Ok(result);
+        }
         let function =
             Function::parse(name).ok_or_else(|| error(at, format!("Unknown function {name}")))?;
         self.take(); // Opening parenthesis

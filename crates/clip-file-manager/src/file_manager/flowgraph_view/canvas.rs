@@ -1,3 +1,4 @@
+use super::rate_overlay::Overlay;
 use crate::ui_appearance::WorkbenchColors;
 use egui::{Align2, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, pos2, vec2};
 use little_clip_core::engineering::flowgraph::{Connection, Direction, Graph, Layout, State};
@@ -41,6 +42,7 @@ pub(super) struct Highlights<'a> {
     pub traced_blocks: &'a [bool],
     pub traced_links: &'a [bool],
     pub search: &'a [bool],
+    pub rates: Option<&'a Overlay>,
 }
 
 impl Camera {
@@ -167,7 +169,11 @@ impl Scene<'_> {
             if !extent.intersects(rect) {
                 continue;
             }
-            let color = if active {
+            let annotation = highlighted.rates.and_then(|rates| rates.wire(index));
+            let rate_color = annotation.and_then(|label| label.color(colors));
+            let color = if let Some(color) = rate_color {
+                color
+            } else if active {
                 colors.link
             } else {
                 colors.text_muted.gamma_multiply(0.64)
@@ -192,6 +198,11 @@ impl Scene<'_> {
             painter.add(shape);
             painter.line_segment([sink - vec2(4.0, 2.5), sink], stroke);
             painter.line_segment([sink - vec2(4.0, -2.5), sink], stroke);
+            if let Some(label) = annotation
+                && (active || self.graph.connections.len() <= 16)
+            {
+                label.paint(painter, source, sink, color);
+            }
         }
     }
 

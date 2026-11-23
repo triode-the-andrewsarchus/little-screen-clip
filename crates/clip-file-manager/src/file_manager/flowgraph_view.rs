@@ -1,6 +1,7 @@
 //! Saved GNU Radio topology and inspected block settings.
 
 mod canvas;
+mod rate_overlay;
 pub(super) mod strip;
 
 use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
@@ -27,6 +28,8 @@ pub(super) struct Viewer {
     query: String,
     matches: Vec<usize>,
     search_marks: Vec<bool>,
+    rates: rate_overlay::Overlay,
+    show_rates: bool,
 }
 
 impl Viewer {
@@ -40,6 +43,7 @@ impl Viewer {
             .or_else(|| (!graph.blocks.is_empty()).then_some(0));
         let block_count = graph.blocks.len();
         let connection_count = graph.connections.len();
+        let rates = rate_overlay::Overlay::new(&graph);
         Ok(Self {
             graph,
             layout,
@@ -53,6 +57,8 @@ impl Viewer {
             query: String::new(),
             matches: Vec::new(),
             search_marks: vec![false; block_count],
+            rates,
+            show_rates: false,
         })
     }
 
@@ -160,6 +166,7 @@ impl Viewer {
             if self.trace_direction != last {
                 self.refresh_trace();
             }
+            self.rate_controls(ui);
         });
     }
 
@@ -198,6 +205,7 @@ impl Viewer {
                 traced_blocks: &self.trace_blocks,
                 traced_links: &self.trace_connections,
                 search: &self.search_marks,
+                rates: self.show_rates.then_some(&self.rates),
             },
             colors,
             false,
@@ -258,6 +266,9 @@ impl Viewer {
                         ui.weak(format!("{degrees}°"));
                     }
                 });
+                if self.show_rates {
+                    self.rates.inspector(ui, &self.graph, index, &mut select);
+                }
                 if !block.settings.is_empty() {
                     ui.separator();
                     show_settings(ui, &block.settings);
@@ -304,7 +315,7 @@ impl Viewer {
                         ),
                     ),
                 };
-                let item = ui.button(label);
+                let item = ui.button(self.rate_link_label(label, edge));
                 let item = if wire.settings.is_empty() {
                     item
                 } else {
@@ -334,7 +345,11 @@ impl Viewer {
                 ));
                 last_hops = step.hops;
             }
-            if ui.button(&self.graph.blocks[step.block].name).clicked() {
+            let name = self.graph.blocks[step.block].name.clone();
+            if ui
+                .button(self.rate_link_label(name, step.connection))
+                .clicked()
+            {
                 *select = Some(step.block);
             }
         }
