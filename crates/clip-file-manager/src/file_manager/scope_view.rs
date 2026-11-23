@@ -537,9 +537,10 @@ impl Viewer {
                         || format!("- {unit}"),
                         |integral| {
                             format!(
-                                "{}{}",
+                                "{}{}{}",
                                 if integral.approximate { "≈ " } else { "" },
                                 display_value(integral.value, unit),
+                                if integral.partial { " (partial)" } else { "" },
                             )
                         },
                     );

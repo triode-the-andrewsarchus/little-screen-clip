@@ -186,6 +186,7 @@ pub struct PowerTotals {
 pub struct Integral {
     pub value: f64,
     pub approximate: bool,
+    pub partial: bool,
 }
 
 impl Capture {
@@ -233,12 +234,13 @@ impl Capture {
             else {
                 continue;
             };
-            if span.start < channel.start_seconds
-                || span.end > channel.time_at(channel.sample_count)
-            {
+            let overlap = span.start.max(channel.start_seconds)
+                ..span.end.min(channel.time_at(channel.sample_count));
+            if overlap.is_empty() {
                 continue;
             }
-            let range = sample_span(channel, span.clone());
+            let partial = overlap != span;
+            let range = sample_span(channel, overlap);
             if range.is_empty() {
                 continue;
             }
@@ -246,6 +248,7 @@ impl Capture {
                 Some(Integral {
                     value,
                     approximate: false,
+                    partial,
                 })
             } else {
                 capture
@@ -253,6 +256,7 @@ impl Capture {
                     .map(|value| Integral {
                         value,
                         approximate: true,
+                        partial,
                     })
             };
         }
