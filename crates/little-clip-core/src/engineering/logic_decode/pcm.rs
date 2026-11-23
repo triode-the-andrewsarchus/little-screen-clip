@@ -1,4 +1,4 @@
-use super::{Event, I2sChannel, Kind};
+use super::{Event, I2sChannel, Kind, median_interval};
 use std::ops::Range;
 
 /// One recorded PCM lane on its actual bit-clock timestamps.
@@ -33,15 +33,8 @@ impl PcmLane {
             .windows(2)
             .map(|pair| pair[1].time - pair[0].time)
             .collect();
-        if steps.iter().any(|step| !step.is_finite() || *step <= 0.0) {
-            return None;
-        }
-        let median = (steps.len() - 1) / 2;
-        let (_, interval, _) = steps.select_nth_unstable_by(median, f64::total_cmp);
-        Some(Self {
-            points,
-            interval: *interval,
-        })
+        let interval = median_interval(&mut steps)?;
+        Some(Self { points, interval })
     }
 
     pub fn interval(&self) -> f64 {

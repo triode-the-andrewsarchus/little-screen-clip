@@ -1,27 +1,56 @@
 use super::{Event, Kind, active_event, event_label};
 use crate::file_manager::scope_view::plot as timing;
 use egui::{Align2, FontId, Mesh, Painter, Rect, Sense, Stroke, Ui, pos2, vec2};
-use little_clip_core::engineering::logic_decode::{I2sChannel, PcmLane};
+use little_clip_core::engineering::logic_decode::{I2sChannel, PcmLane, PwmLane};
 use std::{fmt::Write, ops::Range, sync::Arc};
 
 #[derive(Default)]
-pub(in crate::file_manager) struct PcmPins {
+pub(in crate::file_manager) struct Pins {
+    pcm: PcmPins,
+    pwm: PwmPins,
+}
+
+impl Pins {
+    pub(in crate::file_manager) fn pcm(&self) -> impl Iterator<Item = (usize, u64, &Arc<PcmLane>)> {
+        self.pcm
+            .lanes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, lane)| {
+                lane.as_ref().map(|lane| (index, self.pcm.generation, lane))
+            })
+    }
+
+    pub(in crate::file_manager) fn pwm(&self) -> Option<(u64, &Arc<PwmLane>)> {
+        self.pwm
+            .lane
+            .as_ref()
+            .map(|lane| (self.pwm.generation, lane))
+    }
+
+    pub(super) fn controls(
+        &mut self,
+        ui: &mut Ui,
+        measure: Measure,
+        events: &[Event],
+        span: &Range<f64>,
+    ) {
+        match measure {
+            Measure::Pcm => self.pcm.controls(ui, events, span),
+            Measure::Duty => self.pwm.controls(ui, events, span),
+        }
+    }
+}
+
+#[derive(Default)]
+struct PcmPins {
     generation: u64,
     lanes: [Option<Arc<PcmLane>>; 2],
     error: bool,
 }
 
 impl PcmPins {
-    pub(in crate::file_manager) fn lanes(
-        &self,
-    ) -> impl Iterator<Item = (usize, u64, &Arc<PcmLane>)> {
-        self.lanes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, lane)| lane.as_ref().map(|lane| (index, self.generation, lane)))
-    }
-
-    pub(super) fn controls(&mut self, ui: &mut Ui, events: &[Event], span: &Range<f64>) {
+    fn controls(&mut self, ui: &mut Ui, events: &[Event], span: &Range<f64>) {
         if ui
             .button("Pin PCM for equations")
             .on_hover_text(
@@ -43,6 +72,40 @@ impl PcmPins {
         }
         if self.error {
             ui.weak("Select at least three word times and one valid sample on a channel.");
+        }
+    }
+}
+
+#[derive(Default)]
+struct PwmPins {
+    generation: u64,
+    lane: Option<Arc<PwmLane>>,
+    error: bool,
+}
+
+impl PwmPins {
+    fn controls(&mut self, ui: &mut Ui, events: &[Event], span: &Range<f64>) {
+        if ui
+            .button("Pin PWM for equations")
+            .on_hover_text("Pin duty, frequency, active time and period from complete cycles in the visible or brushed region.")
+            .clicked()
+        {
+            let lane = PwmLane::from_events(events, span);
+            self.error = lane.is_none();
+            if let Some(lane) = lane {
+                self.generation = self.generation.wrapping_add(1);
+                self.lane = Some(Arc::new(lane));
+            }
+        }
+        if let Some(lane) = &self.lane {
+            ui.weak(format!("{} cycles pinned", lane.cycle_count()));
+            if ui.button("Clear PWM pins").clicked() {
+                self.lane = None;
+                self.error = false;
+            }
+        }
+        if self.error {
+            ui.weak("Select at least one complete PWM cycle.");
         }
     }
 }

@@ -81,6 +81,8 @@ impl Derived {
                     egui::ScrollArea::vertical()
                         .max_height(180.0)
                         .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 4.0;
+                            ui.spacing_mut().interact_size.y = 22.0;
                             for input in inputs {
                                 ui.horizontal(|ui| {
                                     if ui

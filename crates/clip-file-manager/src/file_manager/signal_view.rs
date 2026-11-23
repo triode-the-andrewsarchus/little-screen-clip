@@ -530,10 +530,19 @@ impl Source {
                 let (recording, lanes) = view.recording();
                 let mut inputs =
                     inputs::Input::digital(self.id, self.offset, &label, recording, lanes);
-                if let Some(pins) = view.decoded_pcm() {
-                    inputs.extend(pins.lanes().map(|(channel, generation, lane)| {
+                if let Some(pins) = view.decoded_pins() {
+                    inputs.extend(pins.pcm().map(|(channel, generation, lane)| {
                         inputs::Input::pcm(self.id, self.offset, &label, channel, generation, lane)
                     }));
+                    if let Some((generation, lane)) = pins.pwm() {
+                        inputs.extend(inputs::Input::pwm(
+                            self.id,
+                            self.offset,
+                            &label,
+                            generation,
+                            lane,
+                        ));
+                    }
                 }
                 inputs
             }

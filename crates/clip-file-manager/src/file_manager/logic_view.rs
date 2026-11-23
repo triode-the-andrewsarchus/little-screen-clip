@@ -134,8 +134,8 @@ impl Viewer {
         (&self.recording, &self.overview.lanes)
     }
 
-    pub(super) fn decoded_pcm(&self) -> Option<&protocols::PcmPins> {
-        self.protocols.pcm()
+    pub(super) fn decoded_pins(&self) -> Option<&protocols::Pins> {
+        self.protocols.pins()
     }
 
     pub(super) fn cursor(&self) -> Option<f64> {

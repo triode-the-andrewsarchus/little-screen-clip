@@ -1,5 +1,8 @@
 use super::{Event, Kind, Trace, driven, emit, validate_trace};
 
+mod measurements;
+pub use measurements::{PwmLane, PwmMeasurement};
+
 /// One complete pulse-width modulation cycle from an observed active edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PwmCycle {

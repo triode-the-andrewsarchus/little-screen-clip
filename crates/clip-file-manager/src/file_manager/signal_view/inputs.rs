@@ -3,7 +3,7 @@ use crate::file_manager::scope_view::{FilterSamples, FilteredChannel, reads::Raw
 use little_clip_core::engineering::{
     analysis::{Binding, Dimension, SignalType, Value},
     logic::{Level, Trace},
-    logic_decode::PcmLane,
+    logic_decode::{PcmLane, PwmLane, PwmMeasurement},
     logic_preview,
     scope::Channel,
     waveforms::{Recording, sample_span, time_span},
@@ -47,8 +47,8 @@ enum Source {
         index: usize,
         rate: Option<f64>,
     },
-    Pcm {
-        lane: Arc<PcmLane>,
+    Measured {
+        lane: Measurement,
         generation: u64,
     },
 }
@@ -69,11 +69,41 @@ pub(super) enum Samples {
         native: Range<f64>,
         offset: f64,
     },
-    Pcm {
-        lane: Arc<PcmLane>,
+    Measured {
+        lane: Measurement,
         offset: f64,
     },
     Empty,
+}
+
+#[derive(Clone)]
+pub(super) enum Measurement {
+    Pcm(Arc<PcmLane>),
+    Pwm(Arc<PwmLane>, PwmMeasurement),
+}
+
+impl Measurement {
+    fn dimension(&self) -> Dimension {
+        match self {
+            Self::Pcm(_) | Self::Pwm(_, PwmMeasurement::Duty) => Dimension::SCALAR,
+            Self::Pwm(_, PwmMeasurement::Frequency) => Dimension::FREQUENCY,
+            Self::Pwm(_, PwmMeasurement::ActiveTime | PwmMeasurement::Period) => Dimension::TIME,
+        }
+    }
+
+    fn rate(&self) -> f64 {
+        match self {
+            Self::Pcm(lane) => lane.interval().recip(),
+            Self::Pwm(lane, _) => lane.grid_rate(),
+        }
+    }
+
+    fn value_at(&self, time: f64) -> Option<f64> {
+        match self {
+            Self::Pcm(lane) => lane.value_at(time),
+            Self::Pwm(lane, measure) => lane.value_at(time, *measure),
+        }
+    }
 }
 
 impl Input {
@@ -163,17 +193,41 @@ impl Input {
             alias: format!("s{id}_pcm_{suffix}"),
             label: format!("{label} · {side} PCM (full scale)"),
             offset,
-            source: Source::Pcm {
-                lane: lane.clone(),
+            source: Source::Measured {
+                lane: Measurement::Pcm(lane.clone()),
                 generation,
             },
         }
     }
 
+    pub(super) fn pwm(
+        id: u64,
+        offset: f64,
+        label: &str,
+        generation: u64,
+        lane: &Arc<PwmLane>,
+    ) -> [Self; 4] {
+        [
+            (PwmMeasurement::Duty, "duty", "Duty (0–1)"),
+            (PwmMeasurement::Frequency, "freq", "Frequency (Hz)"),
+            (PwmMeasurement::ActiveTime, "active", "Active time (s)"),
+            (PwmMeasurement::Period, "period", "Period (s)"),
+        ]
+        .map(|(measure, suffix, name)| Self {
+            alias: format!("s{id}_pwm_{suffix}"),
+            label: format!("{label} · PWM {name}"),
+            offset,
+            source: Source::Measured {
+                lane: Measurement::Pwm(lane.clone(), measure),
+                generation,
+            },
+        })
+    }
+
     pub(super) fn signature(&self) -> Signature {
         let generation = match &self.source {
             Source::Filtered { samples, .. } => samples.as_ref().map(|samples| samples.generation),
-            Source::Pcm { generation, .. } => Some(*generation),
+            Source::Measured { generation, .. } => Some(*generation),
             _ => None,
         };
         Signature {
@@ -195,7 +249,7 @@ impl Input {
             }
             Source::Filtered { dimension, .. } => SignalType::Analog(*dimension),
             Source::Digital { .. } => SignalType::Digital,
-            Source::Pcm { .. } => SignalType::Analog(Dimension::SCALAR),
+            Source::Measured { lane, .. } => SignalType::Analog(lane.dimension()),
         };
         Binding {
             name: &self.alias,
@@ -210,7 +264,7 @@ impl Input {
             }
             Source::Filtered { rate, .. } => Some(*rate),
             Source::Digital { rate, .. } => *rate,
-            Source::Pcm { lane, .. } => Some(lane.interval().recip()),
+            Source::Measured { lane, .. } => Some(lane.rate()),
         }
         .filter(|rate| rate.is_finite() && *rate > 0.0)
     }
@@ -242,7 +296,7 @@ impl Input {
                     offset: self.offset,
                 })
             }),
-            Source::Pcm { lane, .. } => Ok(Samples::Pcm {
+            Source::Measured { lane, .. } => Ok(Samples::Measured {
                 lane: lane.clone(),
                 offset: self.offset,
             }),
@@ -320,7 +374,7 @@ impl Samples {
                     _ => None,
                 }
             }
-            Self::Pcm { lane, offset } => lane.value_at(time - offset).map(Value::Numeric),
+            Self::Measured { lane, offset } => lane.value_at(time - offset).map(Value::Numeric),
             Self::Empty => None,
         }
     }
@@ -347,6 +401,45 @@ fn interpolate(values: &[f32], position: f64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pwm_inputs_keep_physical_units_and_follow_source_alignment() {
+        use little_clip_core::engineering::{
+            analysis::SignalGraph,
+            logic_decode::{Event, Kind, PwmCycle},
+        };
+        let pin = PwmLane::from_events(
+            &[Event {
+                time: 0.002..0.003,
+                kind: Kind::PwmCycle(PwmCycle {
+                    active_seconds: 0.00025,
+                    period_seconds: 0.001,
+                }),
+            }],
+            &(0.0..0.004),
+        )
+        .unwrap();
+        let inputs = Input::pwm(2, 0.01, "Driver", 1, &Arc::new(pin));
+        let bindings = inputs.each_ref().map(Input::binding);
+        let graph = SignalGraph::compile(
+            "gate = s2_pwm_freq > 500Hz\nvoltage = s2_pwm_active / s2_pwm_period * 4V",
+            &bindings,
+            0,
+        )
+        .unwrap();
+        assert!(SignalGraph::compile("bad = s2_pwm_period + 1Hz", &bindings, 0).is_err());
+        let cancel = AtomicBool::new(false);
+        let data = inputs.map(|input| input.read(&(0.0..0.02), &cancel).unwrap());
+        let mut evaluator = graph.evaluator();
+        assert_eq!(
+            evaluator.evaluate(|index| data[index].at(0.0125)),
+            &[Some(Value::Predicate(true)), Some(Value::Numeric(1.0))]
+        );
+        assert_eq!(
+            evaluator.evaluate(|index| data[index].at(0.011)),
+            &[None, None]
+        );
+    }
 
     #[test]
     fn changed_filter_results_keep_their_name_but_invalidate_derived_readers() {

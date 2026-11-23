@@ -18,7 +18,7 @@ const DECODE_EDGES: usize = 8192;
 mod i2s;
 mod samples;
 use i2s::I2sInputs;
-pub(in crate::file_manager) use samples::PcmPins;
+pub(in crate::file_manager) use samples::Pins;
 
 pub(in crate::file_manager) trait TraceInput: Send + Sync {
     fn time_bounds(&self, index: usize) -> Option<Range<f64>>;
@@ -152,19 +152,19 @@ struct Decoded {
 pub(in crate::file_manager) struct Panel {
     decoders: Vec<Decoder>,
     selected: Option<usize>,
-    pcm: Option<PcmPins>,
+    pins: Option<Pins>,
 }
 
 impl Panel {
     pub(super) fn recorded() -> Self {
         Self {
-            pcm: Some(PcmPins::default()),
+            pins: Some(Pins::default()),
             ..Self::default()
         }
     }
 
-    pub(super) fn pcm(&self) -> Option<&PcmPins> {
-        self.pcm.as_ref()
+    pub(super) fn pins(&self) -> Option<&Pins> {
+        self.pins.as_ref()
     }
 
     fn current(&self) -> Option<&Decoder> {
@@ -284,7 +284,7 @@ impl Panel {
         selection: Option<&Range<f64>>,
     ) -> Option<Event> {
         let decoder = self.decoders.get_mut(self.selected?)?;
-        decoder.table(ui, span, cursor, self.pcm.as_mut(), selection)
+        decoder.table(ui, span, cursor, self.pins.as_mut(), selection)
     }
 
     pub fn events(&self, span: &Range<f64>) -> &[Event] {
@@ -506,7 +506,7 @@ impl Decoder {
         ui: &mut Ui,
         span: &Range<f64>,
         cursor: Option<f64>,
-        pcm: Option<&mut PcmPins>,
+        pins: Option<&mut Pins>,
         selection: Option<&Range<f64>>,
     ) -> Option<Event> {
         if let Err(message) = self.inputs() {
@@ -525,7 +525,7 @@ impl Decoder {
                     events,
                     self.mode,
                     &mut show_samples,
-                    pcm,
+                    pins,
                     selection.unwrap_or(span),
                 );
                 coverage(ui, output, span);
@@ -574,7 +574,7 @@ fn decoded_controls(
     events: &[Event],
     mode: Mode,
     show_samples: &mut bool,
-    pcm: Option<&mut PcmPins>,
+    pins: Option<&mut Pins>,
     selection: &Range<f64>,
 ) {
     if events.is_empty() {
@@ -600,10 +600,8 @@ fn decoded_controls(
                 ui.ctx().copy_text(plot.tsv(events));
             }
             ui.toggle_value(show_samples, plot.label());
-            if mode == Mode::I2s
-                && let Some(pcm) = pcm
-            {
-                pcm.controls(ui, events, selection);
+            if let Some(pins) = pins {
+                pins.controls(ui, plot, events, selection);
             }
         }
     });

@@ -9,7 +9,7 @@ mod pwm;
 mod spi;
 pub use i2s::{I2sChannel, I2sConfig, I2sFormat, i2s};
 pub use pcm::PcmLane;
-pub use pwm::{PwmCycle, pwm};
+pub use pwm::{PwmCycle, PwmLane, PwmMeasurement, pwm};
 pub use spi::{SpiConfig, spi};
 
 const MAX_EVENTS: usize = 16_384;
@@ -382,6 +382,18 @@ fn driven(level: Level) -> Option<bool> {
         Level::High => Some(true),
         Level::Unknown | Level::HighImpedance => None,
     }
+}
+
+fn median_interval(intervals: &mut [f64]) -> Option<f64> {
+    if intervals
+        .iter()
+        .any(|step| !step.is_finite() || *step <= 0.0)
+    {
+        return None;
+    }
+    let median = intervals.len().checked_sub(1)? / 2;
+    let (_, interval, _) = intervals.select_nth_unstable_by(median, f64::total_cmp);
+    Some(*interval)
 }
 
 fn emit(events: &mut Vec<Event>, time: Range<f64>, kind: Kind) -> Result<(), String> {
