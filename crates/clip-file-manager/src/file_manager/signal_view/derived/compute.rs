@@ -17,6 +17,7 @@ pub(super) struct Frame {
     pub span: Range<f64>,
     pub step: f64,
     pub lanes: Vec<Lane>,
+    pub digital: Vec<logic::Lane>,
 }
 
 pub(super) enum Lane {
@@ -83,10 +84,22 @@ pub(super) fn calculate(
             SignalType::Digital => digital(lane.name.clone(), &range, step, &values),
         })
         .collect();
+    let digital = graph
+        .lanes()
+        .iter()
+        .filter(|lane| lane.signal_type == SignalType::Digital)
+        .map(|lane| logic::Lane {
+            name: lane.name.clone(),
+            start_seconds: range.start,
+            end_seconds: range.end,
+            sample_rate: Some(rate),
+        })
+        .collect();
     Ok(Frame {
         span: range,
         step,
         lanes,
+        digital,
     })
 }
 

@@ -1,7 +1,7 @@
 //! Offline logic timing and transition inspection.
 
 pub(super) mod plot;
-mod protocols;
+pub(super) mod protocols;
 pub(super) mod strip;
 
 use super::{

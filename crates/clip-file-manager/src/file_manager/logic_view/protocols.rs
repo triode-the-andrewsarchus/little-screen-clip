@@ -2,7 +2,7 @@
 use super::{JOBS, Task, event_list};
 use egui::{Context, Ui};
 use little_clip_core::engineering::{
-    logic::{Capture, Lane},
+    logic::{Capture, Lane, Trace},
     logic_decode::{self, Event, Kind, SpiConfig},
     logic_preview::Recording,
     waveforms::display_value,
@@ -14,6 +14,38 @@ use std::{
 };
 
 const DECODE_EDGES: usize = 8192;
+
+pub(in crate::file_manager) trait TraceInput: Send + Sync {
+    fn time_bounds(&self, index: usize) -> Option<Range<f64>>;
+    fn read_edges(
+        &self,
+        index: usize,
+        time: Range<f64>,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<Trace, String>;
+}
+
+impl TraceInput for Capture {
+    fn time_bounds(&self, index: usize) -> Option<Range<f64>> {
+        self.time_bounds(index)
+    }
+
+    fn read_edges(
+        &self,
+        index: usize,
+        time: Range<f64>,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<Trace, String> {
+        self.read_edges(index, time, limit, cancel)
+    }
+}
+
+enum Source {
+    Recording(Arc<Recording>),
+    Materialized(Arc<dyn TraceInput>),
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -96,7 +128,7 @@ enum Inputs {
 struct Key {
     span: Range<f64>,
     inputs: Inputs,
-    refined: bool,
+    source_revision: u64,
 }
 
 struct Decoded {
@@ -106,7 +138,7 @@ struct Decoded {
 }
 
 #[derive(Default)]
-pub(super) struct Panel {
+pub(in crate::file_manager) struct Panel {
     decoders: Vec<Decoder>,
     selected: Option<usize>,
 }
@@ -190,7 +222,24 @@ impl Panel {
         recording: &Arc<Recording>,
     ) {
         if let Some(decoder) = self.current_mut() {
-            decoder.update(ctx, span, refined, recording);
+            decoder.update(
+                ctx,
+                span,
+                u64::from(refined),
+                Source::Recording(recording.clone()),
+            );
+        }
+    }
+
+    pub fn update_materialized(
+        &mut self,
+        ctx: &Context,
+        span: Range<f64>,
+        revision: u64,
+        source: Arc<dyn TraceInput>,
+    ) {
+        if let Some(decoder) = self.current_mut() {
+            decoder.update(ctx, span, revision, Source::Materialized(source));
         }
     }
 
@@ -337,13 +386,7 @@ impl Decoder {
         }
     }
 
-    pub(super) fn update(
-        &mut self,
-        ctx: &Context,
-        span: Range<f64>,
-        refined: bool,
-        recording: &Arc<Recording>,
-    ) {
+    fn update(&mut self, ctx: &Context, span: Range<f64>, source_revision: u64, source: Source) {
         let Ok(inputs) = self.inputs() else {
             self.close();
             return;
@@ -351,10 +394,10 @@ impl Decoder {
         let key = Key {
             span,
             inputs,
-            refined,
+            source_revision,
         };
         if self.request.as_ref() != Some(&key) {
-            self.start(ctx, key, recording);
+            self.start(ctx, key, source);
         }
         if let Some(result) = self.task.as_ref().and_then(Task::poll) {
             self.task = None;
@@ -370,7 +413,7 @@ impl Decoder {
         }
     }
 
-    fn start(&mut self, ctx: &Context, key: Key, recording: &Arc<Recording>) {
+    fn start(&mut self, ctx: &Context, key: Key, source: Source) {
         self.task = None;
         self.request = None;
         self.result = None;
@@ -381,10 +424,14 @@ impl Decoder {
         }
         self.next_request = now + 0.075;
         self.request = Some(key.clone());
-        let recording = Arc::clone(recording);
         let repaint = ctx.clone();
         self.task = Some(Task::start(&JOBS, Duration::from_secs(25), move |cancel| {
-            let result = recording.checked(cancel, |capture| decode(capture, &key, cancel));
+            let result = match source {
+                Source::Recording(recording) => {
+                    recording.checked(cancel, |capture| decode(capture, &key, cancel))
+                }
+                Source::Materialized(source) => decode(source.as_ref(), &key, cancel),
+            };
             repaint.request_repaint();
             result
         }));
@@ -461,7 +508,7 @@ impl Decoder {
     }
 }
 
-fn decode(capture: &Capture, request: &Key, cancel: &AtomicBool) -> Result<Decoded, String> {
+fn decode(capture: &dyn TraceInput, request: &Key, cancel: &AtomicBool) -> Result<Decoded, String> {
     let (window, inspected_until, events) = match request.inputs {
         Inputs::Spi(inputs) => return read_spi(capture, request.span.clone(), inputs, cancel),
         Inputs::I2c { clock, data } => {
@@ -490,7 +537,7 @@ fn decode(capture: &Capture, request: &Key, cancel: &AtomicBool) -> Result<Decod
 }
 
 fn read_spi(
-    capture: &Capture,
+    capture: &dyn TraceInput,
     span: Range<f64>,
     inputs: SpiInputs,
     cancel: &AtomicBool,
@@ -524,7 +571,7 @@ fn read_spi(
 }
 
 fn lane_window(
-    capture: &Capture,
+    capture: &dyn TraceInput,
     index: usize,
     requested: Range<f64>,
 ) -> Result<Range<f64>, String> {

@@ -1,4 +1,5 @@
 mod compute;
+mod decoders;
 
 use super::{inputs::Input, take_query_result, timeline};
 use crate::file_manager::{logic_view, preview_job::Task, scope_view::plot};
@@ -8,11 +9,12 @@ use little_clip_core::{
     BackgroundJobs,
     engineering::{analysis::SignalGraph, waveforms::display_value},
 };
-use std::{ops::Range, time::Duration};
+use std::{ops::Range, sync::Arc, time::Duration};
 
 #[derive(Default)]
 pub(super) struct Derived {
     editor: bool,
+    decoders: decoders::Decoders,
     draft: String,
     draft_error: Option<String>,
     rate: Option<f64>,
@@ -21,8 +23,8 @@ pub(super) struct Derived {
     show_output: bool,
     revision: u64,
     request_after: f64,
-    pending: Option<(Key, Task<Result<Frame, String>>)>,
-    accepted: Option<(Key, Result<Frame, String>)>,
+    pending: Option<(Key, Task<Result<Arc<Frame>, String>>)>,
+    accepted: Option<(Key, Result<Arc<Frame>, String>)>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -135,6 +137,7 @@ impl Derived {
         self.accepted = None;
         self.pending = None;
         self.request_after = 0.0;
+        self.decoders = decoders::Decoders::default();
     }
 
     pub(super) fn update(&mut self, ctx: &Context, inputs: &[Input], span: &Range<f64>) {
@@ -169,7 +172,7 @@ impl Derived {
             BackgroundJobs::global(),
             Duration::from_secs(20),
             move |cancel| {
-                let output = compute::calculate(&program, &input, span, rate, cancel);
+                let output = compute::calculate(&program, &input, span, rate, cancel).map(Arc::new);
                 repaint.request_repaint();
                 output
             },
@@ -226,12 +229,17 @@ impl Derived {
                 return None;
             }
         };
-        let height = (frame.lanes.len() as f32 * 48.0).max(100.0);
+        self.decoders.controls(ui, frame, span);
+        let annotations = if self.decoders.active() { 24.0 } else { 3.0 };
+        let height = (frame.lanes.len() as f32 * 48.0).max(100.0) + annotations;
         let (area, response) = ui.allocate_exact_size(
             vec2(ui.available_width(), height + 17.0),
             Sense::click_and_drag(),
         );
-        let rect = Rect::from_min_max(area.min + vec2(78.0, 3.0), area.max - vec2(9.0, 17.0));
+        let rect = Rect::from_min_max(
+            area.min + vec2(78.0, annotations),
+            area.max - vec2(9.0, 17.0),
+        );
         if let Some(requested) = timeline::navigate(ui.ctx(), rect, &response, span, true) {
             *span = timeline::fit(domain, requested, frame.step);
             ui.ctx().request_repaint();
@@ -240,8 +248,14 @@ impl Derived {
             .hover_pos()
             .filter(|p| rect.contains(*p))
             .map(|p| plot::at(rect, span, p.x));
-        frame.paint(ui, rect, span, pointed.or(probe), reference);
-        pointed
+        let cursor = pointed.or(self.decoders.cursor());
+        frame.paint(ui, rect, span, cursor.or(probe), reference);
+        if self.decoders.active() {
+            let band = Rect::from_min_max(pos2(rect.left(), area.top()), rect.right_top());
+            self.decoders.paint(ui, ui.painter(), band, span);
+            self.decoders.table(ui, span, pointed);
+        }
+        pointed.or(self.decoders.cursor())
     }
 }
 

@@ -97,7 +97,7 @@ fn y_at(rect: Rect, level: Option<Level>) -> f32 {
     }
 }
 
-pub(super) fn annotations(
+pub(in crate::file_manager) fn annotations(
     painter: &Painter,
     rect: Rect,
     span: &Range<f64>,
