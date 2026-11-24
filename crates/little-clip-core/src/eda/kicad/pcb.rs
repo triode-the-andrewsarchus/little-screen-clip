@@ -747,9 +747,10 @@ fn collect_pad(node: &SExp, fp_xf: [f64; 3], out: &mut Vec<PcbPrim>) -> Option<P
     let number = node.string_at(0).unwrap_or("").to_string();
     let pad_type = node.string_at(1).unwrap_or("smd").to_string();
     let shape = node.string_at(2).unwrap_or("rect").to_string();
-    let (lx, ly, lrot) = node.at().unwrap_or((0.0, 0.0, 0.0));
+    let (lx, ly, rot_deg) = node.at().unwrap_or((0.0, 0.0, 0.0));
+    // KiCad stores the pad center in footprint coordinates and its angle
+    // in board coordinates. The standalone footprint has a zero frame angle.
     let pos_mm = transform_point(fp_xf, [lx, ly]);
-    let rot_deg = fp_xf[2] + lrot;
     let size = xy_child(node, "size").unwrap_or([1.0, 1.0]);
     let drill = parse_pad_drill(node);
     let layers_vec: Vec<&str> = node
@@ -1091,6 +1092,29 @@ fn pcb_stroke(width: f64) -> Stroke {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_pad_center_and_angle_use_their_respective_coordinate_frames() {
+        let pcb = br#"(kicad_pcb
+            (footprint "Test:Pad" (at 10 20 90)
+                (pad "1" smd rect (at 2 0 90) (size 3 1) (layers "F.Cu"))
+                (pad "2" smd rect (at -2 0) (size 3 1) (layers "F.Cu"))))"#;
+        let doc = KicadPcbDocument::parse(pcb, &AtomicBool::new(false)).unwrap();
+        for (prim, expected) in doc
+            .primitives
+            .iter()
+            .zip([([10.0, 18.0], 90.0), ([10.0, 22.0], 0.0)])
+        {
+            let PcbPrim::Rect {
+                center, rot_deg, ..
+            } = prim
+            else {
+                panic!("expected a rectangular pad");
+            };
+            assert_eq!((*center, *rot_deg), expected);
+        }
+        assert_eq!(doc.primitives.len(), 2);
+    }
 
     #[test]
     fn kicad_pcb_and_footprint_extract_metrics_and_render() {
