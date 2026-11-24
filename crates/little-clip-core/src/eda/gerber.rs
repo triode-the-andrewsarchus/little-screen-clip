@@ -8,8 +8,8 @@ use crate::ImageThumbnail;
 use lib_gerber_edit::LayerCorners;
 use lib_gerber_edit::excellon_format::{ExcellonLayerData, parse_excellon};
 use lib_gerber_edit::flatten::{
-    Affine2, ExpandedObject, FlatLayer, FlattenOptions, GraphicsObject, Point, Polarity,
-    ResourceLimits, Segment, Shape,
+    Affine2, ExpandedObject, FlatLayer, FlattenOptions, GraphicsObject, Path as FlatPath, Point,
+    Polarity, ResourceLimits, Segment, Shape,
 };
 use lib_gerber_edit::gerber::GerberLayerData;
 use lib_gerber_edit::gerber_parser;
@@ -1162,6 +1162,18 @@ fn draw_expanded_object(
         }
         Shape::Path(path) => {
             let Some(image) = image else { return };
+            if let Aperture::Rectangle(rect) = &image.aperture
+                && rect.hole_diameter.is_none()
+                && path
+                    .segments
+                    .iter()
+                    .all(|segment| matches!(segment, Segment::Line { .. }))
+            {
+                if let Some(path) = rectangular_sweep(path, [rect.x * 0.5, rect.y * 0.5], &xf) {
+                    canvas.fill_path(&path, paint, FillRule::Winding, view, None);
+                }
+                return;
+            }
             let points: Vec<Point> = path
                 .to_polyline(ARC_TOLERANCE_MM)
                 .into_iter()
@@ -1209,6 +1221,43 @@ fn draw_expanded_object(
         }
         _ => {}
     }
+}
+
+fn rectangular_sweep(path: &FlatPath, [x, y]: Point, xf: &Affine2) -> Option<tiny_skia::Path> {
+    let mut builder = PathBuilder::new();
+    let mut from = path.start;
+    for to in path.segments.iter().map(Segment::end) {
+        // The rectangle's extreme corners across the direction of travel
+        // bound the connecting parallelogram. Endpoint rectangles complete the sweep.
+        let normal = [from[1] - to[1], to[0] - from[0]];
+        let corner = [x.copysign(normal[0]), y.copysign(normal[1])];
+        append_contour(
+            &mut builder,
+            [
+                [from[0] - corner[0], from[1] - corner[1]],
+                [to[0] - corner[0], to[1] - corner[1]],
+                [to[0] + corner[0], to[1] + corner[1]],
+                [from[0] + corner[0], from[1] + corner[1]],
+            ]
+            .map(|point| xf.apply(point)),
+            true,
+        );
+        from = to;
+    }
+    for [cx, cy] in std::iter::once(path.start).chain(path.segments.iter().map(Segment::end)) {
+        append_contour(
+            &mut builder,
+            [
+                [cx - x, cy - y],
+                [cx + x, cy - y],
+                [cx + x, cy + y],
+                [cx - x, cy + y],
+            ]
+            .map(|point| xf.apply(point)),
+            true,
+        );
+    }
+    builder.finish()
 }
 
 fn draw_fallback_dot(
@@ -1293,6 +1342,43 @@ fn append_contour(pb: &mut PathBuilder, points: impl IntoIterator<Item = Point>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_rectangular_draw_matches_the_equivalent_region() {
+        let cancel = AtomicBool::new(false);
+        let render = |body: &str| {
+            let source = format!("%MOMM*%\n%FSLAX26Y26*%\n%ADD10R,4X2*%\nD10*\n{body}M02*\n");
+            let doc =
+                GerberDocument::parse_gerber(Path::new("legacy.ger"), source.as_bytes(), &cancel)
+                    .unwrap();
+            assert_eq!(doc.bounds_mm, [1.0, 2.0, 13.0, 10.0]);
+            doc.render_thumbnail([160, 120], &cancel)
+                .unwrap()
+                .premultiplied_rgba
+        };
+        let region = render(concat!(
+            "G36*\nX1000000Y2000000D02*\nX5000000Y2000000D01*\n",
+            "X13000000Y8000000D01*\nX13000000Y10000000D01*\n",
+            "X9000000Y10000000D01*\nX1000000Y4000000D01*\nX1000000Y2000000D01*\nG37*\n",
+        ));
+        let forward = render("X3000000Y3000000D02*\nX11000000Y9000000D01*\n");
+        let reverse = render("X11000000Y9000000D02*\nX3000000Y3000000D01*\n");
+        assert!(
+            region
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| *pixel != BG_COLOR)
+        );
+        assert!(
+            forward == region,
+            "forward draw differed from the reference region"
+        );
+        assert!(
+            reverse == region,
+            "reverse draw differed from the reference region"
+        );
+    }
 
     #[test]
     fn gerber_bounds_include_repeated_flashes() {
