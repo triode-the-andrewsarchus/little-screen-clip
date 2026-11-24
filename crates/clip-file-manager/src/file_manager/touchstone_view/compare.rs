@@ -147,8 +147,12 @@ impl Viewer {
             .id_salt("RF comparison")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                if self.antenna_open() {
-                    let charts = (available_height - 154.0).max(265.0);
+                let linked = self.antenna_open();
+                if linked {
+                    let top = ui.cursor().min.y;
+                    self.details(ui, common, compatible);
+                    let readout_height = ui.cursor().min.y - top;
+                    let charts = (available_height - readout_height).max(244.0);
                     self.graphs(ui, (charts * 0.52).min(360.0), common, compatible, colors);
                     self.antenna_companions(ui, (charts * 0.46).min(290.0), colors);
                 } else {
@@ -166,7 +170,9 @@ impl Viewer {
                     );
                 }
                 self.match_band.finish_frame(ui);
-                self.details(ui, common, compatible);
+                if !linked {
+                    self.details(ui, common, compatible);
+                }
             });
     }
 
