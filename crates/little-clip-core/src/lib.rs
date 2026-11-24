@@ -74,8 +74,10 @@ pub use audio::{
     read_audio_metadata,
 };
 pub use clipboard::{
-    ClipboardError, copy_bytes_to_system_clipboard, copy_file_uris_to_system_clipboard,
-    copy_text_to_system_clipboard, file_uri_list,
+    ClipboardError, ClipboardSelection, ClipboardShortcutAction, SessionKind,
+    copy_bytes_to_system_clipboard, copy_file_uris_to_system_clipboard,
+    copy_text_to_system_clipboard, detect_session_kind, file_uri_list, list_system_clipboard_types,
+    read_system_clipboard_bytes, send_clipboard_shortcut,
 };
 pub use config::{AppConfig, AudioConfig, AudioSamplePosition, DisplayConfig, Model3dConfig};
 pub use ipc::{IpcRequest, IpcResponse};

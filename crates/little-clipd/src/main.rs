@@ -1144,12 +1144,10 @@ fn simulate_paste_action() {
         std::time::Duration::from_secs(2),
         || {
             std::thread::sleep(std::time::Duration::from_millis(150));
-            if little_clip_core::command_available("wtype").is_some() {
-                let _ = little_clip_core::CommandRequest::new("wtype")
-                    .args(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
-                    .discard_output()
-                    .run();
-            }
+            let _ = little_clip_core::send_clipboard_shortcut(
+                little_clip_core::ClipboardShortcutAction::Paste,
+                false,
+            );
         },
     );
 }
@@ -1472,17 +1470,20 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
         interval.tick().await;
 
         // 1. Check clipboard MIME types
-        let types_output = clipboard_events::read_with_tool(
-            little_clip_core::CommandRequest::new("wl-paste").arg("--list-types"),
-            16 * 1024,
-        )
-        .await;
+        let types_output = tokio::task::spawn_blocking(|| {
+            little_clip_core::list_system_clipboard_types(
+                little_clip_core::ClipboardSelection::Clipboard,
+            )
+            .ok()
+        })
+        .await
+        .ok()
+        .flatten();
 
-        let image_mime = types_output.and_then(|out| {
-            let types = String::from_utf8_lossy(&out);
+        let image_mime = types_output.and_then(|types| {
             let mut supported = types
-                .lines()
-                .map(str::trim)
+                .iter()
+                .map(|s| s.trim())
                 .filter(|mime| little_clip_core::item::image_extension_for_mime(mime).is_some());
             // Prefer PNG when offered, but request the actual advertised format.
             supported
@@ -1494,11 +1495,18 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
 
         if let Some(image_mime) = image_mime {
             // Attempt reading raw image bytes
-            if let Some(bytes) = clipboard_events::read_with_tool(
-                little_clip_core::CommandRequest::new("wl-paste").args(["-t", &image_mime]),
-                clipboard_events::TRANSFER_LIMIT as usize,
-            )
+            let requested = image_mime.clone();
+            if let Some(bytes) = tokio::task::spawn_blocking(move || {
+                little_clip_core::read_system_clipboard_bytes(
+                    little_clip_core::ClipboardSelection::Clipboard,
+                    Some(&requested),
+                    clipboard_events::TRANSFER_LIMIT as usize,
+                )
+                .ok()
+            })
             .await
+            .ok()
+            .flatten()
                 && !bytes.is_empty()
             {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1532,11 +1540,17 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
         }
 
         // 2. Fall back to text / file URI polling
-        if let Some(bytes) = clipboard_events::read_with_tool(
-            little_clip_core::CommandRequest::new("wl-paste").arg("-n"),
-            clipboard_events::TRANSFER_LIMIT as usize,
-        )
+        if let Some(bytes) = tokio::task::spawn_blocking(|| {
+            little_clip_core::read_system_clipboard_bytes(
+                little_clip_core::ClipboardSelection::Clipboard,
+                None,
+                clipboard_events::TRANSFER_LIMIT as usize,
+            )
+            .ok()
+        })
         .await
+        .ok()
+        .flatten()
             && let Ok(text) = String::from_utf8(bytes)
         {
             if ctx.is_self_copied_text(&text).await {

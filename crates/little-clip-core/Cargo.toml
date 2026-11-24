@@ -101,3 +101,4 @@ encoding_rs = "0.8"
 eda-view = { version = "0.1.0", default-features = false, features = ["schematic"] }
 dune-netlist = "0.8.1"
 dune-raw = "0.8.1"
+x11rb.workspace = true
