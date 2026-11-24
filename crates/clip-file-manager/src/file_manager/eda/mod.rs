@@ -1,6 +1,7 @@
 //! EDA / PCB fabrication, Excellon drill, centroid, HPGL, and KiCad strips and viewers.
 
 mod kicad;
+pub(super) mod raster_task;
 mod spice;
 
 use super::{
@@ -25,14 +26,17 @@ use little_clip_core::eda::{
     pick_place::{PickAndPlaceDocument, PlacementSide},
     raster_transform, read_document,
 };
-use little_clip_core::jobs::{BackgroundJobs, JobError, task::Task};
+use little_clip_core::jobs::{BackgroundJobs, task::Task};
 use little_clip_core::palette::AppPalette;
+use raster_task::{REPAINT_INTERVAL, RasterTask, poll_current};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::task::Poll;
+#[cfg(test)]
 use std::time::Duration;
 
 pub(super) fn is_gerber_gbr_file(path: &Path) -> bool {
@@ -556,19 +560,7 @@ fn render_center_panel(
     if let Some(request) = RasterRequest::for_document(doc, state) {
         state.raster.update(ui.ctx(), doc, request);
     }
-    if let Some((bounds, y_down)) = detail_geometry(doc)
-        && let Some(view) = RasterView::new(rect, state)
-        && let Some(mapping) = view.mapping(bounds, y_down)
-        && let Some(region) = detail_region(rect, &mapping, view.scale, ui.ctx().pixels_per_point())
-    {
-        let layers =
-            matches!(doc.as_ref(), Document::KicadPcb(_)).then(|| state.pcb_layers.clone());
-        state
-            .detail
-            .update(ui.ctx(), doc, RasterRequest::Detail(region, layers));
-    } else if state.detail.pending.is_some() || state.detail.display.is_some() {
-        state.detail.clear(ui.ctx());
-    }
+    update_detail(ui, rect, doc, state);
     let coord_text = paint_canvas_document(ui, rect, &response, doc, state, colors);
     match state.raster.display.as_ref().map(|(_, image)| image) {
         Some(Err(error)) => {
@@ -584,6 +576,28 @@ fn render_center_panel(
 
     if has_source {
         render_source_rows(ui, source_text_for(doc), state);
+    }
+}
+
+fn update_detail(ui: &egui::Ui, rect: Rect, doc: &Arc<Document>, state: &mut ViewerState) {
+    if let Some((bounds, y_down)) = detail_geometry(doc)
+        && let Some(view) = RasterView::new(rect, state)
+        && let Some(mapping) = view.mapping(bounds, y_down)
+        && let Some(region) = detail_region(
+            rect,
+            &mapping,
+            view.scale,
+            ui.ctx().pixels_per_point(),
+            None,
+        )
+    {
+        let layers =
+            matches!(doc.as_ref(), Document::KicadPcb(_)).then(|| state.pcb_layers.clone());
+        state
+            .detail
+            .update(ui.ctx(), doc, RasterRequest::Detail(region, layers));
+    } else if state.detail.pending.is_some() || state.detail.display.is_some() {
+        state.detail.clear(ui.ctx());
     }
 }
 
@@ -656,7 +670,7 @@ impl RasterRequest {
 
 #[derive(Default)]
 struct ViewerRaster {
-    pending: Option<(RasterRequest, Task<Result<egui::ColorImage, String>>)>,
+    pending: RasterTask<RasterRequest, egui::ColorImage>,
     display: Option<(RasterRequest, Result<TextureHandle, String>)>,
 }
 
@@ -677,34 +691,18 @@ impl ViewerRaster {
         {
             self.display = None;
         }
-        if let Some((request, task)) = &self.pending {
-            if *request != wanted {
-                task.token.store(true, Ordering::Relaxed);
-            }
-            let Some(result) = task.poll() else {
-                ctx.request_repaint_after(Duration::from_millis(16));
-                return;
-            };
-            let current = *request == wanted && !task.token.load(Ordering::Relaxed);
-            self.pending = None;
-            if current {
-                if matches!(result, Err(JobError::QueueFull)) {
-                    ctx.request_repaint_after(Duration::from_millis(50));
-                    return;
-                }
-                let image = result
-                    .map_err(|error| error.to_string())
-                    .and_then(|image| image);
-                if image.is_ok() || self.display.is_none() {
-                    self.display = Some((
-                        wanted,
-                        image.map(|image| {
-                            ctx.load_texture("eda-viewer", image, egui::TextureOptions::LINEAR)
-                        }),
-                    ));
-                }
+        match poll_current(ctx, &mut self.pending, &wanted) {
+            Poll::Pending => return,
+            Poll::Ready(Some(image)) => {
+                self.display = Some((
+                    wanted,
+                    image.map(|image| {
+                        ctx.load_texture("eda-viewer", image, egui::TextureOptions::LINEAR)
+                    }),
+                ));
                 return;
             }
+            Poll::Ready(None) => {}
         }
 
         let document = Arc::clone(doc);
@@ -715,7 +713,7 @@ impl ViewerRaster {
                 request.render(&document, cancelled)
             }),
         ));
-        ctx.request_repaint_after(Duration::from_millis(16));
+        ctx.request_repaint_after(REPAINT_INTERVAL);
     }
 
     fn clear(&mut self, ctx: &egui::Context) {
@@ -729,7 +727,7 @@ impl ViewerRaster {
             if task.poll().is_some() {
                 self.pending = None;
             } else {
-                ctx.request_repaint_after(Duration::from_millis(16));
+                ctx.request_repaint_after(REPAINT_INTERVAL);
             }
         }
     }
@@ -767,6 +765,10 @@ impl RasterMapping {
             )
     }
 
+    pub(super) fn region_rect(&self, region: RasterRegion) -> Rect {
+        Rect::from_two_pos(self.screen(region.origin), self.screen(region.far_corner()))
+    }
+
     pub(super) fn world(&self, pos: Pos2) -> [f64; 2] {
         let delta = pos - self.origin;
         [
@@ -800,10 +802,7 @@ fn paint_raster(
     let (bounds, y_down) = geometry?;
     let mapping = view.mapping(bounds, y_down)?;
     if let Some((RasterRequest::Detail(region, _), Ok(texture))) = &state.detail.display {
-        let detail = Rect::from_two_pos(
-            mapping.screen(region.origin),
-            mapping.screen(region.far_corner()),
-        );
+        let detail = mapping.region_rect(*region);
         painter.image(texture.id(), detail, uv, Color32::WHITE);
     }
     Some(mapping)
@@ -854,11 +853,12 @@ fn detail_geometry(doc: &Document) -> Option<([f64; 4], bool)> {
     }
 }
 
-fn detail_region(
+pub(super) fn detail_region(
     rect: Rect,
     mapping: &RasterMapping,
     base_scale: f32,
     dpr: f32,
+    tolerance_mm: Option<f64>,
 ) -> Option<RasterRegion> {
     if base_scale * dpr <= 1.4 {
         return None;
@@ -866,9 +866,11 @@ fn detail_region(
     // A quantized density and padded origin let nearby views share a tile.
     let ppm = mapping.points_per_mm[0];
     let side = f64::from(rect.width().max(rect.height())).max(1.0);
-    let cap = ppm * f64::from(RasterRegion::MAX_SIDE - 128) / side;
+    let extra = if tolerance_mm.is_some() { 70.0 } else { 0.0 };
+    let cap = (f64::from(RasterRegion::MAX_SIDE - 128) - extra)
+        / (side / ppm + 2.0 * tolerance_mm.unwrap_or_default());
     let pixels_per_mm = 2.0_f64.powf((ppm * f64::from(dpr)).min(cap).log2().floor());
-    if !pixels_per_mm.is_finite() || pixels_per_mm <= 0.0 {
+    if !pixels_per_mm.is_finite() || pixels_per_mm <= ppm / f64::from(base_scale) {
         return None;
     }
     let y_down = mapping.points_per_mm[1] > 0.0;
@@ -1510,6 +1512,7 @@ mod tests {
         let viewer = Viewer::load(&project, &cancel).unwrap();
         let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
         let mut harness = Harness::builder()
+            .allow_missing_glyphs()
             .with_size(vec2(780.0, 460.0))
             .build_ui_state(
                 move |ui, viewer: &mut Viewer| viewer.ui(ui, &mut false, &palette),
@@ -1546,7 +1549,7 @@ mod tests {
         for y_down in [true, false] {
             let mapping =
                 RasterMapping::new(base, [1200, 600], [-40.0, -20.0, 40.0, 20.0], y_down).unwrap();
-            let tile = detail_region(viewport, &mapping, 5.0, 2.0).unwrap();
+            let tile = detail_region(viewport, &mapping, 5.0, 2.0, None).unwrap();
             let rect = Rect::from_two_pos(
                 mapping.screen(tile.origin),
                 mapping.screen(tile.far_corner()),
@@ -1590,6 +1593,7 @@ R2 out 0 1k
         let viewer = Viewer::load(&path, &AtomicBool::new(false)).unwrap();
         let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
         let mut harness = Harness::builder()
+            .allow_missing_glyphs()
             .with_size(vec2(780.0, 460.0))
             .build_ui_state(
                 move |ui, viewer: &mut Viewer| viewer.ui(ui, &mut false, &palette),

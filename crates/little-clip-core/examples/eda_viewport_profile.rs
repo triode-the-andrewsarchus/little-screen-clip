@@ -1,12 +1,60 @@
 //! Manual end-to-end EDA raster timing on a representative local file.
 use little_clip_core::eda::{
-    Document, RasterRegion, kicad::PcbLayerBucket, parse_bytes, read_document,
+    Document, RasterRegion,
+    comparison::{compare_artwork, compare_artwork_region},
+    kicad::PcbLayerBucket,
+    parse_bytes, read_document,
 };
 use std::{fmt::Write, path::Path, sync::atomic::AtomicBool, time::Instant};
 
 fn main() {
     let cancel = AtomicBool::new(false);
-    for item in std::env::args_os().skip(1) {
+    let mut args = std::env::args_os().skip(1).peekable();
+    if args.peek().is_some_and(|arg| arg == "--artwork") {
+        args.next();
+        let files: Vec<_> = args.collect();
+        assert!(files.len() == 2, "pass two artwork files");
+        let docs = [&files[0], &files[1]].map(|path| {
+            let Document::Gerber(doc) = read_document(Path::new(path), &cancel).unwrap() else {
+                panic!("expected Gerber or Excellon artwork");
+            };
+            doc
+        });
+        for tolerance in [0.0, 0.05] {
+            let start = Instant::now();
+            let result = compare_artwork([&docs[0], &docs[1]], tolerance, &cancel).unwrap();
+            eprintln!(
+                "{} mm tolerance: {} additions, {} removals at {} mm/px in {:?}",
+                tolerance,
+                result.added_pixels,
+                result.removed_pixels,
+                result.pitch_mm,
+                start.elapsed()
+            );
+        }
+        let bounds = docs[0].bounds_mm;
+        let density = 128.0;
+        let region = RasterRegion {
+            origin: [(bounds[0] + bounds[2]) * 0.5, (bounds[1] + bounds[3]) * 0.5],
+            size: [1100, 800],
+            pixels_per_mm: density,
+            y_down: false,
+        };
+        for tolerance in [0.0, 0.05] {
+            let start = Instant::now();
+            let detail =
+                compare_artwork_region([&docs[0], &docs[1]], region, tolerance, &cancel).unwrap();
+            eprintln!(
+                "Detail with {tolerance} mm tolerance: {} additions, {} removals at {} mm/px in {:?}",
+                detail.added_pixels,
+                detail.removed_pixels,
+                detail.pitch_mm,
+                start.elapsed()
+            );
+        }
+        return;
+    }
+    for item in args {
         let path = Path::new(&item);
         let start = Instant::now();
         let doc = read_document(path, &cancel).unwrap();
@@ -31,6 +79,20 @@ fn main() {
 }
 
 fn profile(doc: &Document, cancel: &AtomicBool) {
+    if let Document::SpiceRaw(raw) = doc {
+        for plot in &raw.plots {
+            let trace = plot
+                .traces
+                .iter()
+                .find(|trace| trace.name.eq_ignore_ascii_case("v(out)"));
+            eprintln!(
+                "{}: {} rows, V(out) final {:?}",
+                plot.plot_name,
+                plot.total_points,
+                trace.and_then(|trace| trace.samples().last().map(|sample| sample.value))
+            );
+        }
+    }
     for size in [[1400, 1000], [2048, 2048]] {
         let start = Instant::now();
         let image = doc.render_thumbnail(size, cancel).unwrap();

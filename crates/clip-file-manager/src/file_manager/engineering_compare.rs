@@ -48,6 +48,7 @@ struct Input {
 
 pub(super) struct Viewer {
     sources: Arc<Vec<Input>>,
+    base: usize,
     other: usize,
     offset: u64,
     scanned_to: u64,
@@ -115,6 +116,7 @@ impl Viewer {
         };
         Ok(Self {
             sources: Arc::new(sources),
+            base: 0,
             other: 1,
             offset: 0,
             scanned_to: 0,
@@ -154,7 +156,7 @@ impl Viewer {
             return;
         }
         self.toolbar(ui);
-        let format = self.sources[0].eda;
+        let format = self.sources[self.base].eda;
         let artwork_pair = format == self.sources[self.other].eda && format.is_some_and(is_artwork);
         if let Some(note) = &self.note {
             ui.label(note);
@@ -180,19 +182,20 @@ impl Viewer {
         if self.mode != Mode::Artwork {
             self.artwork.cancel_pending();
         }
-        let pair = [&self.sources[0], &self.sources[self.other]];
+        let pair = [&self.sources[self.base], &self.sources[self.other]];
         match self.mode {
             Mode::Sources => self.summaries(ui),
             Mode::Fields => self.fields(ui),
             Mode::Artwork => self.artwork.ui(
                 ui,
-                self.other,
+                [self.base, self.other],
                 pair.map(|input| &input.file),
                 pair.map(|input| input.title.as_str()),
             ),
             Mode::Memory => {
                 if let Some(tags) = &mut self.tags {
-                    let names = [0, self.other].map(|index| self.sources[index].title.as_str());
+                    let names =
+                        [self.base, self.other].map(|index| self.sources[index].title.as_str());
                     tags.ui(
                         ui,
                         names,
@@ -207,35 +210,14 @@ impl Viewer {
         ui.horizontal_wrapped(|ui| {
             ui.strong("Compare files");
             if self.sources.len() > 2 && self.task.is_none() {
-                let before = self.other;
-                egui::ComboBox::from_id_salt("comparison pair")
-                    .selected_text(&self.sources[self.other].title)
-                    .show_ui(ui, |ui| {
-                        for (index, source) in self.sources.iter().enumerate().skip(1) {
-                            ui.selectable_value(&mut self.other, index, &source.title);
-                        }
-                    });
-                if self.other != before {
-                    self.offset = 0;
-                    self.scanned_to = 0;
-                    self.note = None;
-                    self.refresh_fields();
-                    let pair = [0, self.other].map(|index| self.sources[index].memory());
-                    self.tags = tag_memory::View::compare(pair);
-                    if self.tags.is_none() && self.mode == Mode::Memory {
-                        self.mode = Mode::Sources;
-                    }
-                    if self.mode == Mode::Artwork
-                        && self.sources[0].eda != self.sources[self.other].eda
-                    {
-                        self.mode = Mode::Sources;
-                    }
-                }
+                self.select_pair(ui);
             }
             if self.mode == Mode::Artwork {
                 return;
             }
-            let max = self.sources[0].size.max(self.sources[self.other].size);
+            let max = self.sources[self.base]
+                .size
+                .max(self.sources[self.other].size);
             ui.label("Byte offset");
             if ui
                 .add_enabled(
@@ -277,6 +259,36 @@ impl Viewer {
         });
     }
 
+    fn select_pair(&mut self, ui: &mut Ui) {
+        let before = [self.base, self.other];
+        let artwork = self
+            .sources
+            .iter()
+            .all(|source| source.eda.is_some_and(is_artwork));
+        if artwork {
+            select_source(ui, "A", &self.sources, &mut self.base, self.other);
+        }
+        select_source(ui, "B", &self.sources, &mut self.other, self.base);
+        if before == [self.base, self.other] {
+            return;
+        }
+        self.offset = 0;
+        self.scanned_to = 0;
+        self.note = None;
+        self.refresh_fields();
+        let pair = [self.base, self.other].map(|index| &self.sources[index]);
+        self.tags = tag_memory::View::compare(pair.map(Input::memory));
+        if self.mode == Mode::Memory && self.tags.is_none() {
+            self.mode = Mode::Sources;
+        }
+        if self.mode == Mode::Artwork && pair[0].eda != pair[1].eda {
+            self.mode = Mode::Sources;
+        }
+        if artwork && pair[0].eda == pair[1].eda && self.mode == Mode::Sources {
+            self.mode = Mode::Artwork;
+        }
+    }
+
     fn poll(&mut self, ui: &Ui) {
         if let Some(result) = self.task.as_ref().and_then(Task::poll) {
             self.task = None;
@@ -285,7 +297,7 @@ impl Viewer {
                 .and_then(|value| value)
             {
                 Ok(Action::Bytes { offset, pair }) => {
-                    let labels = [0, self.other]
+                    let labels = [self.base, self.other]
                         .map(|index| format!("{} · from 0x{offset:X}", self.sources[index].title));
                     let [a, b] = *pair;
                     let [left, right] = labels;
@@ -311,7 +323,7 @@ impl Viewer {
 
     fn start(&mut self, ui: &Ui, find: bool) {
         let sources = self.sources.clone();
-        let other = self.other;
+        let [base, other] = [self.base, self.other];
         let start = if find {
             self.scanned_to.max(self.offset)
         } else {
@@ -322,7 +334,7 @@ impl Viewer {
             BackgroundJobs::global(),
             Duration::from_secs(45),
             move |cancel| {
-                let result = compare(&sources[0], &sources[other], start, find, cancel);
+                let result = compare(&sources[base], &sources[other], start, find, cancel);
                 repaint.request_repaint();
                 result
             },
@@ -331,15 +343,15 @@ impl Viewer {
 
     fn refresh_fields(&mut self) {
         self.keys = diff_keys(
-            &self.sources[0].facts,
+            &self.sources[self.base].facts,
             &self.sources[self.other].facts,
             self.show_matches,
         );
     }
 
     fn fields(&self, ui: &mut Ui) {
-        if self.sources[0].eda == Some(little_clip_core::eda::EdaFormat::SpiceRaw)
-            && self.sources[self.other].eda == self.sources[0].eda
+        if self.sources[self.base].eda == Some(little_clip_core::eda::EdaFormat::SpiceRaw)
+            && self.sources[self.other].eda == self.sources[self.base].eda
         {
             ui.weak("Sweeps are matched by source order within each analysis and signal. Values summarize retained samples.");
         }
@@ -347,7 +359,7 @@ impl Viewer {
             ui.weak("No differences in the decoded fields shown here.");
             return;
         }
-        let a = &self.sources[0];
+        let a = &self.sources[self.base];
         let b = &self.sources[self.other];
         let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
         let width = ui.available_width();
@@ -519,6 +531,21 @@ impl Viewer {
         }
         bounds
     }
+}
+
+fn select_source(ui: &mut Ui, side: &str, sources: &[Input], selected: &mut usize, exclude: usize) {
+    egui::ComboBox::from_label(side)
+        .selected_text(&sources[*selected].title)
+        .show_ui(ui, |ui| {
+            for (index, source) in sources
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != exclude)
+            {
+                ui.selectable_value(selected, index, &source.title)
+                    .on_hover_text(super::display_path(source.file.path()));
+            }
+        });
 }
 
 impl Input {
@@ -710,6 +737,7 @@ mod tests {
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut harness = Harness::builder()
+            .allow_missing_glyphs()
             .with_size(vec2(880.0, 550.0))
             .build_ui_state(
                 move |ui, viewer: &mut Viewer| viewer.ui(ui, &mut false, &palette),
@@ -732,12 +760,27 @@ mod tests {
         let coord = harness
             .get_by_label_contains("X ")
             .accesskit_node()
-            .label()
+            .value()
             .unwrap()
             .to_owned();
         harness.get_by_label("B").click();
         harness.hover_at(pos2(420.0, 310.0));
         harness.run();
         assert!(harness.query_by_label(&coord).is_some(), "{coord}");
+
+        harness.event(clip_ui::test_support::scroll(vec2(0.0, 1500.0)));
+        harness.step();
+        assert!(harness.query_by_label("Overview").is_some());
+        assert!(harness.query_by_label_contains("Added ").is_some());
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        while harness.query_by_label_contains("Detail ").is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "detail worker did not publish"
+            );
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(harness.query_by_label("Overview").is_some());
     }
 }

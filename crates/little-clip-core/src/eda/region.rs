@@ -14,6 +14,13 @@ pub struct RasterRegion {
 impl RasterRegion {
     pub const MAX_SIDE: u32 = 1600;
 
+    /// Pixel margin for a physical edge search and antialiasing.
+    pub fn halo_pixels(tolerance_mm: f64, pixels_per_mm: f64) -> Option<u32> {
+        let radius = (tolerance_mm * pixels_per_mm).ceil();
+        (radius.is_finite() && (0.0..f64::from(Self::MAX_SIDE / 2 - 2)).contains(&radius))
+            .then(|| radius as u32 + 2)
+    }
+
     /// World coordinates of the opposite corner of the raster.
     pub fn far_corner(self) -> [f64; 2] {
         let direction = if self.y_down { 1.0 } else { -1.0 };
@@ -23,7 +30,7 @@ impl RasterRegion {
         ]
     }
 
-    pub(super) fn canvas(self, bg: Color) -> Result<(Pixmap, Transform, f32), String> {
+    pub(super) fn transform(self) -> Result<Transform, String> {
         let [w, h] = self.size;
         let density = self.pixels_per_mm;
         if w == 0
@@ -47,6 +54,12 @@ impl RasterRegion {
         if !transform.is_valid() {
             return Err("Invalid EDA detail coordinates".into());
         }
+        Ok(transform)
+    }
+
+    pub(super) fn canvas(self, bg: Color) -> Result<(Pixmap, Transform, f32), String> {
+        let transform = self.transform()?;
+        let [w, h] = self.size;
         let mut pixmap = Pixmap::new(w, h)
             .ok_or_else(|| "Could not allocate EDA detail viewport".to_string())?;
         pixmap.fill(bg);
