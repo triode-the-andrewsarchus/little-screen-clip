@@ -204,7 +204,7 @@ impl RawAnalysisKind {
 
     fn classify(plot_name: &str, is_complex: bool, npoints: usize) -> Self {
         let lower = plot_name.to_ascii_lowercase();
-        if lower.contains("operating point") || npoints <= 1 {
+        if lower.contains("operating point") {
             Self::DcOperatingPoint
         } else if lower.contains("transient") {
             Self::Transient
@@ -214,6 +214,8 @@ impl RawAnalysisKind {
             Self::DcSweep
         } else if lower.contains("noise") {
             Self::Noise
+        } else if npoints == 1 {
+            Self::DcOperatingPoint
         } else {
             Self::Other
         }
@@ -243,6 +245,29 @@ pub struct SpiceRawPlot {
     pub x_unit: String,
     pub x_values: Vec<f64>,
     pub traces: Vec<SpiceRawTrace>,
+}
+
+impl SpiceRawPlot {
+    fn include_first_operating_point_signal(mut self) -> Self {
+        if self.kind == RawAnalysisKind::DcOperatingPoint
+            && !self.is_complex
+            && let Some(&value) = self.x_values.first()
+        {
+            self.traces.truncate(MAX_DECODED_TRACES - 1);
+            self.traces.insert(
+                0,
+                SpiceRawTrace {
+                    name: std::mem::take(&mut self.x_name),
+                    unit_type: std::mem::take(&mut self.x_unit),
+                    min: value,
+                    max: value,
+                    values: std::mem::take(&mut self.x_values),
+                    phase_deg: None,
+                },
+            );
+        }
+        self
+    }
 }
 
 /// Decoded SPICE / LTspice `.raw` simulation waveform document.
@@ -329,7 +354,7 @@ impl SpiceRawDocument {
         draw_scope_grid(&mut pixmap);
 
         if let Some(plot) = self.primary() {
-            if plot.kind == RawAnalysisKind::DcOperatingPoint || plot.x_values.len() <= 1 {
+            if plot.kind == RawAnalysisKind::DcOperatingPoint {
                 draw_operating_point_bars(&mut pixmap, plot);
             } else {
                 draw_waveform_curves(&mut pixmap, plot, cancelled)?;
@@ -1105,6 +1130,7 @@ fn convert_single_dune_plot(plot: dune_raw::Plot) -> SpiceRawPlot {
         x_values,
         traces,
     }
+    .include_first_operating_point_signal()
 }
 
 fn extract_real_traces(
@@ -1470,7 +1496,8 @@ fn build_plot_from_vecs(
         x_unit,
         x_values,
         traces,
-    })
+    }
+    .include_first_operating_point_signal())
 }
 
 fn draw_scope_grid(pixmap: &mut Pixmap) {
@@ -1813,6 +1840,21 @@ Binary:
 
         let fake_tiff = b"II*\0\x08\0\0\0\x01\0\x00\x01\x03\0\x01\0\0\0";
         assert!(!is_spice_raw_bytes(fake_tiff));
+    }
+
+    #[test]
+    fn operating_point_keeps_the_first_voltage_as_a_signal() {
+        let raw = b"Title: Operating point\nPlotname: Operating Point\nFlags: real\nNo. Variables: 2\nNo. Points: 1\nVariables:\n0 V(in) voltage\n1 V(out) voltage\nValues:\n0 5 3.3\n";
+        let doc = SpiceRawDocument::parse(raw, &AtomicBool::new(false)).unwrap();
+        let plot = doc.primary().unwrap();
+        assert_eq!(plot.kind, RawAnalysisKind::DcOperatingPoint);
+        let values: Vec<_> = plot
+            .traces
+            .iter()
+            .map(|t| (t.name.as_str(), t.values[0]))
+            .collect();
+        assert_eq!(values, [("V(in)", 5.0), ("V(out)", 3.3)]);
+        assert!(plot.x_values.is_empty());
     }
 
     #[test]

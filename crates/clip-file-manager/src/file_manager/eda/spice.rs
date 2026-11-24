@@ -115,10 +115,14 @@ pub(super) fn render_raw_details(ui: &mut Ui, raw: &SpiceRawDocument, state: &mu
     if !plot.plot_name.is_empty() {
         ui.add(egui::Label::new(&plot.plot_name).wrap());
     }
-    ui.label(format!(
-        "Points: {} · Vars: {} · Axis: {}",
-        plot.total_points, plot.total_vars, plot.x_name
-    ));
+    if plot.x_name.is_empty() {
+        ui.label(format!("{} signals", plot.total_vars));
+    } else {
+        ui.label(format!(
+            "Points: {} · Vars: {} · Axis: {}",
+            plot.total_points, plot.total_vars, plot.x_name
+        ));
+    }
     if plot.is_complex {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut state.show_phase, false, "Magnitude (dB)");
@@ -193,11 +197,14 @@ pub(super) fn paint_raw_center(
     let Some(plot) = raw.plots.get(state.selected_plot).or_else(|| raw.primary()) else {
         return "Empty SPICE rawfile".into();
     };
-    if plot.kind == RawAnalysisKind::DcOperatingPoint || plot.x_values.len() <= 1 {
-        paint_op_table(&painter, rect, plot, colors);
+    if plot.kind == RawAnalysisKind::DcOperatingPoint {
+        paint_op_table(&painter, rect, plot, state, colors);
         return format!("{} · {} signals", plot.kind.label(), plot.traces.len());
     }
 
+    if plot.x_values.len() < 2 {
+        return format!("{} · {} point", plot.kind.label(), plot.total_points);
+    }
     let (x_mapped, xmin, xmax, log_x) = compute_x_mapping(plot);
     let (ymin, ymax) = compute_y_bounds(plot, state);
     let pad = 28.0_f32;
@@ -391,10 +398,17 @@ fn paint_op_table(
     painter: &egui::Painter,
     rect: Rect,
     plot: &SpiceRawPlot,
+    state: &ViewerState,
     colors: WorkbenchColors,
 ) {
     let mut y = rect.top() + 14.0;
-    for (idx, tr) in plot.traces.iter().take(24).enumerate() {
+    for (idx, tr) in plot
+        .traces
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !state.hidden_traces.contains(i))
+        .take(24)
+    {
         let [r, g, b] = TRACE_PALETTE[idx % TRACE_PALETTE.len()];
         let val = tr.values.first().copied().unwrap_or(0.0);
         painter.text(
