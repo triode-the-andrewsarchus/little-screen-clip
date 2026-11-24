@@ -63,6 +63,10 @@ impl ThresholdInput {
 }
 
 impl TraceInput for ThresholdInput {
+    fn validate(&self, cancel: &AtomicBool) -> Result<(), String> {
+        self.recording.checked(cancel, |_| Ok(()))
+    }
+
     fn time_bounds(&self, index: usize) -> Option<Range<f64>> {
         let lane = self.config.lanes.get(index)?;
         Some(lane.start_seconds..lane.end_seconds)

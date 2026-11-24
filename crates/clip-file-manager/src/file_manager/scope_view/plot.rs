@@ -143,6 +143,12 @@ pub(in crate::file_manager) fn draw_envelope(
     let width = (rect.width() * painter.ctx().pixels_per_point())
         .ceil()
         .clamp(1.0, 2048.0) as usize;
+    if envelope.step > count.div_ceil(width as u64) {
+        draw_native_bins(
+            painter, rect, span, channel, envelope, samples, bounds, stroke,
+        );
+        return;
+    }
     let bins = envelope.columns(samples, width);
     let dt = count as f64 / bins.len().max(1) as f64;
     let mut mesh = egui::Mesh::default();
@@ -173,6 +179,50 @@ pub(in crate::file_manager) fn draw_envelope(
     }
     painter.add(mesh);
     finish_segment(&mut line);
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "native bins share the waveform axes"
+)]
+fn draw_native_bins(
+    painter: &Painter,
+    rect: Rect,
+    span: &Range<f64>,
+    channel: &Channel,
+    envelope: &Envelope,
+    samples: Range<u64>,
+    bounds: Peak,
+    color: Color32,
+) {
+    let first = samples.start.saturating_sub(envelope.start) / envelope.step;
+    let end = samples
+        .end
+        .saturating_sub(envelope.start)
+        .div_ceil(envelope.step);
+    let mut mesh = egui::Mesh::default();
+    let ink = color.gamma_multiply(if envelope.exact { 0.48 } else { 0.28 });
+    for index in first..end.min(envelope.peaks.len() as u64) {
+        let peak = envelope.peaks[index as usize];
+        if !peak.valid() {
+            continue;
+        }
+        let start = envelope.start + index * envelope.step;
+        let end = start
+            .saturating_add(envelope.step)
+            .min(channel.sample_count);
+        let left = x_at(rect, span, channel.time_at(start)).max(rect.left());
+        let right = x_at(rect, span, channel.time_at(end)).min(rect.right());
+        let top = y_at(rect, bounds, peak.max);
+        let bottom = y_at(rect, bounds, peak.min).max(top + 0.8);
+        if left < right {
+            mesh.add_colored_rect(
+                Rect::from_min_max(pos2(left, top), pos2(right, bottom)),
+                ink,
+            );
+        }
+    }
+    painter.add(mesh);
 }
 
 pub(in crate::file_manager) fn draw_raw(

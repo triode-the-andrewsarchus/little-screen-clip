@@ -1,5 +1,6 @@
 use super::{Arc, Digital, Recording, Ui};
 use little_clip_core::engineering::analysis::{Cutoffs, MiddleBand, Threshold};
+use std::ops::Range;
 
 #[derive(Clone, Copy)]
 pub(super) struct ThresholdDraft {
@@ -17,8 +18,18 @@ impl Digital {
         }
     }
 
-    pub(in crate::file_manager) fn decoder_buttons(&mut self, ui: &mut Ui) {
-        if self.panel.decoder_buttons(ui, &self.config.lanes) {
+    pub(in crate::file_manager) fn decoder_buttons(&mut self, ui: &mut Ui, span: &mut Range<f64>) {
+        let mut use_sigrok = false;
+        if self
+            .panel
+            .decoder_buttons_with(ui, &self.config.lanes, |ui| {
+                if ui.button("Sigrok catalog…").clicked() {
+                    use_sigrok = true;
+                    ui.close();
+                }
+            })
+        {
+            self.close_sigrok(span);
             self.open = true;
             self.cursor = None;
             for index in self.panel.channels().into_iter().flatten() {
@@ -26,6 +37,12 @@ impl Digital {
                     *shown = true;
                 }
             }
+        }
+        if use_sigrok {
+            self.panel.exit_inspection(span);
+            self.panel.suspend_all();
+            self.sigrok.open(ui.ctx());
+            self.open = true;
         }
     }
 

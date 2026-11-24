@@ -8,7 +8,8 @@ use super::{JOBS, PlottedChannel, Task, display_value, plot, timeline};
 use crate::file_manager::{
     logic_view::{
         plot as logic_plot,
-        protocols::{EventAction, Panel, TraceInput, event_label},
+        protocols::{EventAction, Panel, Source, TraceInput, event_label},
+        sigrok,
     },
     signal_view::take_query_result,
 };
@@ -40,6 +41,9 @@ pub(super) struct Digital {
     open: bool,
     threshold_draft: Option<ThresholdDraft>,
     panel: Panel,
+    sigrok: sigrok::Panel,
+    sigrok_event: Option<Range<f64>>,
+    sigrok_revision: u64,
     pending: Option<(Window, Task<Result<Rows, String>>)>,
     ready: Option<(Window, Result<Rows, String>)>,
     retry_at: f64,
@@ -56,6 +60,9 @@ impl Digital {
             open: false,
             threshold_draft: None,
             panel: Panel::default(),
+            sigrok: sigrok::Panel::default(),
+            sigrok_event: None,
+            sigrok_revision: 0,
             pending: None,
             ready: None,
             retry_at: 0.0,
@@ -71,6 +78,14 @@ impl Digital {
         self.open.then_some(self.cursor).flatten()
     }
 
+    pub(super) fn result_height(&self) -> f32 {
+        if self.open && self.sigrok.active {
+            154.0
+        } else {
+            0.0
+        }
+    }
+
     pub(super) fn suspend(&mut self) {
         self.pending = None;
         self.panel.suspend_all();
@@ -81,6 +96,13 @@ impl Digital {
     }
 
     fn event_inputs(&self, span: &Range<f64>) -> Option<(Range<f64>, Vec<usize>)> {
+        if self.sigrok.active {
+            let event = self
+                .sigrok_event
+                .as_ref()
+                .filter(|_| self.sigrok_revision == self.config.revision)?;
+            return Some((event.clone(), self.sigrok.channels().collect()));
+        }
         let event = self.event(span)?;
         Some((event.time.clone(), self.panel.channels()?))
     }
@@ -111,20 +133,29 @@ impl Digital {
         span: &mut Range<f64>,
         domain: &Range<f64>,
         clock: Clock,
+        selection: Option<&Range<f64>>,
     ) {
         if !self.open {
             self.suspend();
+            self.close_sigrok(span);
             return;
         }
-        if self.panel.controls(ui, &self.config.lanes) {
-            self.cursor = None;
-        }
-        self.panel.return_controls(ui, span);
         let input = self.input(recording.clone());
-        self.panel
-            .update_all_materialized(ui.ctx(), span, input.revision(), input.clone());
+        if self.sigrok.active {
+            self.sigrok_controls(ui, &input, span, selection);
+        } else {
+            if self.panel.controls(ui, &self.config.lanes) {
+                self.cursor = None;
+            }
+            self.panel.return_controls(ui, span);
+            self.panel
+                .update_all_materialized(ui.ctx(), span, input.revision(), input.clone());
+        }
         self.update_preview(ui, span, input);
         self.lanes(ui, recording, span, domain, clock);
+        if self.sigrok.active {
+            return;
+        }
         if let Some((index, action)) = self.annotations(ui, span) {
             self.panel.select_decoder(Some(index));
             self.cursor = Some(self.panel.follow_event(action, span, domain, 0.0));
@@ -156,12 +187,79 @@ impl Digital {
         if !self.open {
             return;
         }
+        if self.sigrok.active {
+            if self.sigrok_revision == self.config.revision
+                && let Some((time, step)) = self.sigrok.table(ui, clock)
+            {
+                let origin = sigrok::View {
+                    span: span.clone(),
+                    selection: None,
+                    cursor: self.cursor,
+                };
+                *span = self.sigrok.visit(origin, &time, domain, step);
+                self.cursor = Some(time.start);
+                self.sigrok_event = Some(time);
+                ui.ctx().request_repaint();
+            }
+            return;
+        }
         if let Some(action) = self
             .panel
             .table(ui, span, probe.or(self.cursor), None, clock)
         {
             self.cursor = Some(self.panel.follow_event(action, span, domain, 0.0));
             ui.ctx().request_repaint();
+        }
+    }
+
+    fn sigrok_controls(
+        &mut self,
+        ui: &mut Ui,
+        input: &Arc<ThresholdInput>,
+        span: &mut Range<f64>,
+        selection: Option<&Range<f64>>,
+    ) {
+        if self.sigrok_revision != input.revision() {
+            let origin = self.sigrok.invalidate();
+            self.restore_sigrok(origin, span);
+            self.sigrok_revision = input.revision();
+        }
+        let (origin, close) = ui
+            .horizontal_wrapped(|ui| {
+                ui.strong("Sigrok");
+                (
+                    self.sigrok.return_controls(ui),
+                    ui.small_button("Close Sigrok").clicked(),
+                )
+            })
+            .inner;
+        if close {
+            self.close_sigrok(span);
+            return;
+        }
+        self.restore_sigrok(origin, span);
+        self.sigrok.controls(
+            ui,
+            input.lanes(),
+            || Source::Materialized(input.clone()),
+            span,
+            selection,
+        );
+    }
+
+    fn close_sigrok(&mut self, span: &mut Range<f64>) {
+        if self.sigrok.active {
+            let origin = self.sigrok.close();
+            self.restore_sigrok(origin, span);
+            self.sigrok_event = None;
+        }
+    }
+
+    fn restore_sigrok(&mut self, origin: Option<sigrok::View>, span: &mut Range<f64>) {
+        if let Some(origin) = origin {
+            *span = origin.span;
+            self.cursor = origin.cursor;
+            self.sigrok_event = None;
         }
     }
 

@@ -3,14 +3,24 @@ use egui::{Color32, Painter, Rect, Ui, pos2};
 use little_clip_core::engineering::waveforms::Peak;
 use std::ops::Range;
 
+pub(super) fn instrument_channel(name: &str) -> bool {
+    matches!(name, "Current range" | "Current LSB" | "Voltage LSB")
+}
+
 impl Viewer {
     pub(super) fn channel_controls(&mut self, ui: &mut Ui) {
+        if self.recording.power_recording()
+            && self
+                .overview
+                .channels
+                .iter()
+                .any(|channel| instrument_channel(&channel.name))
+        {
+            self.power_channel_controls(ui);
+            return;
+        }
         let spacing = ui.spacing().item_spacing.x;
-        let name_width = if self.recording.power_recording() {
-            104.0
-        } else {
-            141.0
-        };
+        let name_width = 141.0;
         let offset_width = if self.stacked { 0.0 } else { 189.0 };
         let group_width = name_width + 52.0 + offset_width + 2.0 * spacing + 7.0;
         let columns = ((ui.available_width() + spacing) / group_width)
@@ -30,6 +40,28 @@ impl Viewer {
                     self.channel_rows(ui, rows, columns, name_width);
                 });
         }
+    }
+
+    fn power_channel_controls(&mut self, ui: &mut Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for index in 0..self.overview.channels.len() {
+                if !instrument_channel(&self.overview.channels[index].name) {
+                    self.channel_buttons(ui, index, 104.0);
+                }
+            }
+            ui.menu_button("Instrument channels", |ui| {
+                for index in 0..self.overview.channels.len() {
+                    let name = &self.overview.channels[index].name;
+                    if instrument_channel(name)
+                        && ui
+                            .add(egui::Button::selectable(self.visible[index], name))
+                            .clicked()
+                    {
+                        self.toggle_channel_visibility(index);
+                    }
+                }
+            });
+        });
     }
 
     fn channel_rows(&mut self, ui: &mut Ui, rows: Range<usize>, columns: usize, name_width: f32) {
@@ -64,19 +96,13 @@ impl Viewer {
             {
                 self.activate_channel(index);
             }
-            let visible = &mut self.visible[index];
-            let action = if *visible { "Hide" } else { "Show" };
+            let action = if self.visible[index] { "Hide" } else { "Show" };
             if ui
                 .add_sized([52.0, height], egui::Button::new(action))
                 .on_hover_text(format!("{action} {}", self.overview.channels[index].name))
                 .clicked()
             {
-                *visible = !*visible;
-                if !*visible
-                    && let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index))
-                {
-                    spectrum.suspend();
-                }
+                self.toggle_channel_visibility(index);
             }
             if !self.stacked {
                 let trace = ScopeTrace::Recorded(index);
@@ -89,6 +115,15 @@ impl Viewer {
             }
         });
         ui.add_space(7.0);
+    }
+
+    fn toggle_channel_visibility(&mut self, index: usize) {
+        self.visible[index] = !self.visible[index];
+        if !self.visible[index]
+            && let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index))
+        {
+            spectrum.suspend();
+        }
     }
 
     pub(super) fn offset_control(&mut self, ui: &mut Ui, index: usize, bounds: Peak) {

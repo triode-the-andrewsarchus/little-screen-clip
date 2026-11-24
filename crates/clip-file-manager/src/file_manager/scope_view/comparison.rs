@@ -1,8 +1,4 @@
-use super::{
-    Copies, Link, PlottedChannel, ScopeTrace, Viewer,
-    lanes::{self, Lane},
-    plot, timeline,
-};
+use super::{Copies, Link, PlottedChannel, ScopeTrace, Viewer, lanes::Lane, plot, timeline};
 use egui::{Rect, Sense, Ui};
 use little_clip_core::engineering::waveforms::Peak;
 
@@ -76,6 +72,19 @@ impl Viewer {
         let handle = heading.add(egui::Label::new("↕").sense(Sense::drag()));
         handle.dnd_set_drag_payload(key);
         handle.on_hover_text("Drag to reorder traces");
+        let label = egui::RichText::new(self.channel_label(index));
+        let label = if active { label } else { label.color(color) };
+        let selected = heading
+            .add(egui::Button::selectable(active, label).small())
+            .on_hover_text("Use this trace for analysis and export")
+            .clicked();
+        let source_width = (heading.available_width() - 128.0).clamp(48.0, 224.0);
+        heading
+            .add_sized(
+                [source_width, heading.spacing().interact_size.y],
+                egui::Label::new(egui::RichText::new(source).weak()).truncate(),
+            )
+            .on_hover_text(source);
         let action = if visible { "Hide" } else { "Show" };
         if heading
             .small_button(action)
@@ -88,28 +97,15 @@ impl Viewer {
             self.comparison_set_visible(index, !visible);
             ui.ctx().request_repaint();
         }
-        if !visible {
-            heading.colored_label(color, &self.overview.channels[index].name);
-            heading
-                .add(egui::Label::new(egui::RichText::new(source).weak()).truncate())
-                .on_hover_text(source);
-            return TraceInteraction::default();
-        }
-        let label = egui::RichText::new(self.channel_label(index));
-        let label = if active { label } else { label.color(color) };
-        let selected = heading
-            .add(egui::Button::selectable(active, label).small())
-            .on_hover_text("Use this trace for analysis and export")
-            .clicked();
         let trace = ScopeTrace::Recorded(index);
-        let toggle = self.trace_fft_toggle(&mut heading, trace);
-        let bounds = (!self.trace_fft.contains_key(&trace)).then(|| self.channel_bounds(index));
-        if let Some(bounds) = bounds {
-            self.offset_control(&mut heading, index, bounds);
+        let toggle = visible && self.trace_fft_toggle(&mut heading, trace);
+        if !visible {
+            return TraceInteraction {
+                selected,
+                ..TraceInteraction::default()
+            };
         }
-        heading
-            .add(egui::Label::new(egui::RichText::new(source).weak()).truncate())
-            .on_hover_text(source);
+        let bounds = (!self.trace_fft.contains_key(&trace)).then(|| self.channel_bounds(index));
         let mut interaction = if let Some(bounds) = bounds {
             let interaction = self.comparison_timeline(ui, lane.plot, index, link, trace);
             self.comparison_waveform(ui, lane, index, link, bounds);
@@ -172,11 +168,9 @@ impl Viewer {
         let rect = lane.plot;
         let painter = ui.painter_at(lane.frame);
         let color = plot::color(index);
-        let display_offset = self.display_offsets[index];
-        let display = lanes::stacked_scale(raw, display_offset);
-        let bounds = lanes::shifted(display, -display_offset);
+        let bounds = raw;
         let channel = &self.overview.channels[index];
-        lane.scale(&painter, display, &channel.unit, color);
+        lane.scale(&painter, bounds, &channel.unit, color);
         paint_time_grid(ui, &painter, rect);
         self.paint_channel(&painter, index, rect, bounds, color);
         Link::paint_trace_evidence(Some(link), &painter, rect, &self.span, index);
@@ -196,7 +190,7 @@ impl Viewer {
                 index,
                 plot: rect,
                 bounds,
-                display_offset,
+                display_offset: 0.0,
             },
         );
     }

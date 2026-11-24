@@ -142,7 +142,14 @@ impl Viewer {
         let overview = recording.overview(cancel)?;
         let domain = time_span(&overview.channels);
         let segmented = recording.triggered_segments();
-        let mut visible = vec![!segmented; overview.channels.len()];
+        let mut visible: Vec<_> = overview
+            .channels
+            .iter()
+            .map(|channel| {
+                !segmented
+                    && !(recording.power_recording() && channels::instrument_channel(&channel.name))
+            })
+            .collect();
         visible[0] = true;
         let display_offsets = vec![0.0; visible.len()];
         let span = if segmented {
@@ -296,14 +303,21 @@ impl Viewer {
         let interaction = if show_time {
             let clock = Link::clock(link);
             let domain = link.map_or_else(|| self.domain.clone(), |link| link.domain.clone());
+            let selection = self.selection();
             ui.scope(|ui| {
                 ui.spacing_mut().interact_size.y = 24.0;
                 ui.spacing_mut().button_padding.y = 2.0;
-                self.digital
-                    .content(ui, &self.recording, &mut self.span, &domain, clock);
+                self.digital.content(
+                    ui,
+                    &self.recording,
+                    &mut self.span,
+                    &domain,
+                    clock,
+                    selection.as_ref(),
+                );
             });
             let available = ui.available_height();
-            let content = (available - 92.0).max(100.0);
+            let content = (available - 92.0 - self.digital.result_height()).max(100.0);
             let height = if showing_spectrum {
                 // Leave a readable chart and spectrum controls beneath the time lanes.
                 (content * 0.60).min(content - 220.0).max(68.0)
@@ -401,13 +415,13 @@ impl Viewer {
             }
             self.copy_selection(ui, copies);
             self.digital.toggle_lanes(ui);
-            decoder_row = ui.available_size_before_wrap().x < 390.0;
+            decoder_row = ui.available_size_before_wrap().x < 114.0;
             if !decoder_row {
-                self.digital.decoder_buttons(ui);
+                self.digital.decoder_buttons(ui, &mut self.span);
             }
         });
         if decoder_row {
-            self.digital.decoder_buttons(ui);
+            self.digital.decoder_buttons(ui, &mut self.span);
         }
         self.channel_controls(ui);
         if self.filters.any() {
@@ -704,9 +718,12 @@ impl Viewer {
                 continue;
             }
             let channel = &self.overview.channels[index];
-            let offset = self.display_offsets[index];
-            let display =
-                overlay.unwrap_or_else(|| lanes::stacked_scale(raw.unwrap_or_default(), offset));
+            let offset = if self.stacked {
+                0.0
+            } else {
+                self.display_offsets[index]
+            };
+            let display = overlay.unwrap_or_else(|| raw.unwrap_or_default());
             if self.stacked || !overlay_axis {
                 if overlay.is_some() {
                     lane.label(painter, "Shared scale", ink);
@@ -743,9 +760,7 @@ impl Viewer {
         let mut heading = lane.heading(ui, ("scope-channel", index));
         heading.colored_label(plot::color(index), &self.overview.channels[index].name);
         let toggle = self.trace_fft_toggle(&mut heading, ScopeTrace::Recorded(index));
-        if let Some(bounds) = raw {
-            self.offset_control(&mut heading, index, bounds);
-        } else {
+        if raw.is_none() {
             self.paint_trace_fft(
                 ui,
                 &mut heading,
@@ -1176,7 +1191,13 @@ impl Viewer {
                         }
                     }
                     if measured.limited {
-                        ui.weak("Waveform measurements use a 65k-sample window");
+                        let start = clock.to_workspace(measured.raw.start);
+                        let end = clock.to_workspace(measured.raw.time(measured.raw.samples.len()));
+                        ui.weak(format!(
+                            "Measured {}–{}",
+                            display_value(start, "s"),
+                            display_value(end, "s"),
+                        ));
                     }
                 }
                 share
@@ -1204,10 +1225,11 @@ impl Viewer {
             .and_then(|_| self.measurements.as_ref()?.power_totals.as_ref());
         ui.horizontal_wrapped(|ui| {
             ui.strong(if selected.is_some() {
-                "Selection"
+                "Selected interval"
             } else {
                 "Visible interval"
             });
+            ui.weak(display_value(span.end - span.start, "s"));
             if let Some(totals) = totals {
                 for (name, unit, integral) in [
                     ("Charge", "C", &totals.charge),
@@ -1443,6 +1465,20 @@ impl Viewer {
             return;
         }
         let visible = self.span.start.max(self.domain.start)..self.span.end.min(self.domain.end);
+        if !raw
+            && self.index.as_ref().is_some_and(|envelopes| {
+                envelopes
+                    .iter()
+                    .zip(&self.overview.channels)
+                    .all(|(envelope, channel)| {
+                        let rows = sample_span(channel, visible.clone());
+                        envelope.exact
+                            && envelope.step <= (rows.end - rows.start).div_ceil(1024).max(1)
+                    })
+            })
+        {
+            return;
+        }
         if self.detail.as_ref().is_some_and(|(cover, detail)| {
             contains(cover, &visible)
                 && matches!(detail, PlotData::Raw(_)) == raw

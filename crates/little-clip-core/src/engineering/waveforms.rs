@@ -17,6 +17,7 @@ const CHUNK: u64 = 16384;
 const PREVIEW_BINS: u64 = 192;
 const PREVIEW_WINDOW: u64 = 48;
 const INDEX_BINS: u64 = 16384;
+const POWER_REFINEMENT_SAMPLES: u64 = 16 * 1024 * 1024;
 const MAX_EXPORT_ROWS: u64 = 1_000_000;
 
 fn sequence_bins(bins: u64, segments: u64) -> u64 {
@@ -350,7 +351,7 @@ impl Capture {
         index: usize,
         range: Range<u64>,
         bins: u64,
-        complete_scope: bool,
+        refine: bool,
         cancel: &AtomicBool,
     ) -> Result<Envelope, String> {
         match self {
@@ -361,11 +362,22 @@ impl Capture {
                     index,
                     range,
                     step,
-                    (complete_scope && matches!(self, Self::Scope(_))) || step <= PREVIEW_WINDOW,
+                    (refine && matches!(self, Self::Scope(_))) || step <= PREVIEW_WINDOW,
                     cancel,
                 )
             }
-            Self::Power(capture) => capture.envelope(index, range, bins as usize, cancel),
+            Self::Power(capture) => {
+                let count = range.end - range.start;
+                let desired = count.div_ceil(bins).max(1);
+                let coarse = capture.envelope(index, range.clone(), bins as usize, cancel)?;
+                let affordable =
+                    count <= POWER_REFINEMENT_SAMPLES / self.channels().len().max(1) as u64;
+                if refine && affordable && (!coarse.exact || coarse.step > desired * 2) {
+                    summarize(self, index, range, desired, true, cancel)
+                } else {
+                    Ok(coarse)
+                }
+            }
         }
     }
 }
@@ -533,15 +545,21 @@ impl Recording {
         cancel: &AtomicBool,
     ) -> Result<Vec<Envelope>, String> {
         self.checked(cancel, |capture| {
-            let Capture::Power(capture) = capture else {
+            if !matches!(capture, Capture::Power(_)) {
                 return Err("This waveform has no native summary index".into());
-            };
+            }
             capture
                 .channels()
                 .iter()
                 .enumerate()
                 .map(|(index, channel)| {
-                    capture.envelope(index, sample_span(channel, span.clone()), 2048, cancel)
+                    capture.envelope(
+                        index,
+                        sample_span(channel, span.clone()),
+                        8192,
+                        true,
+                        cancel,
+                    )
                 })
                 .collect()
         })
