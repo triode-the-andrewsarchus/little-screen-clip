@@ -323,11 +323,21 @@ pub fn read_document_with_source(
     path: &Path,
     cancelled: &AtomicBool,
 ) -> Result<(Document, crate::file_source::FileSource), String> {
+    read_snapshot(path, cancelled, |bytes, source| {
+        parse_with_companions(path, bytes, source.path().parent(), cancelled)
+    })
+}
+
+fn read_snapshot<T>(
+    path: &Path,
+    cancelled: &AtomicBool,
+    decode: impl FnOnce(&[u8], &crate::file_source::FileSource) -> Result<T, String>,
+) -> Result<(T, crate::file_source::FileSource), String> {
     check_cancelled(cancelled, "EDA read cancelled")?;
     let (bytes, source) =
         read_file_snapshot_with_source(path, MAX_BYTES).map_err(|error| error.to_string())?;
     check_cancelled(cancelled, "EDA read cancelled")?;
-    let doc = parse_with_companions(path, &bytes, source.path().parent(), cancelled)?;
+    let doc = decode(&bytes, &source)?;
     source.check()?;
     check_cancelled(cancelled, "EDA read cancelled")?;
     Ok((doc, source))

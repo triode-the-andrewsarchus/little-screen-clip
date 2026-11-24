@@ -10,13 +10,16 @@ use egui::{Color32, Rect, TextureHandle, Ui, Vec2, pos2, vec2};
 use little_clip_core::{
     BackgroundJobs, ImageThumbnail,
     eda::{
-        Document, RasterRegion,
-        comparison::{ArtworkComparison, ArtworkRaster, compare_artwork, compare_artwork_region},
-        gerber::GerberDocument,
-        read_document_with_source,
+        RasterRegion,
+        comparison::{ArtworkComparison, ArtworkRaster, compare_artwork, read_artwork},
     },
 };
-use std::{sync::Arc, task::Poll};
+use std::{
+    sync::{Arc, LazyLock},
+    task::Poll,
+};
+
+static GEOMETRY_JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, 2));
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Mode {
@@ -41,24 +44,22 @@ pub(super) struct View {
 }
 
 type OverviewKey = ([usize; 2], u16);
-type LayerPair = Arc<[Box<GerberDocument>; 2]>;
 
 struct Prepared {
-    overview: ArtworkComparison,
-    sources: LayerPair,
+    overview: ArtworkRaster,
+    comparison: ArtworkComparison,
+    roles: [String; 2],
 }
 
 struct Display {
     overview: Textures,
-    bounds: [f64; 4],
-    sources: LayerPair,
+    comparison: Arc<ArtworkComparison>,
+    roles: [String; 2],
 }
 
 struct Textures {
     images: [TextureHandle; 3],
     pitch: f64,
-    added: usize,
-    removed: usize,
 }
 
 #[derive(Default)]
@@ -109,12 +110,12 @@ impl View {
             }
             egui::ComboBox::from_label("Edge tolerance")
                 .selected_text(if self.tolerance_um == 0 {
-                    "Exact raster".to_owned()
+                    "0 µm".to_owned()
                 } else {
                     format!("{} µm", self.tolerance_um)
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.tolerance_um, 0, "Exact raster");
+                    ui.selectable_value(&mut self.tolerance_um, 0, "0 µm");
                     for microns in [10, 25, 50, 100] {
                         ui.selectable_value(
                             &mut self.tolerance_um,
@@ -122,7 +123,9 @@ impl View {
                             format!("{microns} µm"),
                         );
                     }
-                });
+                })
+                .response
+                .on_hover_text("Physical edge tolerance. Geometry snaps to a fixed 0.1 µm grid.");
             if ui.button("Fit").clicked() {
                 self.zoom = 1.0;
                 self.pan = Vec2::ZERO;
@@ -150,23 +153,19 @@ impl View {
             }
         };
         ui.horizontal_wrapped(|ui| {
-            let [a, b] = display.sources.as_ref();
-            ui.label(format!("{} / {}", a.layer_type, b.layer_type));
-            ui.label("Overview");
+            let [a, b] = &display.roles;
+            ui.label(format!("{a} / {b}"));
+            ui.label("Geometry");
             ui.colored_label(
                 Color32::from_rgb(92, 220, 247),
-                format!("Added {} px", display.overview.added),
+                format!("Added {}", area(display.comparison.added_mm2)),
             );
             ui.colored_label(
                 Color32::from_rgb(248, 140, 78),
-                format!("Removed {} px", display.overview.removed),
+                format!("Removed {}", area(display.comparison.removed_mm2)),
             );
-            ui.label(format!("{:.4} mm/px", display.overview.pitch));
+            ui.label(format!("Overview {:.4} mm/px", display.overview.pitch));
         });
-        let notes = display.sources.each_ref().map(|source| source.issues.len());
-        if notes != [0, 0] {
-            ui.label(format!("Rendering notes  A {} · B {}", notes[0], notes[1]));
-        }
         let (rect, response) = ui.allocate_exact_size(
             vec2(
                 ui.available_width(),
@@ -197,26 +196,20 @@ impl View {
         let Some(mapping) = eda::RasterMapping::new(
             drawn,
             display.overview.images[0].size().map(|n| n as u32),
-            display.bounds,
+            display.comparison.bounds_mm,
             false,
         ) else {
             return;
         };
 
-        let tolerance_mm = mm(self.tolerance_um);
         let local = rect.intersect(drawn);
-        let wanted = eda::detail_region(
-            local,
-            &mapping,
-            scale,
-            ui.ctx().pixels_per_point(),
-            Some(tolerance_mm),
-        )
-        .filter(|_| local.is_positive());
+        let wanted = local
+            .is_positive()
+            .then(|| eda::detail_region(local, &mapping, scale, ui.ctx().pixels_per_point()))
+            .flatten();
         let mut detail_text = String::new();
         if let Some(region) = wanted {
-            self.detail
-                .update(ui.ctx(), region, &display.sources, tolerance_mm);
+            self.detail.update(ui.ctx(), region, &display.comparison);
             if let Some((region, textures)) = &self.detail.display {
                 let detail_rect = mapping.region_rect(*region);
                 let clip = detail_rect.intersect(local);
@@ -269,23 +262,22 @@ impl View {
         let files = files.map(Clone::clone);
         self.pending = Some((
             wanted,
-            Task::start_unbounded(BackgroundJobs::global(), move |cancel| {
+            Task::start_unbounded(&GEOMETRY_JOBS, move |cancel| {
                 let [a, b] = files.map(|file| {
                     file.check()?;
-                    let (document, observed) = read_document_with_source(file.path(), cancel)?;
+                    let (document, observed) = read_artwork(file.path(), cancel)?;
                     if file != observed {
                         return Err("Comparison source changed".to_owned());
                     }
-                    match document {
-                        Document::Gerber(doc) => Ok(doc),
-                        _ => Err("Expected a fabrication layer".to_owned()),
-                    }
+                    Ok(document)
                 });
                 let [a, b] = [a?, b?];
-                let overview = compare_artwork([&a, &b], mm(wanted.1), cancel)?;
+                let comparison = compare_artwork([&a, &b], f64::from(wanted.1) / 1000.0, cancel)?;
+                let overview = comparison.render_overview(cancel)?;
                 Ok(Prepared {
+                    comparison,
                     overview,
-                    sources: Arc::new([a, b]),
+                    roles: [a.layer_type, b.layer_type],
                 })
             }),
         ));
@@ -296,9 +288,9 @@ impl View {
 impl Display {
     fn upload(ctx: &egui::Context, prepared: Prepared) -> Self {
         Self {
-            bounds: prepared.overview.bounds_mm,
-            overview: Textures::upload(ctx, prepared.overview.raster),
-            sources: prepared.sources,
+            comparison: Arc::new(prepared.comparison),
+            overview: Textures::upload(ctx, prepared.overview),
+            roles: prepared.roles,
         }
     }
 }
@@ -318,8 +310,6 @@ impl Textures {
         Self {
             images: [raster.before, raster.after, raster.changes].map(upload),
             pitch: raster.pitch_mm,
-            added: raster.added_pixels,
-            removed: raster.removed_pixels,
         }
     }
 }
@@ -329,8 +319,7 @@ impl Detail {
         &mut self,
         ctx: &egui::Context,
         wanted: RasterRegion,
-        sources: &LayerPair,
-        tolerance_mm: f64,
+        comparison: &Arc<ArtworkComparison>,
     ) {
         if self
             .display
@@ -361,11 +350,11 @@ impl Detail {
             }
             Poll::Ready(None) => {}
         }
-        let sources = sources.clone();
+        let comparison = Arc::clone(comparison);
         self.pending = Some((
             wanted,
             Task::start_unbounded(BackgroundJobs::global(), move |cancel| {
-                compare_artwork_region([&sources[0], &sources[1]], wanted, tolerance_mm, cancel)
+                comparison.render_region(wanted, cancel)
             }),
         ));
         ctx.request_repaint_after(REPAINT_INTERVAL);
@@ -417,8 +406,14 @@ impl Canvas {
     }
 }
 
-fn mm(tolerance_um: u16) -> f64 {
-    f64::from(tolerance_um) / 1000.0
+fn area(mm2: f64) -> String {
+    if mm2 == 0.0 {
+        "0 mm²".into()
+    } else if mm2 < 0.01 {
+        format!("{:.3} µm²", mm2 * 1_000_000.0)
+    } else {
+        format!("{mm2:.4} mm²")
+    }
 }
 
 fn background() -> Color32 {

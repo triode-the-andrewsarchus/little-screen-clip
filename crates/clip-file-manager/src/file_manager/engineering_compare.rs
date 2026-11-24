@@ -752,8 +752,16 @@ mod tests {
             harness.step();
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(harness.query_by_label("Added 0 px").is_none());
-        assert!(harness.query_by_label("Removed 0 px").is_none());
+        assert!(harness.query_by_label("Added 0 mm²").is_none());
+        assert!(harness.query_by_label("Removed 0 mm²").is_none());
+        let totals = ["Added ", "Removed "].map(|label| {
+            harness
+                .get_by_label_contains(label)
+                .accesskit_node()
+                .value()
+                .unwrap()
+                .to_owned()
+        });
         harness.get_by_label("A").click();
         harness.hover_at(pos2(420.0, 310.0));
         harness.run();
@@ -770,10 +778,10 @@ mod tests {
 
         harness.event(clip_ui::test_support::scroll(vec2(0.0, 1500.0)));
         harness.step();
-        assert!(harness.query_by_label("Overview").is_some());
+        assert!(harness.query_by_label_contains("Overview ").is_some());
         assert!(harness.query_by_label_contains("Added ").is_some());
         let deadline = std::time::Instant::now() + Duration::from_secs(4);
-        while harness.query_by_label_contains("Detail ").is_none() {
+        while harness.query_by_label_contains("Detail 0.").is_none() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "detail worker did not publish"
@@ -781,6 +789,11 @@ mod tests {
             harness.step();
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(harness.query_by_label("Overview").is_some());
+        assert!(harness.query_by_label_contains("Overview ").is_some());
+        assert!(
+            totals
+                .iter()
+                .all(|label| harness.query_by_label(label).is_some())
+        );
     }
 }

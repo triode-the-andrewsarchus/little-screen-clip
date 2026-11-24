@@ -1,7 +1,7 @@
 //! Manual end-to-end EDA raster timing on a representative local file.
 use little_clip_core::eda::{
     Document, RasterRegion,
-    comparison::{compare_artwork, compare_artwork_region},
+    comparison::{compare_artwork, read_artwork},
     kicad::PcbLayerBucket,
     parse_bytes, read_document,
 };
@@ -14,40 +14,41 @@ fn main() {
         args.next();
         let files: Vec<_> = args.collect();
         assert!(files.len() == 2, "pass two artwork files");
-        let docs = [&files[0], &files[1]].map(|path| {
-            let Document::Gerber(doc) = read_document(Path::new(path), &cancel).unwrap() else {
-                panic!("expected Gerber or Excellon artwork");
-            };
-            doc
-        });
+        let docs =
+            [&files[0], &files[1]].map(|path| read_artwork(Path::new(path), &cancel).unwrap().0);
         for tolerance in [0.0, 0.05] {
             let start = Instant::now();
-            let result = compare_artwork([&docs[0], &docs[1]], tolerance, &cancel).unwrap();
+            let result = match compare_artwork([&docs[0], &docs[1]], tolerance, &cancel) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!("{tolerance} mm tolerance: {error}");
+                    continue;
+                }
+            };
             eprintln!(
-                "{} mm tolerance: {} additions, {} removals at {} mm/px in {:?}",
-                tolerance,
-                result.raster.added_pixels,
-                result.raster.removed_pixels,
-                result.raster.pitch_mm,
+                "{tolerance} mm tolerance: {} mm² added, {} mm² removed in {:?}",
+                result.added_mm2,
+                result.removed_mm2,
                 start.elapsed()
             );
-        }
-        let bounds = docs[0].bounds_mm;
-        let density = 128.0;
-        let region = RasterRegion {
-            origin: [(bounds[0] + bounds[2]) * 0.5, (bounds[1] + bounds[3]) * 0.5],
-            size: [1100, 800],
-            pixels_per_mm: density,
-            y_down: false,
-        };
-        for tolerance in [0.0, 0.05] {
             let start = Instant::now();
-            let detail =
-                compare_artwork_region([&docs[0], &docs[1]], region, tolerance, &cancel).unwrap();
+            let overview = result.render_overview(&cancel).unwrap();
             eprintln!(
-                "Detail with {tolerance} mm tolerance: {} additions, {} removals at {} mm/px in {:?}",
-                detail.added_pixels,
-                detail.removed_pixels,
+                "Overview at {} mm/px in {:?}",
+                overview.pitch_mm,
+                start.elapsed()
+            );
+            let [x0, y0, x1, y1] = result.bounds_mm;
+            let region = RasterRegion {
+                origin: [(x0 + x1) * 0.5, (y0 + y1) * 0.5],
+                size: [1100, 800],
+                pixels_per_mm: 128.0,
+                y_down: false,
+            };
+            let start = Instant::now();
+            let detail = result.render_region(region, &cancel).unwrap();
+            eprintln!(
+                "Detail at {} mm/px in {:?}",
                 detail.pitch_mm,
                 start.elapsed()
             );

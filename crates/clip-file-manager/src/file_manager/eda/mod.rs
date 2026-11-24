@@ -583,13 +583,7 @@ fn update_detail(ui: &egui::Ui, rect: Rect, doc: &Arc<Document>, state: &mut Vie
     if let Some((bounds, y_down)) = detail_geometry(doc)
         && let Some(view) = RasterView::new(rect, state)
         && let Some(mapping) = view.mapping(bounds, y_down)
-        && let Some(region) = detail_region(
-            rect,
-            &mapping,
-            view.scale,
-            ui.ctx().pixels_per_point(),
-            None,
-        )
+        && let Some(region) = detail_region(rect, &mapping, view.scale, ui.ctx().pixels_per_point())
     {
         let layers =
             matches!(doc.as_ref(), Document::KicadPcb(_)).then(|| state.pcb_layers.clone());
@@ -858,7 +852,6 @@ pub(super) fn detail_region(
     mapping: &RasterMapping,
     base_scale: f32,
     dpr: f32,
-    tolerance_mm: Option<f64>,
 ) -> Option<RasterRegion> {
     if base_scale * dpr <= 1.4 {
         return None;
@@ -866,9 +859,7 @@ pub(super) fn detail_region(
     // A quantized density and padded origin let nearby views share a tile.
     let ppm = mapping.points_per_mm[0];
     let side = f64::from(rect.width().max(rect.height())).max(1.0);
-    let extra = if tolerance_mm.is_some() { 70.0 } else { 0.0 };
-    let cap = (f64::from(RasterRegion::MAX_SIDE - 128) - extra)
-        / (side / ppm + 2.0 * tolerance_mm.unwrap_or_default());
+    let cap = ppm * f64::from(RasterRegion::MAX_SIDE - 128) / side;
     let pixels_per_mm = 2.0_f64.powf((ppm * f64::from(dpr)).min(cap).log2().floor());
     if !pixels_per_mm.is_finite() || pixels_per_mm <= ppm / f64::from(base_scale) {
         return None;
@@ -1549,7 +1540,7 @@ mod tests {
         for y_down in [true, false] {
             let mapping =
                 RasterMapping::new(base, [1200, 600], [-40.0, -20.0, 40.0, 20.0], y_down).unwrap();
-            let tile = detail_region(viewport, &mapping, 5.0, 2.0, None).unwrap();
+            let tile = detail_region(viewport, &mapping, 5.0, 2.0).unwrap();
             let rect = Rect::from_two_pos(
                 mapping.screen(tile.origin),
                 mapping.screen(tile.far_corner()),

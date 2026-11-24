@@ -102,6 +102,7 @@ pub struct GerberDocument {
     pub bounds_mm: [f64; 4],
     pub polylines: Vec<VectorPolyline>,
     pub flat: FlatLayer,
+    pub(super) aperture_chord_mm: f64,
     pub issues: Vec<String>,
     pub source_excerpt: String,
 }
@@ -109,6 +110,15 @@ pub struct GerberDocument {
 impl GerberDocument {
     /// Parses an RS-274X / X2 Gerber byte buffer.
     pub fn parse_gerber(path: &Path, bytes: &[u8], cancelled: &AtomicBool) -> Result<Self, String> {
+        Self::parse_gerber_with_tolerance(path, bytes, ARC_TOLERANCE_MM, cancelled)
+    }
+
+    pub(super) fn parse_gerber_with_tolerance(
+        path: &Path,
+        bytes: &[u8],
+        chord_mm: f64,
+        cancelled: &AtomicBool,
+    ) -> Result<Self, String> {
         check_cancelled(cancelled, "Gerber parse cancelled")?;
         let text_lossy = bounded_source_text(bytes);
         let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -125,7 +135,7 @@ impl GerberDocument {
 
         let mut issues = gerber.parse_errors.clone();
         let flat = gerber
-            .flatten_with(&bounded_flatten_options())
+            .flatten_with(&bounded_flatten_options(chord_mm))
             .map_err(|error| format!("Gerber geometry limit exceeded: {error}"))?;
         check_cancelled(cancelled, "Gerber parse cancelled")?;
 
@@ -177,6 +187,7 @@ impl GerberDocument {
             bounds_mm: stats.bounds_mm,
             polylines: stats.polylines,
             flat,
+            aperture_chord_mm: chord_mm,
             issues,
             source_excerpt: text_lossy,
         })
@@ -188,15 +199,26 @@ impl GerberDocument {
         bytes: &[u8],
         cancelled: &AtomicBool,
     ) -> Result<Self, String> {
+        Self::parse_excellon_with_tolerance(path, bytes, ARC_TOLERANCE_MM, cancelled)
+    }
+
+    pub(super) fn parse_excellon_with_tolerance(
+        path: &Path,
+        bytes: &[u8],
+        chord_mm: f64,
+        cancelled: &AtomicBool,
+    ) -> Result<Self, String> {
         check_cancelled(cancelled, "Excellon parse cancelled")?;
         check_excellon_repeat_budget(bytes, MAX_EXCELLON_REPEATS, cancelled)?;
         let cleaned = strip_excellon_park_tool(bytes);
         match parse_excellon(BufReader::new(Cursor::new(cleaned.as_ref()))) {
             Ok(excellon) if has_excellon_content(&excellon) || !looks_like_gerber(bytes) => {
-                build_excellon_document(&excellon, bytes, cancelled)
+                build_excellon_document(&excellon, bytes, chord_mm, cancelled)
             }
-            _ if looks_like_gerber(bytes) => Self::parse_gerber(path, bytes, cancelled),
-            Ok(excellon) => build_excellon_document(&excellon, bytes, cancelled),
+            _ if looks_like_gerber(bytes) => {
+                Self::parse_gerber_with_tolerance(path, bytes, chord_mm, cancelled)
+            }
+            Ok(excellon) => build_excellon_document(&excellon, bytes, chord_mm, cancelled),
             Err(error) => Err(format!("Excellon parse error: {error}")),
         }
     }
@@ -691,10 +713,11 @@ fn has_excellon_content(data: &ExcellonLayerData) -> bool {
 fn build_excellon_document(
     excellon: &ExcellonLayerData,
     bytes: &[u8],
+    chord_mm: f64,
     cancelled: &AtomicBool,
 ) -> Result<GerberDocument, String> {
     let flat = excellon
-        .flatten_with(&bounded_flatten_options())
+        .flatten_with(&bounded_flatten_options(chord_mm))
         .map_err(|error| format!("Excellon geometry limit exceeded: {error}"))?;
     check_cancelled(cancelled, "Excellon parse cancelled")?;
 
@@ -763,12 +786,13 @@ fn build_excellon_document(
         bounds_mm: stats.bounds_mm,
         polylines: stats.polylines,
         flat,
+        aperture_chord_mm: chord_mm,
         issues,
         source_excerpt: bounded_source_text(bytes),
     })
 }
 
-fn bounded_flatten_options() -> FlattenOptions {
+fn bounded_flatten_options(chord_mm: f64) -> FlattenOptions {
     FlattenOptions::default()
         .limits(
             ResourceLimits::default()
@@ -776,7 +800,7 @@ fn bounded_flatten_options() -> FlattenOptions {
                 .max_block_depth(32)
                 .max_aperture_points(1_000_000),
         )
-        .tolerance_mm(ARC_TOLERANCE_MM)
+        .tolerance_mm(chord_mm)
 }
 
 struct FlatStats {

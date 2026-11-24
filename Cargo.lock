@@ -6751,6 +6751,7 @@ dependencies = [
  "hokusai-core",
  "hound",
  "ical",
+ "i_overlay",
  "image 0.25.10",
  "imagesize 0.15.0",
  "json-five",
