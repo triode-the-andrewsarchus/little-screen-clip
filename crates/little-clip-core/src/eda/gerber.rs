@@ -29,6 +29,7 @@ use tiny_skia::{
 };
 
 const MAX_EXPANDED_OPS: usize = 400_000;
+const MAX_EXCELLON_REPEATS: u32 = 250_000;
 const MAX_OVERLAY_POLYLINES: usize = 24_000;
 const ARC_TOLERANCE_MM: f64 = 0.01;
 const BG_COLOR: [u8; 4] = [18, 22, 26, 255];
@@ -182,6 +183,7 @@ impl GerberDocument {
         cancelled: &AtomicBool,
     ) -> Result<Self, String> {
         check_cancelled(cancelled, "Excellon parse cancelled")?;
+        check_excellon_repeat_budget(bytes, MAX_EXCELLON_REPEATS, cancelled)?;
         let cleaned = strip_excellon_park_tool(bytes);
         match parse_excellon(BufReader::new(Cursor::new(cleaned.as_ref()))) {
             Ok(excellon) if has_excellon_content(&excellon) || !looks_like_gerber(bytes) => {
@@ -600,6 +602,32 @@ fn format_polarity_label(
     } else {
         base.to_string()
     }
+}
+
+// The dependency expands repeat hits during parsing, before flatten limits apply.
+fn check_excellon_repeat_budget(
+    bytes: &[u8],
+    mut remaining: u32,
+    cancelled: &AtomicBool,
+) -> Result<(), String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "Excellon source is not valid UTF-8")?;
+    for (index, line) in text.lines().enumerate() {
+        if index.is_multiple_of(1024) {
+            check_cancelled(cancelled, "Excellon parse cancelled")?;
+        }
+        let Some(tail) = line.trim().strip_prefix('R') else {
+            continue;
+        };
+        let end = tail
+            .find(|ch: char| !ch.is_ascii_digit())
+            .unwrap_or(tail.len());
+        if let Ok(count) = tail[..end].parse::<u32>() {
+            remaining = remaining
+                .checked_sub(count)
+                .ok_or("Excellon repeat hits exceed the preview limit")?;
+        }
+    }
+    Ok(())
 }
 
 /// Strips KiCad/CAM `T0` / `T00` park-tool lines that `lib_gerber_edit` rejects as tool 0.
@@ -1398,6 +1426,14 @@ M30
         fake_gimp[16..20].copy_from_slice(&1_u32.to_be_bytes());
         fake_gimp[20..24].copy_from_slice(b"GIMP");
         assert!(!super::super::is_gerber_gbr_bytes(&fake_gimp));
+    }
+
+    #[test]
+    fn excellon_repeat_budget_is_cumulative() {
+        let pattern = b"R3X1.0\n;R500X1.0\nR2Y1.0\n";
+        let cancel = AtomicBool::new(false);
+        assert!(check_excellon_repeat_budget(pattern, 5, &cancel).is_ok());
+        assert!(check_excellon_repeat_budget(pattern, 4, &cancel).is_err());
     }
 
     #[test]
