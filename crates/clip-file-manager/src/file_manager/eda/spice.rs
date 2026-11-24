@@ -3,7 +3,8 @@
 
 use super::ViewerState;
 use crate::ui_appearance::WorkbenchColors;
-use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Ui, pos2, vec2};
+use crate::ui_ext::PlotAxis;
+use egui::{Align2, Color32, FontId, Rect, Stroke, Ui, pos2, vec2};
 use little_clip_core::eda::spice::{
     LtspicePlotDocument, RawAnalysisKind, SpiceNetlistDocument, SpicePreviewSample,
     SpiceRawDocument, SpiceRawPlot, TRACE_PALETTE,
@@ -184,6 +185,10 @@ pub(super) fn render_plt_details(ui: &mut Ui, plt: &LtspicePlotDocument) {
     }
 }
 
+pub(super) fn raw_plot_rect(rect: Rect) -> Rect {
+    Rect::from_min_max(rect.min + vec2(28.0, 14.0), rect.max - vec2(14.0, 28.0))
+}
+
 pub(super) fn paint_raw_center(
     ui: &mut Ui,
     rect: Rect,
@@ -208,23 +213,21 @@ pub(super) fn paint_raw_center(
     let log_x = plot.log_x();
     let [xmin, xmax] = x_range.map(|x| axis_position(x, log_x));
     let (ymin, ymax) = compute_y_bounds(plot, state);
-    let pad = 28.0_f32;
-    let plot_rect = Rect::from_min_max(rect.min + vec2(pad, 14.0), rect.max - vec2(14.0, pad));
+    let plot_rect = raw_plot_rect(rect);
     if plot_rect.width() <= 4.0 || plot_rect.height() <= 4.0 {
         return "Drag to pan · scroll to zoom".into();
     }
 
+    let drawn = Rect::from_center_size(
+        plot_rect.center() + state.pan,
+        plot_rect.size() * state.zoom,
+    );
+    let x = PlotAxis::new([xmin, xmax], [drawn.left(), drawn.right()]);
+    let y = PlotAxis::new([ymin, ymax], [drawn.bottom(), drawn.top()]);
     paint_scope_grid(&painter, plot_rect);
-    paint_trace_curves(&painter, plot_rect, plot, [xmin, xmax], [ymin, ymax], state);
-    let range = |a, b, offset, size| {
-        let middle = (a + b) * 0.5 - f64::from(offset / (size * state.zoom)) * (b - a);
-        let half = (b - a) * 0.5 / f64::from(state.zoom);
-        (middle - half, middle + half)
-    };
-    let (left, right) = range(xmin, xmax, state.pan.x, plot_rect.width());
-    let (bottom, top) = range(ymin, ymax, -state.pan.y, plot_rect.height());
-    paint_axis_labels(&painter, plot_rect, left, right, bottom, top, log_x, colors);
-    hover_readout(ui, &painter, plot_rect, plot, [xmin, xmax], state)
+    paint_trace_curves(&painter, plot_rect, plot, [x, y], state);
+    paint_axis_labels(&painter, plot_rect, [x, y], log_x, colors);
+    hover_readout(ui, &painter, plot_rect, plot, (x, [xmin, xmax]), state)
 }
 
 fn axis_position(x: f64, log_x: bool) -> f64 {
@@ -255,13 +258,6 @@ fn compute_y_bounds(plot: &SpiceRawPlot, state: &ViewerState) -> (f64, f64) {
     }
 }
 
-fn map_point(plot_rect: Rect, u: f64, v: f64, zoom: f32, pan: egui::Vec2) -> Pos2 {
-    let center = plot_rect.center() + pan;
-    let x = center.x + ((u as f32 - 0.5) * plot_rect.width() * zoom);
-    let y = center.y + ((0.5 - v as f32) * plot_rect.height() * zoom);
-    pos2(x, y)
-}
-
 fn paint_scope_grid(painter: &egui::Painter, rect: Rect) {
     let grid = Stroke::new(1.0, Color32::from_rgb(38, 46, 58));
     painter.rect_stroke(rect, 0.0, grid, egui::StrokeKind::Inside);
@@ -278,19 +274,17 @@ fn paint_trace_curves(
     painter: &egui::Painter,
     plot_rect: Rect,
     plot: &SpiceRawPlot,
-    [xmin, xmax]: [f64; 2],
-    [ymin, ymax]: [f64; 2],
+    [x, y]: [PlotAxis; 2],
     state: &ViewerState,
 ) {
-    let xspan = (xmax - xmin).max(1e-12);
-    let yspan = (ymax - ymin).max(1e-12);
     let scope_painter = painter.with_clip_rect(plot_rect);
     let phase = state.show_phase && plot.is_complex;
     let log_x = plot.log_x();
     let point = |sample: &SpicePreviewSample| {
-        let u = (axis_position(sample.x, log_x) - xmin) / xspan;
-        let v = (sample.ordinate(phase) - ymin) / yspan;
-        map_point(plot_rect, u, v, state.zoom, state.pan)
+        pos2(
+            x.screen_at(axis_position(sample.x, log_x)),
+            y.screen_at(sample.ordinate(phase)),
+        )
     };
 
     for (idx, tr) in plot.traces.iter().enumerate() {
@@ -312,19 +306,17 @@ fn paint_trace_curves(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn paint_axis_labels(
     painter: &egui::Painter,
     rect: Rect,
-    xmin: f64,
-    xmax: f64,
-    ymin: f64,
-    ymax: f64,
+    [x, y]: [PlotAxis; 2],
     log_x: bool,
     colors: WorkbenchColors,
 ) {
-    let x0 = if log_x { 10_f64.powf(xmin) } else { xmin };
-    let x1 = if log_x { 10_f64.powf(xmax) } else { xmax };
+    let [x0, x1] = [rect.left(), rect.right()].map(|pixel| {
+        let value = x.value_at(pixel);
+        if log_x { 10_f64.powf(value) } else { value }
+    });
     let font = FontId::proportional(10.0);
     painter.text(
         pos2(rect.left(), rect.bottom() + 4.0),
@@ -343,14 +335,14 @@ fn paint_axis_labels(
     painter.text(
         pos2(rect.left() + 4.0, rect.top() + 2.0),
         Align2::LEFT_TOP,
-        fmt_num(ymax),
+        fmt_num(y.value_at(rect.top())),
         font.clone(),
         colors.text_secondary,
     );
     painter.text(
         pos2(rect.left() + 4.0, rect.bottom() - 2.0),
         Align2::LEFT_BOTTOM,
-        fmt_num(ymin),
+        fmt_num(y.value_at(rect.bottom())),
         font,
         colors.text_secondary,
     );
@@ -410,7 +402,7 @@ fn hover_readout(
     painter: &egui::Painter,
     plot_rect: Rect,
     plot: &SpiceRawPlot,
-    [xmin, xmax]: [f64; 2],
+    (x, [xmin, xmax]): (PlotAxis, [f64; 2]),
     state: &ViewerState,
 ) -> String {
     let default_hint = "Drag to pan · scroll to zoom · hover waveforms for readout".to_string();
@@ -420,13 +412,10 @@ fn hover_readout(
     else {
         return default_hint;
     };
-    let center = plot_rect.center() + state.pan;
-    let u = (pos.x - center.x) / (plot_rect.width() * state.zoom) + 0.5;
-    if !(0.0..=1.0).contains(&u) {
+    let target_x = x.value_at(pos.x);
+    if !(xmin..=xmax).contains(&target_x) {
         return default_hint;
     }
-    let xspan = (xmax - xmin).max(1e-12);
-    let target_x = xmin + f64::from(u) * xspan;
     let log_x = plot.log_x();
     let Some(reference) = plot
         .traces
@@ -446,14 +435,7 @@ fn hover_readout(
     let sample = reference[index];
     let x_actual = sample.x;
 
-    let sx = map_point(
-        plot_rect,
-        (axis_position(x_actual, log_x) - xmin) / xspan,
-        0.5,
-        state.zoom,
-        state.pan,
-    )
-    .x;
+    let sx = x.screen_at(axis_position(x_actual, log_x));
     if sx >= plot_rect.left() && sx <= plot_rect.right() {
         painter.line_segment(
             [pos2(sx, plot_rect.top()), pos2(sx, plot_rect.bottom())],

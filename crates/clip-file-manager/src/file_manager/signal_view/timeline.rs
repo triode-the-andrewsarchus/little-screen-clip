@@ -3,6 +3,7 @@ use little_clip_core::engineering::analysis::Clock;
 use std::ops::Range;
 
 use crate::file_manager::scope_view::plot;
+use crate::ui_ext::scale_about;
 
 pub(in crate::file_manager) struct Link {
     pub domain: Range<f64>,
@@ -205,8 +206,8 @@ pub(in crate::file_manager) fn navigate(
     (scroll.y != 0.0 || motion != 0.0).then(|| {
         let anchor = plot::at(rect, span, pointer.x);
         let scale = f64::from((-scroll.y * 0.012).exp()).clamp(0.1, 10.0);
-        anchor + (span.start - anchor) * scale + motion
-            ..anchor + (span.end - anchor) * scale + motion
+        scale_about(span.start, anchor, scale) + motion
+            ..scale_about(span.end, anchor, scale) + motion
     })
 }
 

@@ -1,3 +1,4 @@
+use crate::ui_ext::PlotAxis;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, pos2};
 use little_clip_core::engineering::{
     scope::Channel,
@@ -18,18 +19,16 @@ pub(in crate::file_manager) fn color(index: usize) -> Color32 {
     COLORS[index % COLORS.len()]
 }
 
-pub(super) fn fraction(range: &Range<f64>, x: f64) -> f32 {
-    ((x - range.start) / (range.end - range.start).max(f64::MIN_POSITIVE)) as f32
+fn time_axis(rect: Rect, range: &Range<f64>) -> PlotAxis {
+    PlotAxis::new([range.start, range.end], [rect.left(), rect.right()])
 }
 
 pub(in crate::file_manager) fn at(rect: Rect, range: &Range<f64>, x: f32) -> f64 {
-    range.start
-        + f64::from(((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0))
-            * (range.end - range.start)
+    time_axis(rect, range).value_at(x.clamp(rect.left(), rect.right()))
 }
 
 pub(in crate::file_manager) fn x_at(rect: Rect, range: &Range<f64>, time: f64) -> f32 {
-    rect.left() + rect.width() * fraction(range, time)
+    time_axis(rect, range).screen_at(time)
 }
 
 pub(in crate::file_manager) fn lane(rect: Rect, index: usize, count: usize) -> Rect {

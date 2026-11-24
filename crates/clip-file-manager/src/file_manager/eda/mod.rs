@@ -354,6 +354,7 @@ const EDA_MAX_ZOOM: f32 = 64.0;
 fn eda_pan_zoom_canvas(
     ui: &egui::Ui,
     rect: Rect,
+    center: Pos2,
     response: &egui::Response,
     zoom: &mut f32,
     pan: &mut Vec2,
@@ -386,12 +387,9 @@ fn eda_pan_zoom_canvas(
     let prev_zoom = *zoom;
     let next_zoom = (prev_zoom * factor).clamp(EDA_MIN_ZOOM, EDA_MAX_ZOOM);
     let ratio = next_zoom / prev_zoom.max(f32::EPSILON);
-    let anchor = ui
-        .input(|i| i.pointer.hover_pos())
-        .unwrap_or_else(|| rect.center())
-        - rect.center();
+    let anchor = ui.input(|i| i.pointer.hover_pos()).unwrap_or(center) - center;
     let clamped_pan = rect.size() * next_zoom.max(1.0) * 8.0;
-    *pan = (anchor + (*pan - anchor) * ratio).clamp(-clamped_pan, clamped_pan);
+    *pan = crate::ui_ext::scale_about(*pan, anchor, ratio).clamp(-clamped_pan, clamped_pan);
     *zoom = next_zoom;
 }
 
@@ -427,7 +425,19 @@ fn render_center_panel(
         vec2(ui.available_width(), canvas_h),
         egui::Sense::click_and_drag(),
     );
-    eda_pan_zoom_canvas(ui, rect, &response, &mut state.zoom, &mut state.pan);
+    let zoom_center = if matches!(doc.as_ref(), Document::SpiceRaw(_)) {
+        spice::raw_plot_rect(rect).center()
+    } else {
+        rect.center()
+    };
+    eda_pan_zoom_canvas(
+        ui,
+        rect,
+        zoom_center,
+        &response,
+        &mut state.zoom,
+        &mut state.pan,
+    );
 
     if let Some(request) = RasterRequest::for_document(doc, state) {
         state.raster.update(ui.ctx(), doc, request);

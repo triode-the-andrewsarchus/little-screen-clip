@@ -7,6 +7,42 @@ use egui::{
 };
 use little_clip_core::palette::{AppPalette, contrast_ratio};
 
+/// Linear mapping between data values and screen coordinates.
+///
+/// Screen endpoints may be reversed for upward-positive axes. Callers choose
+/// where to clip, and apply any nonlinear data transform before mapping.
+#[derive(Clone, Copy)]
+pub struct PlotAxis {
+    data: [f64; 2],
+    screen: [f32; 2],
+}
+
+impl PlotAxis {
+    pub fn new(data: [f64; 2], screen: [f32; 2]) -> Self {
+        Self { data, screen }
+    }
+
+    pub fn screen_at(self, value: f64) -> f32 {
+        let [first, last] = self.screen;
+        let fraction = egui::emath::inverse_lerp(self.data[0]..=self.data[1], value).unwrap_or(0.0);
+        first + (last - first) * fraction as f32
+    }
+
+    pub fn value_at(self, pixel: f32) -> f64 {
+        let fraction =
+            egui::emath::inverse_lerp(self.screen[0]..=self.screen[1], pixel).unwrap_or(0.0);
+        self.data[0] + (self.data[1] - self.data[0]) * f64::from(fraction)
+    }
+}
+
+/// Scales a coordinate or offset around a fixed anchor.
+pub fn scale_about<T, S>(point: T, anchor: T, factor: S) -> T
+where
+    T: Copy + std::ops::Sub<Output = T> + std::ops::Mul<S, Output = T> + std::ops::Add<Output = T>,
+{
+    anchor + (point - anchor) * factor
+}
+
 /// Fits north/up-positive Cartesian coordinates into a padded canvas, preserving aspect ratio.
 pub fn fit_cartesian_point(
     rect: Rect,
@@ -1405,6 +1441,34 @@ pub fn selectable_text_row(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plot_axes_round_trip_signed_values_and_reversed_screen_coordinates() {
+        let x = super::PlotAxis::new([-5.0, 3.0], [91.0, 91.5]);
+        let y = super::PlotAxis::new([-10.0, 10.0], [170.0, 50.0]);
+        assert_eq!(x.screen_at(-1.0), 91.25);
+        assert_eq!(x.value_at(91.25), -1.0);
+        assert_eq!(y.screen_at(5.0), 80.0);
+        assert_eq!(y.value_at(80.0), 5.0);
+        assert_eq!(y.value_at(20.0), 15.0);
+    }
+
+    #[test]
+    fn scale_about_keeps_the_pointer_fixed_in_one_and_two_dimensions() {
+        let original = [-3.0, 9.0];
+        let anchor = 6.0;
+        let zoomed = original.map(|edge| super::scale_about(edge, anchor, 0.5));
+        assert_eq!(zoomed, [1.5, 7.5]);
+        assert_eq!(
+            super::PlotAxis::new(zoomed, [0.0, 100.0]).screen_at(anchor),
+            75.0
+        );
+
+        let anchor = egui::vec2(80.0, -25.0);
+        let old_offset = egui::vec2(8.0, 20.0);
+        let old_to_pointer = anchor - old_offset;
+        let new_offset = super::scale_about(old_offset, anchor, 2.0);
+        assert_eq!(new_offset + old_to_pointer * 2.0, anchor);
+    }
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
 

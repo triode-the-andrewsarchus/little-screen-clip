@@ -1,4 +1,5 @@
 use super::capture::Band;
+use crate::ui_ext::{PlotAxis, scale_about};
 use egui::{
     Align2, Color32, FontId, Id, Painter, PointerButton, Pos2, Rect, Response, Sense, Shape,
     Stroke, Ui, pos2, vec2,
@@ -159,29 +160,30 @@ pub(super) fn navigate(
         if scroll != 0.0 {
             let anchor = hz_at(rect, viewport, pos.x);
             let factor = f64::from((-scroll * 0.003).clamp(-2.0, 2.0).exp());
-            viewport = fit_band(viewport.map(|edge| anchor + (edge - anchor) * factor), full);
+            viewport = fit_band(viewport.map(|edge| scale_about(edge, anchor, factor)), full);
         }
     }
     viewport
 }
 
 pub(super) fn hz_at(rect: Rect, band: Band, x: f32) -> f64 {
-    hz_at_fraction(
-        band,
-        ((x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0),
-    )
+    frequency_axis(rect, band).value_at(x.clamp(rect.left(), rect.right()))
 }
 
 pub(super) fn hz_at_fraction(band: Band, fraction: f32) -> f64 {
-    band[0] + f64::from(fraction) * (band[1] - band[0])
+    PlotAxis::new(band, [0.0, 1.0]).value_at(fraction)
 }
 
 pub(super) fn fraction(band: Band, hz: f64) -> f32 {
-    ((hz - band[0]) / (band[1] - band[0])) as f32
+    PlotAxis::new(band, [0.0, 1.0]).screen_at(hz)
 }
 
 pub(super) fn x_at(rect: Rect, band: Band, hz: f64) -> f32 {
-    rect.left() + rect.width() * fraction(band, hz)
+    frequency_axis(rect, band).screen_at(hz)
+}
+
+fn frequency_axis(rect: Rect, band: Band) -> PlotAxis {
+    PlotAxis::new(band, [rect.left(), rect.right()])
 }
 
 pub(super) fn visible(data: &[TracePoint], band: Band, outside: bool) -> &[TracePoint] {
@@ -479,7 +481,7 @@ impl Smith {
             });
             let zoom = (camera.zoom * (wheel * 0.004).exp()).clamp(1.0, 24.0);
             let anchor = (point - rect.center()) / radius;
-            camera.offset = anchor + (camera.offset - anchor) * (zoom / camera.zoom);
+            camera.offset = scale_about(camera.offset, anchor, zoom / camera.zoom);
             camera.zoom = zoom;
         }
         if hit.dragged_by(PointerButton::Middle) && camera.zoom > 1.0 {
