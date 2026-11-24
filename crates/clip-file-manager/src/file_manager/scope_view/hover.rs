@@ -243,22 +243,7 @@ impl Viewer {
     }
 
     fn paint_probe_reading(&self, painter: &Painter, time: f64, reading: ProbeReading<'_>) {
-        let x = plot::x_at(reading.plot, &self.span, time);
-        let Some(layout) = ProbeLayout::new(painter, reading.plot, x) else {
-            return;
-        };
-        let painter = painter.with_clip_rect(layout.visible);
-        let visuals = &painter.ctx().global_style().visuals;
-        painter.vline(
-            x,
-            layout.visible.y_range(),
-            Stroke::new(1.0, visuals.text_color()),
-        );
-        if let Some(label) = layout.label(&painter, reading, Some(visuals.text_color())) {
-            let height = label.1.size().y + PANEL_PADDING;
-            let top = panel_top(label.0, height, layout.visible.y_range());
-            layout.paint_panel(&painter, visuals.window_fill(), &[label], top, height);
-        }
+        reading.paint(painter, plot::x_at(reading.plot, &self.span, time));
     }
 
     fn filtered_reading<'a>(
@@ -303,7 +288,7 @@ impl Viewer {
     }
 }
 
-struct ProbeReading<'a> {
+pub(in crate::file_manager) struct ProbeReading<'a> {
     plot: Rect,
     bounds: Peak,
     value: Probe,
@@ -314,7 +299,47 @@ struct ProbeReading<'a> {
     color: Color32,
 }
 
-impl ProbeReading<'_> {
+impl<'a> ProbeReading<'a> {
+    pub(in crate::file_manager) fn derived(
+        plot: Rect,
+        bounds: Peak,
+        value: f32,
+        unit: &'a str,
+        offset: f32,
+        color: Color32,
+    ) -> Self {
+        Self {
+            plot,
+            bounds,
+            value: Probe::from_sample(value),
+            name: "",
+            unit,
+            offset,
+            unshifted_label: "unshifted",
+            color,
+        }
+    }
+
+    pub(in crate::file_manager) fn paint(&self, painter: &Painter, x: f32) {
+        paint_trace_readout(
+            painter,
+            self.plot,
+            x,
+            self.intersection(),
+            Some(self.caption()),
+            self.color,
+        );
+    }
+
+    fn intersection(&self) -> Option<f32> {
+        match self.value {
+            Probe::Value(value) if self.bounds.valid() => {
+                Some(plot::y_at(self.plot, self.bounds, value))
+            }
+            _ => None,
+        }
+    }
+
     fn caption(&self) -> String {
         let mut caption = if self.name.is_empty() {
             self.value.text(self.unit)
@@ -328,6 +353,37 @@ impl ProbeReading<'_> {
             caption.push_str(&format!(" {} · {displayed} shifted", self.unshifted_label));
         }
         caption
+    }
+}
+
+pub(in crate::file_manager) fn paint_trace_readout(
+    painter: &Painter,
+    rect: Rect,
+    x: f32,
+    intersection: Option<f32>,
+    caption: Option<String>,
+    accent: Color32,
+) {
+    let Some(layout) = ProbeLayout::new(painter, rect, x) else {
+        return;
+    };
+    let painter = painter.with_clip_rect(layout.visible);
+    let visuals = &painter.ctx().global_style().visuals;
+    let text = visuals.text_color();
+    painter.vline(x, layout.visible.y_range(), Stroke::new(1.0, text));
+    if let Some(caption) = caption
+        && let Some(label) = layout.label_at(
+            &painter,
+            intersection,
+            rect.center().y,
+            || caption,
+            accent,
+            text,
+        )
+    {
+        let height = label.1.size().y + PANEL_PADDING;
+        let top = panel_top(label.0, height, layout.visible.y_range());
+        layout.paint_panel(&painter, visuals.window_fill(), &[label], top, height);
     }
 }
 
@@ -362,23 +418,36 @@ impl ProbeLayout {
         reading: ProbeReading<'_>,
         foreground: Option<Color32>,
     ) -> Option<(f32, Arc<Galley>)> {
-        let intersection = match reading.value {
-            Probe::Value(value) if reading.bounds.valid() => {
-                Some(plot::y_at(reading.plot, reading.bounds, value))
-            }
-            _ => None,
-        };
-        let y = intersection.unwrap_or_else(|| reading.plot.center().y);
+        self.label_at(
+            painter,
+            reading.intersection(),
+            reading.plot.center().y,
+            || reading.caption(),
+            reading.color,
+            foreground.unwrap_or(reading.color),
+        )
+    }
+
+    fn label_at(
+        &self,
+        painter: &Painter,
+        intersection: Option<f32>,
+        fallback_y: f32,
+        caption: impl FnOnce() -> String,
+        accent: Color32,
+        foreground: Color32,
+    ) -> Option<(f32, Arc<Galley>)> {
+        let y = intersection.unwrap_or(fallback_y);
         if !self.visible.y_range().contains(y) {
             return None;
         }
         if intersection.is_some() {
-            painter.circle_filled(pos2(self.x, y), 3.0, reading.color);
+            painter.circle_filled(pos2(self.x, y), 3.0, accent);
         }
         let mut job = LayoutJob::simple(
-            reading.caption(),
+            caption(),
             FontId::monospace(12.0),
-            foreground.unwrap_or(reading.color),
+            foreground,
             self.text_width,
         );
         job.wrap.max_rows = 1;

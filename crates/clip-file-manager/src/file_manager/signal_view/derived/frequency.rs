@@ -1,17 +1,13 @@
 use super::super::spectra::DisplaySettings;
 use super::{
     compute::{Frame, Lane},
-    filtering::{Filters, PlotLane},
+    display::Trace,
+    filtering::Filters,
 };
-use crate::file_manager::{
-    scope_view::plot,
-    signal_view::{
-        filter_editor::{SpectrumPane, add_buttons, reveal_frequency, spectrum_workspace},
-        frequency_plot::{
-            Display, measurement_readout, paint_measurement, settings, spectrum_rect,
-        },
-        spectra::{PeakWindow, Spectra},
-    },
+use crate::file_manager::signal_view::{
+    filter_editor::{SpectrumPane, add_buttons, reveal_frequency, spectrum_workspace},
+    frequency_plot::{Display, measurement_readout, paint_measurement, settings, spectrum_rect},
+    spectra::{PeakWindow, Spectra},
 };
 use egui::Ui;
 use little_clip_core::engineering::{
@@ -104,18 +100,26 @@ impl Frequency {
         self.filters.remap(lanes);
     }
 
-    pub(super) fn button(&mut self, ui: &mut Ui, index: usize) {
-        let selected = self.lane == Some(index);
+    pub(super) fn button(&mut self, ui: &mut Ui, trace: Trace) {
+        let index = trace.index();
+        let filtered = matches!(trace, Trace::Filtered(_));
+        let selected = self.lane == Some(index) && self.filtered_spectrum == filtered;
+        let label = if filtered { "Edit filters" } else { "Spectrum" };
         if ui
-            .add(egui::Button::new("Spectrum").small().selected(selected))
+            .add(egui::Button::new(label).small().selected(selected))
             .clicked()
         {
-            self.lane = (!selected).then_some(index);
-            self.span = None;
-            self.marker = None;
-            self.filtered_spectrum = false;
-            self.spectra.clear_result();
-            self.reveal = !selected;
+            if !selected || !filtered {
+                self.lane = (!selected).then_some(index);
+                self.span = None;
+                self.marker = None;
+                self.filtered_spectrum = filtered;
+                self.spectra.clear_result();
+            }
+            if filtered {
+                self.spectra.only = false;
+            }
+            self.reveal = self.lane.is_some();
         }
     }
 
@@ -123,13 +127,28 @@ impl Frequency {
         std::mem::take(&mut self.reveal)
     }
 
-    pub(super) fn filtered_lanes(&self, frame: &Frame) -> Vec<PlotLane<'_>> {
-        self.filters.plots(frame)
+    pub(super) fn filtered_lane(&self, index: usize) -> Option<&Lane> {
+        self.filters.lane(index)
     }
 
-    pub(super) fn origin_lane(&self) -> Option<usize> {
+    pub(super) fn filtered_status(&self, frame: &Frame, index: usize) -> &'static str {
+        if self.filters.error().is_some() {
+            "Filtered samples unavailable"
+        } else if !self.filters.has_samples(index, frame) {
+            "Outside filter interval"
+        } else {
+            "Filtering…"
+        }
+    }
+
+    pub(super) fn origin_trace(&self) -> Option<Trace> {
         self.spectra.origin()?;
-        self.lane
+        let index = self.lane?;
+        Some(if self.filtered_spectrum {
+            Trace::Filtered(index)
+        } else {
+            Trace::Equation(index)
+        })
     }
 
     pub(super) fn only(&self) -> bool {
@@ -148,6 +167,8 @@ impl Frequency {
         }
         let index = self.lane?;
         let lane = frame.lanes.get(index)?;
+        self.filtered_spectrum &=
+            matches!(lane, Lane::Analog { .. }) && self.filters.settings.contains_key(&index);
         let interval = self.measurement_controls(ui, lane, index, selected, visible);
         self.lane?;
         let rate = frame.step.recip();
@@ -176,11 +197,7 @@ impl Frequency {
         let lane = frame.lanes.get(index)?;
         let rate = frame.step.recip();
         let input = if self.filtered_spectrum {
-            self.filters
-                .lanes()
-                .iter()
-                .find(|output| output.index == index)
-                .map(|output| output.lane.spectrum_input())
+            self.filtered_lane(index).map(Lane::spectrum_input)
         } else {
             Some(lane.spectrum_input())
         };
@@ -199,16 +216,14 @@ impl Frequency {
         });
         let pending = if !self.filtered_spectrum {
             "Computing spectrum…"
-        } else if self.filters.error().is_some() {
-            "Filtered spectrum unavailable"
-        } else if !self.filters.has_samples(index, frame) {
-            "No samples from the filter interval in this view"
+        } else if self.filtered_lane(index).is_none() {
+            self.filtered_status(frame, index)
         } else {
             "Updating filtered spectrum…"
         };
         let (rect, response) = spectrum_rect(ui, 65.0);
         let mut span = self.span.clone().unwrap_or(0.0..rate * 0.5);
-        let color = plot::color(index + 1);
+        let color = Trace::Equation(index).color(ui);
         let mut display = Display {
             span: &mut self.span,
             marker: &mut self.marker,

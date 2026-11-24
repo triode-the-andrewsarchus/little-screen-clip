@@ -8,8 +8,8 @@ mod filters;
 pub(super) use filters::{FilterSamples, FilteredChannel};
 #[cfg(test)]
 mod frame_benchmark;
-mod hover;
-mod lanes;
+pub(super) mod hover;
+pub(super) mod lanes;
 pub(super) use lanes::COLLAPSED_HEIGHT;
 mod logic_export;
 mod math;

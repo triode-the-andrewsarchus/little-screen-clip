@@ -225,6 +225,14 @@ The desktop check followed a display set to 48 kHz back through its 16 kS/s inpu
 
 A headless CPU profile measured a six-block graph and an 8,000-block graph with 7,999 connections. The large graph took 39.6 ms to parse, 2.4 ms to lay out and 2.6 ms for rate inspection. At fit, p95 was 0.62 ms for wire picking, 2.42 ms for drawing and the egui pass, and 1.74 ms for tessellation. While panning around one connection, the same stages took 0.83 ms, 1.37 ms, and 0.03 ms respectively. Set `FLOWGRAPH_BENCH_PATHS` to measure with the ignored `connection_frame_profile` test.
 
+## 26. Give equation outputs independent display controls
+
+Each equation and filtered output has its own time-domain visibility, scale, and display offset where the trace has numeric samples. A filtered output sits below its equation with a direct Edit filters action. The probe reads each numeric value or logic state at its trace intersection. Offsets only move the display. Recipes store the visibility and offsets by equation identity as browsing state. Changing the equation’s units clears its offsets.
+
+A spectrum’s peak window highlights the exact equation or filtered output and retains the samples that produced the FFT during inspection. A hidden output appears temporarily as Peak source. Returning to the spectrum restores the previous time range and the output’s display settings. Decoder annotations still address the equation they were wired to when rows are hidden or filter outputs are present.
+
+In the desktop check, shifting Gain by 0.50 V gave a probe reading of 405.1 mV unshifted and 905.1 mV shifted. The other equation and digital gate still reported their own values at the same time. Hiding Gain retained its equation, and reopening the saved recipe restored its hidden state and saved offset. At 800 × 620, a hidden low-pass output loaded directly into its spectrum, and the 5.078 kHz result highlighted its 100–103 ms time window on the filtered lane.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.

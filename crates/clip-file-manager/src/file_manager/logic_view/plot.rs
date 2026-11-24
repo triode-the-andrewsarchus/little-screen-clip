@@ -106,7 +106,7 @@ pub(in crate::file_manager) fn draw_trace(
     painter.add(egui::Shape::line(points, Stroke::new(1.25, color)));
 }
 
-fn y_at(rect: Rect, level: Option<Level>) -> f32 {
+pub(in crate::file_manager) fn y_at(rect: Rect, level: Option<Level>) -> f32 {
     match level {
         Some(Level::High) => rect.top() + rect.height() * 0.14,
         Some(Level::Low) => rect.bottom() - rect.height() * 0.14,

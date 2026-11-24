@@ -1,5 +1,6 @@
 mod compute;
 mod decoders;
+mod display;
 mod equations;
 mod filtering;
 mod frequency;
@@ -11,15 +12,17 @@ use super::{
 };
 use crate::file_manager::{logic_view, preview_copy, preview_job::Task, scope_view::plot};
 use compute::{Frame, Lane};
-use egui::{Color32, Context, FontId, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
+use display::{EquationDisplay, Trace, TracePlot};
+use egui::{Context, Rect, Sense, Ui, pos2, vec2};
 use little_clip_core::{BackgroundJobs, engineering::waveforms::display_value};
-use std::{ops::Range, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, ops::Range, sync::Arc, time::Duration};
 
 #[derive(Default)]
 pub(super) struct Derived {
     equations: equations::Book,
     decoders: decoders::Decoders,
     frequency: frequency::Frequency,
+    display: BTreeMap<u64, EquationDisplay>,
     measurements: measurements::View,
     program: String,
     program_rate: Option<f64>,
@@ -39,6 +42,8 @@ pub(super) struct SessionSettings {
     history_span: Option<Range<f64>>,
     selected: Option<Range<f64>>,
     frequency: frequency::SavedFrequency,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    display: BTreeMap<u64, EquationDisplay>,
     measurements: measurements::SavedMeasurements,
     decoders: logic_view::protocols::SessionSettings,
 }
@@ -94,6 +99,13 @@ impl Derived {
             history_span: self.history_span.clone(),
             selected: self.selected.clone(),
             frequency: self.frequency.save(),
+            display: self
+                .display
+                .iter()
+                .filter_map(|(&id, &state)| {
+                    (state != EquationDisplay::default()).then_some((id, state))
+                })
+                .collect(),
             measurements: self.measurements.save(),
             decoders: self.decoders.save(),
         }
@@ -111,6 +123,14 @@ impl Derived {
             return Err("Invalid saved equation clock or history interval".into());
         }
         let count = state.equations.len();
+        if state.display.len() > count
+            || state.display.iter().any(|(&id, value)| {
+                !value.valid() || !state.equations.iter().any(|equation| equation.id == id)
+            })
+        {
+            return Err("Invalid saved equation display settings".into());
+        }
+        self.display = state.display;
         self.program = self.equations.restore(state.equations)?;
         self.program_rate = state.sample_rate;
         self.history_span = state.history_span;
@@ -154,11 +174,12 @@ impl Derived {
         }
     }
 
-    fn rate_controls(&mut self, ui: &mut Ui) {
+    fn rate_controls(&mut self, ui: &mut Ui, span: &mut Range<f64>) {
         let before = self.program_rate;
         ui.horizontal_wrapped(|ui| {
-            ui.strong("Derived lanes");
-            self.button(ui);
+            ui.strong("Derived lanes").on_hover_text(
+                "Drag a waveform to select a time range. Right-click to clear. Scroll to zoom.",
+            );
             let mut custom = self.program_rate.is_some();
             if ui.checkbox(&mut custom, "Set sample rate").changed() {
                 self.program_rate = custom.then_some(100_000.0);
@@ -187,12 +208,19 @@ impl Derived {
             }
         });
         if before != self.program_rate {
+            self.frequency.spectra.finish_inspection(span);
             self.invalidate();
         }
     }
 
     fn apply(&mut self, action: equations::Action, inputs: &[Input], span: &Range<f64>) -> bool {
         let bindings = inputs.iter().map(Input::binding).collect::<Vec<_>>();
+        let previous = self
+            .equations
+            .rows
+            .iter()
+            .map(|row| (row.id, row.kind))
+            .collect::<BTreeMap<_, _>>();
         let Some(change) = self
             .equations
             .apply(action, &bindings, &Input::channel_names(inputs))
@@ -205,6 +233,16 @@ impl Derived {
         } else {
             self.history_span = None;
         }
+        self.display.retain(|id, display| {
+            let Some(row) = self.equations.rows.iter().find(|row| row.id == *id) else {
+                return false;
+            };
+            if previous.get(id).is_some_and(|kind| *kind != row.kind) {
+                display.equation.offset = 0.0;
+                display.filtered.offset = 0.0;
+            }
+            true
+        });
         self.frequency.remap(&change.lanes);
         self.measurements.remap(&change.lanes);
         self.decoders.remap(&change.digital);
@@ -309,14 +347,16 @@ impl Derived {
         if !self.open() {
             return None;
         }
-        self.rate_controls(ui);
+        self.rate_controls(ui, span);
         let returned = super::frequency_plot::origin_controls(
             ui,
             &mut self.frequency.spectra,
             span,
             Default::default(),
         );
-        self.update(ui.ctx(), inputs, span);
+        if self.frequency.spectra.origin().is_none() {
+            self.update(ui.ctx(), inputs, span);
+        }
         let frame = self.current_frame(ui, inputs);
         if let Some(frame) = &frame {
             self.frequency.update_filters(ui, frame);
@@ -331,7 +371,7 @@ impl Derived {
                 .0
         });
         self.decoders.return_controls(ui, span);
-        let (mut plots, action) = self.equation_plots(ui, inputs, frame.as_deref());
+        let (plots, action) = self.equation_plots(ui, inputs, frame.as_deref());
         if let Some(action) = action {
             if self.apply(action, inputs, span) {
                 ui.ctx().request_repaint();
@@ -341,7 +381,7 @@ impl Derived {
         }
         let frame = frame?;
         let pointed = self.time_plot(
-            ui, &mut plots, &frame, span, domain, probe, reference, band, shared,
+            ui, &plots, &frame, span, domain, probe, reference, band, shared,
         );
         let reveal = self.frequency.take_reveal();
         let spectrum = ui.scope(|ui| {
@@ -386,39 +426,9 @@ impl Derived {
         for index in 0..self.equations.rows.len() {
             let id = self.equations.rows[index].id;
             let row = ui.push_id(id, |ui| {
-                let equation = &self.equations.rows[index];
-                let editing = self.equations.editing();
-                let (edit, remove) = ui
-                    .horizontal_wrapped(|ui| {
-                        ui.colored_label(plot::color(index + 1), &equation.name);
-                        if frame.is_some() {
-                            self.frequency.button(ui, index);
-                        }
-                        let edit = ui
-                            .add_enabled(!editing, egui::Button::new("Edit").small())
-                            .clicked();
-                        let remove = ui
-                            .add_enabled(!editing, egui::Button::new("Remove").small())
-                            .clicked();
-                        (edit, remove)
-                    })
-                    .inner;
-                ui.add(egui::Label::new(egui::RichText::new(&equation.text).monospace()).wrap());
-                if edit {
-                    self.equations.edit(index);
-                }
-                if remove {
-                    action = Some(equations::Action::Remove(id));
-                }
-                if let Some(error) = self.equations.row_error(id) {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                }
-                let response = self.equations.editor(ui, Some(id), inputs);
-                action = response.or(action.take());
-                if show_time {
-                    plots.push(TracePlot::allocate(ui));
-                }
+                self.equation_row(ui, inputs, frame, index, show_time, &mut plots)
             });
+            action = row.inner.or(action);
             if frame.is_some() && self.reveal_equation == Some(id) {
                 row.response.scroll_to_me(None);
                 self.reveal_equation = None;
@@ -428,6 +438,103 @@ impl Derived {
         (plots, response.or(action))
     }
 
+    fn equation_row(
+        &mut self,
+        ui: &mut Ui,
+        inputs: &[Input],
+        frame: Option<&Frame>,
+        index: usize,
+        show_time: bool,
+        plots: &mut Vec<TracePlot>,
+    ) -> Option<equations::Action> {
+        let equation = &self.equations.rows[index];
+        let id = equation.id;
+        let mut action = None;
+        let editing = self.equations.editing();
+        let (edit, remove) = ui
+            .horizontal_wrapped(|ui| {
+                ui.colored_label(Trace::Equation(index).color(ui), &equation.name);
+                if let Some(lane) = frame.and_then(|frame| frame.lanes.get(index)) {
+                    self.frequency.button(ui, Trace::Equation(index));
+                    if show_time {
+                        let origin = self.frequency.origin_trace() == Some(Trace::Equation(index));
+                        self.display.entry(id).or_default().equation.controls(
+                            ui,
+                            Some(lane),
+                            origin,
+                        );
+                    }
+                }
+                let edit = ui
+                    .add_enabled(!editing, egui::Button::new("Edit").small())
+                    .clicked();
+                let remove = ui
+                    .add_enabled(!editing, egui::Button::new("Remove").small())
+                    .clicked();
+                (edit, remove)
+            })
+            .inner;
+        ui.add(egui::Label::new(egui::RichText::new(&equation.text).monospace()).wrap());
+        if edit {
+            self.equations.edit(index);
+        }
+        if remove {
+            action = Some(equations::Action::Remove(id));
+        }
+        if let Some(error) = self.equations.row_error(id) {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        let response = self.equations.editor(ui, Some(id), inputs);
+        action = response.or(action.take());
+        if show_time {
+            let display = self.display.get(&id).copied().unwrap_or_default().equation;
+            let trace = Trace::Equation(index);
+            if !display.hidden || self.frequency.origin_trace() == Some(trace) {
+                plots.push(TracePlot::allocate(ui, trace, display.offset));
+            }
+        }
+        if let Some(frame) = frame
+            && matches!(frame.lanes.get(index), Some(Lane::Analog { .. }))
+            && self.frequency.filter_settings().contains_key(&index)
+        {
+            self.filtered_plot(ui, id, index, frame, show_time, plots);
+        }
+        action
+    }
+
+    fn filtered_plot(
+        &mut self,
+        ui: &mut Ui,
+        id: u64,
+        index: usize,
+        frame: &Frame,
+        show_time: bool,
+        plots: &mut Vec<TracePlot>,
+    ) {
+        let trace = Trace::Filtered(index);
+        let name = frame.lanes[index].name();
+        ui.push_id("filtered-output", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(trace.color(ui), format!("{name} filtered"));
+                self.frequency.button(ui, trace);
+                if show_time {
+                    let origin = self.frequency.origin_trace() == Some(trace);
+                    let state = &mut self.display.entry(id).or_default().filtered;
+                    state.controls(ui, self.frequency.filtered_lane(index), origin);
+                    if !state.hidden && self.frequency.filtered_lane(index).is_none() {
+                        ui.weak(self.frequency.filtered_status(frame, index));
+                    }
+                }
+            });
+            if show_time {
+                let state = self.display.get(&id).copied().unwrap_or_default().filtered;
+                if !state.hidden || self.frequency.origin_trace() == Some(trace) {
+                    plots.push(TracePlot::allocate(ui, trace, state.offset));
+                }
+            }
+        });
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "plot geometry and shared timeline"
@@ -435,7 +542,7 @@ impl Derived {
     fn time_plot(
         &mut self,
         ui: &mut Ui,
-        plots: &mut Vec<TracePlot>,
+        plots: &[TracePlot],
         frame: &Frame,
         span: &mut Range<f64>,
         domain: &Range<f64>,
@@ -444,13 +551,14 @@ impl Derived {
         annotations: Option<Rect>,
         shared: Option<&Range<f64>>,
     ) -> Option<f64> {
-        if self.frequency.only() || plots.is_empty() {
+        if self.frequency.only() {
             return None;
         }
-        let filtered = self.frequency.filtered_lanes(frame);
-        for lane in &filtered {
-            ui.strong(&lane.name);
-            plots.push(TracePlot::allocate(ui));
+        if plots.is_empty() {
+            if annotations.is_some() {
+                self.decoders.table(ui, span, domain, None, frame.step);
+            }
+            return self.decoders.cursor();
         }
         let rect = plots.first()?.rect.union(plots.last()?.rect);
         let mut pointed = None;
@@ -472,16 +580,45 @@ impl Derived {
             plots,
             span,
             self.selected.as_ref(),
-            &filtered,
+            &self.frequency,
             cursor.or(probe),
             reference,
         );
+        self.paint_time_markers(ui, plots, span, shared);
+        if self.measurements.take_reveal() {
+            ui.scroll_to_rect(rect, Some(egui::Align::Max));
+        }
+        if let Some(band) = annotations {
+            let band = Rect::from_min_max(
+                pos2(rect.left(), band.top()),
+                pos2(rect.right(), band.bottom()),
+            );
+            let equations = plots.iter().filter_map(|plot| match plot.trace {
+                Trace::Equation(index) => Some((index, plot.rect)),
+                Trace::Filtered(_) => None,
+            });
+            if let Some(action) = self.decoders.paint(ui, band, equations, span) {
+                self.decoders
+                    .follow_event(ui, action, span, domain, frame.step);
+            }
+            self.decoders.table(ui, span, domain, pointed, frame.step);
+        }
+        pointed.or(self.decoders.cursor())
+    }
+
+    fn paint_time_markers(
+        &self,
+        ui: &Ui,
+        plots: &[TracePlot],
+        span: &Range<f64>,
+        shared: Option<&Range<f64>>,
+    ) {
         for plot in plots.iter().filter(|plot| ui.is_rect_visible(plot.rect)) {
             self.measurements.paint(ui.painter(), plot.rect, span);
             timeline::paint_shared(ui.painter(), plot.rect, span, shared);
         }
-        if let Some(index) = self.frequency.origin_lane()
-            && let Some(plot) = plots.get(index)
+        if let Some(trace) = self.frequency.origin_trace()
+            && let Some(plot) = plots.iter().find(|plot| plot.trace == trace)
         {
             let painter = ui
                 .painter()
@@ -494,24 +631,6 @@ impl Derived {
                 &self.frequency.spectra,
             );
         }
-        if self.measurements.take_reveal() {
-            ui.scroll_to_rect(rect, Some(egui::Align::Max));
-        }
-        if let Some(band) = annotations {
-            let band = Rect::from_min_max(
-                pos2(rect.left(), band.top()),
-                pos2(rect.right(), band.bottom()),
-            );
-            if let Some(action) =
-                self.decoders
-                    .paint(ui, band, plots.iter().map(|plot| plot.rect), span)
-            {
-                self.decoders
-                    .follow_event(ui, action, span, domain, frame.step);
-            }
-            self.decoders.table(ui, span, domain, pointed, frame.step);
-        }
-        pointed.or(self.decoders.cursor())
     }
 
     fn select_interval(
@@ -530,192 +649,65 @@ impl Derived {
         } else if response.secondary_clicked() {
             *selected = None;
         }
-        if let Some(selected) = selected.as_ref() {
-            response.clone().on_hover_text(format!(
-                "{} selected · Right-click to clear",
-                display_value(selected.end - selected.start, "s")
-            ));
-        } else {
-            response
-                .clone()
-                .on_hover_text("Drag to select a time range · Scroll to zoom");
-        }
     }
 }
 
-struct TracePlot {
-    rect: Rect,
-    response: Response,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::engineering::analysis::{Dimension, SignalType};
 
-impl TracePlot {
-    fn allocate(ui: &mut Ui) -> Self {
-        let (area, reserved) =
-            ui.allocate_exact_size(vec2(ui.available_width(), 65.0), Sense::hover());
-        let rect = Rect::from_min_max(area.min + vec2(78.0, 7.0), area.max - vec2(9.0, 7.0));
-        let response = ui.interact(
-            rect,
-            reserved.id.with("derived-time"),
-            Sense::click_and_drag(),
-        );
-        Self { rect, response }
-    }
-}
+    #[test]
+    fn equation_display_is_saved_as_browsing_state_and_follows_the_equation_id() {
+        let volts = SignalType::Analog(Dimension::from_unit("V").unwrap());
+        let saved = serde_json::from_value(serde_json::json!({
+            "alias": "s1_c1", "label": "Voltage", "kind": volts, "rate": 1000.0
+        }))
+        .unwrap();
+        let inputs = [Input::missing(&saved, Default::default())];
+        let mut view = Derived::default();
+        view.program = view
+            .equations
+            .restore(vec![
+                equations::Equation {
+                    id: 3,
+                    text: "A = s1_c1".into(),
+                    name: "A".into(),
+                    kind: volts,
+                },
+                equations::Equation {
+                    id: 7,
+                    text: "B = 2 * s1_c1".into(),
+                    name: "B".into(),
+                    kind: volts,
+                },
+            ])
+            .unwrap();
+        let legacy = serde_json::to_value(view.session_settings()).unwrap();
+        assert!(legacy.get("display").is_none());
+        let old = view.analysis_edits();
+        let state = view.display.entry(7).or_default();
+        state.equation.offset = 0.5;
+        state.filtered.hidden = true;
+        assert!(view.analysis_edits() == old);
 
-impl Frame {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "plot rows share a timeline and selection"
-    )]
-    fn paint(
-        &self,
-        ui: &mut Ui,
-        plots: &[TracePlot],
-        span: &Range<f64>,
-        selected: Option<&Range<f64>>,
-        filtered: &[filtering::PlotLane<'_>],
-        probe: Option<f64>,
-        reference: Option<f64>,
-    ) {
-        let last = plots.last().expect("nonempty plot rows").rect;
-        ui.allocate_space(vec2(0.0, 14.0));
-        let painter = ui.painter();
-        let rects = plots
-            .iter()
-            .map(|plot| plot.rect)
-            .filter(|rect| ui.is_rect_visible(*rect));
-        for rect in rects.clone() {
-            painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
-        }
-        let ink = ui.visuals().weak_text_color();
-        plot::x_axis_with_grid(
-            painter,
-            last,
-            span,
-            "s",
-            ink,
-            rects.map(|rect| rect.y_range()),
-        );
-        let recorded = self
-            .lanes
-            .iter()
-            .enumerate()
-            .map(|(index, lane)| (Some(lane), plot::color(index + 1)));
-        let filtered = filtered
-            .iter()
-            .map(|lane| (lane.values, super::filter_editor::FILTER_COLOR));
-        let probe = probe.filter(|time| span.contains(time));
-        for (row, (lane, color)) in plots.iter().zip(recorded.chain(filtered)) {
-            let rect = row.rect;
-            if !ui.is_rect_visible(rect) {
-                continue;
-            }
-            let clipped = painter.with_clip_rect(rect);
-            if let Some(selected) = selected {
-                plot::highlight(
-                    &clipped,
-                    rect,
-                    span,
-                    selected.clone(),
-                    plot::color(1).gamma_multiply(0.22),
-                );
-            }
-            if let Some(lane) = lane {
-                if let Lane::Analog {
-                    channel, bounds, ..
-                } = lane
-                {
-                    plot::paint_y_scale(painter, rect, *bounds, &channel.unit, color);
-                }
-                lane.paint(&clipped, rect, span, &self.span, color);
-            }
-            if let Some(time) = probe {
-                let x = plot::x_at(rect, span, time);
-                clipped.vline(x, rect.y_range(), Stroke::new(1.0, ink));
-                if let Some(value) = lane
-                    .and_then(|lane| lane.value(time))
-                    .filter(|value| !value.is_empty())
-                {
-                    let galley = painter.layout_no_wrap(value, FontId::monospace(11.0), color);
-                    let left = (x + 4.0)
-                        .min(rect.right() - galley.size().x - 6.0)
-                        .max(rect.left());
-                    let label = Rect::from_min_size(
-                        pos2(left, rect.top() + 3.0),
-                        galley.size() + vec2(6.0, 4.0),
-                    );
-                    clipped.rect_filled(label, 3.0, ui.visuals().window_fill());
-                    clipped.galley(label.min + vec2(3.0, 2.0), galley, Color32::PLACEHOLDER);
-                }
-            }
-            timeline::paint_reference(&clipped, rect, span, reference);
-        }
-    }
-}
+        let saved = serde_json::to_value(view.session_settings()).unwrap();
+        let mut reopened = Derived::default();
+        reopened
+            .restore_session(serde_json::from_value(saved).unwrap())
+            .unwrap();
+        assert_eq!(reopened.display[&7].equation.offset, 0.5);
+        assert!(reopened.display[&7].filtered.hidden);
+        assert!(reopened.apply(equations::Action::Remove(3), &inputs, &(0.0..1.0)));
+        assert_eq!(reopened.equations.rows[0].id, 7);
+        assert_eq!(reopened.display[&7].equation.offset, 0.5);
+        assert!(reopened.apply(equations::Action::Remove(7), &inputs, &(0.0..1.0)));
+        assert!(reopened.display.is_empty());
 
-impl Lane {
-    fn paint(
-        &self,
-        painter: &egui::Painter,
-        row: Rect,
-        visible: &Range<f64>,
-        captured: &Range<f64>,
-        color: Color32,
-    ) {
-        match self {
-            Self::Analog {
-                channel,
-                raw,
-                envelope,
-                bounds,
-            } => {
-                if raw.samples.len() <= 4096 {
-                    plot::draw_raw(
-                        painter,
-                        row,
-                        visible,
-                        channel.start_seconds,
-                        channel.interval_seconds,
-                        &raw.samples,
-                        *bounds,
-                        color,
-                    );
-                } else {
-                    plot::draw_envelope(painter, row, visible, channel, envelope, *bounds, color);
-                }
-            }
-            Self::Digital {
-                trace, envelope, ..
-            } => {
-                if trace.edges.len() <= 4096 {
-                    logic_view::plot::draw_trace(painter, row, visible, captured, trace, color);
-                } else {
-                    logic_view::plot::draw_envelope(painter, row, visible, envelope, color);
-                }
-            }
-        }
-    }
-
-    fn value(&self, time: f64) -> Option<String> {
-        match self {
-            Self::Analog { channel, raw, .. } => raw
-                .value_at(time)
-                .map(|value| display_value(f64::from(value), &channel.unit)),
-            Self::Digital {
-                trace, envelope, ..
-            } => {
-                if !envelope.time.contains(&time) {
-                    return None;
-                }
-                let edge = trace
-                    .edges
-                    .partition_point(|edge| edge.time_seconds <= time);
-                let level = edge
-                    .checked_sub(1)
-                    .map(|index| trace.edges[index].level)
-                    .or(trace.initial)?;
-                Some(logic_view::level_label(level).to_owned())
-            }
-        }
+        let mut legacy_view = Derived::default();
+        legacy_view
+            .restore_session(serde_json::from_value(legacy).unwrap())
+            .unwrap();
+        assert!(legacy_view.display.is_empty());
     }
 }

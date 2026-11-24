@@ -98,7 +98,7 @@ impl Decoders {
         &self,
         ui: &Ui,
         band: Rect,
-        plots: impl IntoIterator<Item = Rect>,
+        plots: impl IntoIterator<Item = (usize, Rect)>,
         span: &Range<f64>,
     ) -> Option<EventAction> {
         let decode_span = self.decode_span(span);
@@ -106,7 +106,7 @@ impl Decoders {
             && let Some(frame) = &self.frame
         {
             let wired = self.wired(frame);
-            for (index, rect) in plots.into_iter().enumerate() {
+            for (index, rect) in plots {
                 if !wired.contains(&index) {
                     continue;
                 }

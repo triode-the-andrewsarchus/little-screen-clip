@@ -54,11 +54,6 @@ pub(super) struct Output {
     pub lane: Lane,
 }
 
-pub(super) struct PlotLane<'a> {
-    pub name: String,
-    pub values: Option<&'a Lane>,
-}
-
 struct Request {
     index: usize,
     name: String,
@@ -135,28 +130,18 @@ impl Filters {
         ctx.request_repaint_after(Duration::from_millis(24));
     }
 
-    pub fn lanes(&self) -> &[Output] {
+    fn lanes(&self) -> &[Output] {
         self.accepted
             .as_ref()
             .and_then(|(_, result)| result.as_ref().ok())
             .map_or(&[], Vec::as_slice)
     }
 
-    pub fn plots(&self, frame: &Frame) -> Vec<PlotLane<'_>> {
-        self.settings
-            .keys()
-            .filter_map(|&index| {
-                let Lane::Analog { channel, .. } = frame.lanes.get(index)? else {
-                    return None;
-                };
-                let values = self.lanes().iter().find(|output| output.index == index);
-                let name = format!("{} filtered", channel.name);
-                Some(PlotLane {
-                    name,
-                    values: values.map(|output| &output.lane),
-                })
-            })
-            .collect()
+    pub fn lane(&self, index: usize) -> Option<&Lane> {
+        self.lanes()
+            .iter()
+            .find(|output| output.index == index)
+            .map(|output| &output.lane)
     }
 
     pub fn has_samples(&self, index: usize, frame: &Frame) -> bool {

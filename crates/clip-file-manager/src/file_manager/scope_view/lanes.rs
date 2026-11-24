@@ -85,7 +85,12 @@ impl Lane {
     }
 }
 
-pub(super) fn offset_control(ui: &mut Ui, unit: &str, bounds: Peak, offset: &mut f32) {
+pub(in crate::file_manager) fn offset_control(
+    ui: &mut Ui,
+    unit: &str,
+    bounds: Peak,
+    offset: &mut f32,
+) {
     let span = f64::from(bounds.max) - f64::from(bounds.min);
     let speed = if span.is_finite() && span > 0.0 {
         span / 100.0
@@ -126,7 +131,7 @@ pub(super) fn offset_control(ui: &mut Ui, unit: &str, bounds: Peak, offset: &mut
     }
 }
 
-pub(super) fn shifted(bounds: Peak, offset: f32) -> Peak {
+pub(in crate::file_manager) fn shifted(bounds: Peak, offset: f32) -> Peak {
     if !bounds.valid() {
         return bounds;
     }
@@ -136,7 +141,7 @@ pub(super) fn shifted(bounds: Peak, offset: f32) -> Peak {
     }
 }
 
-pub(super) fn stacked_scale(mut bounds: Peak, offset: f32) -> Peak {
+pub(in crate::file_manager) fn stacked_scale(mut bounds: Peak, offset: f32) -> Peak {
     // Keep the original reference and the shifted waveform on the same axis.
     bounds.merge(shifted(bounds, offset));
     bounds
