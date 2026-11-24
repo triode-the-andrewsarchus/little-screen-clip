@@ -465,6 +465,18 @@ impl Viewer {
             .and_then(|pos| smith.nearest(pos, data.iter().copied()));
         let clipped = painter.with_clip_rect(rect);
         smith.grid(&clipped, colors.text_muted);
+        let reference = marker_value(&self.summary.metadata, self.trace);
+        let label = reference.map_or_else(
+            || "Normalized impedance · Z/Z₀".to_owned(),
+            |ohms| format!("Normalized impedance · Z/Z₀ · Z₀ = {ohms} Ω"),
+        );
+        clipped.text(
+            rect.left_top() + egui::vec2(8.0, 8.0),
+            egui::Align2::LEFT_TOP,
+            label,
+            egui::FontId::proportional(13.0),
+            colors.text_secondary,
+        );
         smith.trace(&clipped, data, colors.accent);
         if let Some(gated) = self.gated_trace() {
             smith.trace(
@@ -475,6 +487,19 @@ impl Viewer {
         }
         if let Some(point) = picked {
             smith.mark(&clipped, point.value, "", colors.text_secondary);
+            if let Some(impedance) =
+                reference.and_then(|reference| antenna::impedance(point.value, reference))
+            {
+                response.clone().on_hover_text(format!(
+                    "{} · {:.3} {:+.3}j Ω",
+                    little_clip_core::engineering::waveforms::display_value(
+                        point.frequency_hz,
+                        "Hz"
+                    ),
+                    impedance.re,
+                    impedance.im,
+                ));
+            }
             if response.clicked_by(PointerButton::Primary) {
                 self.markers
                     .set(self.markers.active, Target::Row(point.index));

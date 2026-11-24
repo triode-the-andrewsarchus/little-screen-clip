@@ -503,6 +503,41 @@ impl Smith {
             });
             painter.add(Shape::line(arc.collect(), grid));
         }
+        self.grid_labels(painter, ink);
+    }
+
+    fn grid_labels(&self, painter: &Painter, ink: Color32) {
+        let font = FontId::monospace(10.0);
+        let values: &[(f64, &str)] = if self.radius > 96.0 {
+            &[
+                (0.0, "0"),
+                (0.2, "0.2"),
+                (0.5, "0.5"),
+                (1.0, "1"),
+                (2.0, "2"),
+                (5.0, "5"),
+            ]
+        } else {
+            &[(0.0, "0"), (1.0, "1"), (2.0, "2")]
+        };
+        for &(resistance, label) in values {
+            let point = self.screen(Complex64::new((resistance - 1.0) / (resistance + 1.0), 0.0));
+            painter.text(
+                point + vec2(0.0, 3.0),
+                Align2::CENTER_TOP,
+                label,
+                font.clone(),
+                ink,
+            );
+        }
+        if self.radius > 43.0 {
+            for (reactance, label) in [(1.0, "+j1"), (-1.0, "−j1")] {
+                let z = Complex64::new(0.0, reactance);
+                let point = self.screen((z - 1.0) / (z + 1.0));
+                let inset = (self.center - point).normalized() * 4.0;
+                painter.text(point + inset, Align2::LEFT_CENTER, label, font.clone(), ink);
+            }
+        }
     }
 
     pub fn trace(&self, painter: &Painter, data: &[TracePoint], color: Color32) {

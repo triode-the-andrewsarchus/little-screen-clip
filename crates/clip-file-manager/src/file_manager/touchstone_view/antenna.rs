@@ -129,8 +129,8 @@ pub(super) fn companions(
     );
     let painter = ui.painter_at(outer);
     for (at, title) in [
-        (outer.left() + 4.0, "Smith · normalized"),
-        (split + 8.0, "Impedance · R bright, X muted"),
+        (outer.left() + 4.0, "Smith · Z/Z₀"),
+        (split + 8.0, "Impedance (Ω) · R bright, X muted"),
     ] {
         painter.text(
             pos2(at, outer.top() + 2.0),
