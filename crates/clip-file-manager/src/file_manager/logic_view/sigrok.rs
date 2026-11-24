@@ -5,7 +5,11 @@ use crate::file_manager::signal_view::timeline;
 use egui::{Context, Ui};
 use little_clip_core::{
     BackgroundJobs,
-    engineering::{analysis::Clock, logic::Lane, waveforms::display_value},
+    engineering::{
+        analysis::Clock,
+        logic::Lane,
+        waveforms::{display_axis_value, display_value},
+    },
 };
 use provider::{Catalog, Decoder, Output, Request};
 use std::{ops::Range, sync::LazyLock, time::Duration};
@@ -160,12 +164,15 @@ impl Panel {
                 return None;
             }
         };
+        let step = 1.0 / output.rate as f64;
+        let timestamp =
+            |time| display_axis_value(clock.to_workspace(time), step * clock.scale(), "s");
         let parts = coverage(output);
         ui.horizontal_wrapped(|ui| {
             ui.weak(format!(
                 "{}–{} · {}",
-                display_value(clock.to_workspace(output.range.start), "s"),
-                display_value(clock.to_workspace(output.range.end), "s"),
+                timestamp(output.range.start),
+                timestamp(output.range.end),
                 parts.join(" · "),
             ));
         });
@@ -181,17 +188,11 @@ impl Panel {
             output.annotations.len(),
             |index| {
                 let event = &output.annotations[index];
-                (
-                    display_value(clock.to_workspace(event.time.start), "s"),
-                    event.text.clone(),
-                )
+                (timestamp(event.time.start), event.text.clone())
             },
         )?;
         self.picked = Some(row);
-        Some((
-            output.annotations[row].time.clone(),
-            1.0 / output.rate as f64,
-        ))
+        Some((output.annotations[row].time.clone(), step))
     }
 
     pub fn visit(
