@@ -446,6 +446,9 @@ mod tests {
             "pad.kicad_mod",
             "lib.kicad_sym",
             "fab.gbrjob",
+            "net.cir",
+            "ckt.sp",
+            "sim.spice",
         ] {
             let entry = file_entry(name);
             assert_eq!(family(&entry), Category::Eda, "expected Eda for {name}");

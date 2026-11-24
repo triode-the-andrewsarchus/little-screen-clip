@@ -1130,7 +1130,7 @@ fn identify_special_file(
         return super::geography::Viewer::from_trajectory(trajectory)
             .map(|viewer| Some(Loaded::Geography(Box::new(viewer))));
     }
-    if super::eda::is_gerber_gbr_file(path) {
+    if super::eda::is_gerber_gbr_file(path) || super::eda::is_spice_raw_file(path) {
         return super::eda::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Eda)
@@ -1397,6 +1397,9 @@ mod tests {
             ("missing.KICAD_MOD", Format::Eda),
             ("missing.KICAD_SYM", Format::Eda),
             ("missing.GBRJOB", Format::Eda),
+            ("missing.CIR", Format::Eda),
+            ("missing.SP", Format::Eda),
+            ("missing.SPICE", Format::Eda),
         ] {
             let path = Path::new(name);
             assert_eq!(Format::for_path(path), Some(format));
@@ -1418,6 +1421,28 @@ mod tests {
         assert!(matches!(
             load(&path, &AppConfig::default(), &cancelled).unwrap(),
             Loaded::Text(_)
+        ));
+    }
+
+    #[test]
+    fn spice_raw_opens_in_eda_viewer_while_camera_raw_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let spice_raw = dir.path().join("wave.raw");
+        std::fs::write(
+            &spice_raw,
+            "Title: Demo\nPlotname: Transient Analysis\nFlags: real\nNo. Variables: 2\nNo. Points: 2\nVariables:\n\t0\ttime\ttime\n\t1\tV(out)\tvoltage\nValues:\n 0\t0.0\n\t0.0\n 1\t1.0\n\t5.0\n",
+        )
+        .unwrap();
+        let camera_raw = dir.path().join("photo.raw");
+        std::fs::write(&camera_raw, b"II*\0\x08\0\0\0fake tiff").unwrap();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        assert!(matches!(
+            load(&spice_raw, &AppConfig::default(), &cancelled).unwrap(),
+            Loaded::Eda(_)
+        ));
+        assert!(!matches!(
+            load(&camera_raw, &AppConfig::default(), &cancelled),
+            Ok(Loaded::Eda(_))
         ));
     }
 

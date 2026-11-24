@@ -313,6 +313,7 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Some(Format::Eda) => return Some(Kind::Eda),
         Some(Format::Embroidery) => return Some(Kind::Embroidery),
         Some(format) if format.is_engineering() => return Some(Kind::Engineering(format)),
+        _ if little_clip_core::eda::is_spice_raw_path(path) => return Some(Kind::Eda),
         _ => {}
     };
     let kind = if spreadsheet::is_spreadsheet_file(path) {

@@ -650,6 +650,8 @@ impl EntryPreviews {
         } else if entry.is_material() {
             self.materials
                 .show(ui, row, entry, columns, id, self.cache.get(id), colors);
+        } else if self.cache.get(id).is_some_and(|r| r.data.eda.is_some()) {
+            super::eda::show_list(ui, row, entry, columns, self.cache.get(id), colors);
         } else {
             super::image_strip::show(
                 ui,
