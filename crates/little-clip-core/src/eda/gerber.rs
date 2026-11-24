@@ -1126,10 +1126,6 @@ fn layer_color_for_type(ty: &LayerType) -> [u8; 3] {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Passes canvas target, layer colors, polarity flags, and cancellation token explicitly"
-)]
 fn render_flat_objects(
     canvas: &mut Pixmap,
     flat: &FlatLayer,
