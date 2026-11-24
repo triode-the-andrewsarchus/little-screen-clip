@@ -475,16 +475,16 @@ fn parse_kicad_ascii(
             continue;
         }
         if let Some(comment) = trimmed.strip_prefix('#') {
-            let tokens = tokenize_ws_quoted(comment);
-            if let Some(map) = ColumnMap::from_headers(tokens.iter().map(|s| s.as_str())) {
+            if let Some(tokens) = tokenize_ws_quoted(comment)
+                && let Some(map) = ColumnMap::from_headers(tokens.iter().map(|s| s.as_str()))
+            {
                 cols = Some(map);
             }
             continue;
         }
-        let tokens = tokenize_ws_quoted(trimmed);
-        if tokens.is_empty() {
+        let Some(tokens) = tokenize_ws_quoted(trimmed) else {
             continue;
-        }
+        };
         let default_cols = ColumnMap {
             ref_des: Some(0),
             value: Some(1),
@@ -502,10 +502,11 @@ fn parse_kicad_ascii(
     Ok(out)
 }
 
-fn tokenize_ws_quoted(line: &str) -> Vec<String> {
+fn tokenize_ws_quoted(line: &str) -> Option<Vec<String>> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
+    let mut field_started = false;
     let mut chars = line.chars().peekable();
     while let Some(ch) = chars.next() {
         if in_quotes {
@@ -519,20 +520,26 @@ fn tokenize_ws_quoted(line: &str) -> Vec<String> {
             } else {
                 current.push(ch);
             }
-        } else if ch == '"' && current.is_empty() {
+        } else if ch == '"' && !field_started {
             in_quotes = true;
+            field_started = true;
         } else if ch.is_whitespace() {
-            if !current.is_empty() {
+            if field_started {
                 tokens.push(std::mem::take(&mut current));
+                field_started = false;
             }
         } else {
             current.push(ch);
+            field_started = true;
         }
     }
-    if !current.is_empty() {
+    if in_quotes {
+        return None;
+    }
+    if field_started {
         tokens.push(current);
     }
-    tokens
+    Some(tokens)
 }
 
 fn placement_from_fields(
@@ -598,6 +605,20 @@ fn parse_coord(raw: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_quoted_fields_keep_ascii_placement_columns_aligned() {
+        let bytes = b"# Ref Val Package PosX PosY Rot Side\nR1 \"\" R_0603 12 24 90 bottom\n";
+        let doc = PickAndPlaceDocument::parse(bytes, &AtomicBool::new(false)).unwrap();
+        let part = &doc.placements[0];
+        assert_eq!(part.value, "");
+        assert_eq!(part.package, "R_0603");
+        assert_eq!(
+            [part.x_mm, part.y_mm, part.rotation_deg],
+            [12.0, 24.0, 90.0]
+        );
+        assert_eq!(part.side, PlacementSide::Bottom);
+    }
 
     #[test]
     fn centroid_headers_convert_mils_to_millimeters() {
