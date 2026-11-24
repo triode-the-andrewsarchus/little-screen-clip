@@ -67,16 +67,12 @@ fn render_scene(
 }
 
 fn prim_visible(region: RasterRegion, prim: &Prim) -> bool {
-    let mut bounds = None;
-    extend_prim_bounds(&mut bounds, prim);
-    let width = match prim {
-        Prim::Polyline { width, .. } | Prim::Arc { width, .. } | Prim::Strokes { width, .. } => {
-            *width
-        }
-        Prim::Polygon { stroke, .. } | Prim::Circle { stroke, .. } => *stroke,
-        Prim::Hole { .. } => 0.0,
-    };
-    bounds.is_some_and(|bounds| region.intersects(bounds, width.abs() + 2.0 / region.pixels_per_mm))
+    let bounds = prim.bbox();
+    !bounds.is_empty()
+        && region.intersects(
+            [bounds.min[0], bounds.min[1], bounds.max[0], bounds.max[1]],
+            2.0 / region.pixels_per_mm,
+        )
 }
 
 pub(super) fn resolve_scene_bounds(scene: &Scene) -> [f64; 4] {

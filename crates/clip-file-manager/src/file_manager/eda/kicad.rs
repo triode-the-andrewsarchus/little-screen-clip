@@ -384,17 +384,16 @@ pub(super) fn render_project_details(ui: &mut Ui, proj: &KicadProjectDocument) {
     if let Some(v) = proj.meta_version {
         ui.label(format!("Schema version: {v}"));
     }
-    if let Some(t) = proj.min_track_width_mm {
-        ui.label(format!("Min track width: {t:.3} mm"));
-    }
-    if let Some(c) = proj.min_clearance_mm {
-        ui.label(format!("Min clearance: {c:.3} mm"));
-    }
-    if let Some(v) = proj.min_via_diameter_mm {
-        ui.label(format!("Min via diameter: {v:.3} mm"));
-    }
-    if let Some(edge) = proj.copper_edge_clearance_mm {
-        ui.label(format!("Copper to edge: {edge:.3} mm"));
+    let rules = [
+        ("Min track width", proj.min_track_width_mm),
+        ("Min clearance", proj.min_clearance_mm),
+        ("Min via diameter", proj.min_via_diameter_mm),
+        ("Copper to edge", proj.copper_edge_clearance_mm),
+    ];
+    for (name, value) in rules {
+        if let Some(value) = value {
+            ui.label(format!("{name}: {value:.3} mm"));
+        }
     }
     if !proj.design_rules.is_empty() {
         ui.collapsing("All board rules", |ui| {
@@ -412,18 +411,13 @@ pub(super) fn render_project_details(ui: &mut Ui, proj: &KicadProjectDocument) {
         ui.separator();
         ui.strong(format!("Net Classes ({})", proj.net_classes.len()));
         for nc in &proj.net_classes {
-            let clr = nc
-                .clearance_mm
-                .map_or_else(|| "—".into(), |v| format!("{v:.3}"));
-            let trk = nc
-                .track_width_mm
-                .map_or_else(|| "—".into(), |v| format!("{v:.3}"));
-            let via = nc
-                .via_diameter_mm
-                .map_or_else(|| "—".into(), |v| format!("{v:.3}"));
-            let drill = nc
-                .via_drill_mm
-                .map_or_else(|| "—".into(), |v| format!("{v:.3}"));
+            let [clr, trk, via, drill] = [
+                nc.clearance_mm,
+                nc.track_width_mm,
+                nc.via_diameter_mm,
+                nc.via_drill_mm,
+            ]
+            .map(|value| value.map_or_else(|| "—".into(), |v| format!("{v:.3}")));
             ui.label(format!(
                 "{} · clearance {clr} · track {trk} · via {via} · drill {drill} mm",
                 nc.name

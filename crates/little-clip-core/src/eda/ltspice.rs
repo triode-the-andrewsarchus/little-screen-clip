@@ -35,18 +35,17 @@ pub fn is_schematic_path(path: &Path) -> bool {
 pub fn is_schematic_bytes(bytes: &[u8]) -> bool {
     let text = decode_ltspice_drawing(&bytes[..bytes.len().min(4096)]);
     let mut records = records(&text);
-    records.next().is_some_and(|[tag, value]| {
-        tag.eq_ignore_ascii_case("version") && matches!(value, "4" | "4.1")
-    }) && records.next().is_some_and(|[tag, fields]| {
-        let mut fields = fields.split_whitespace();
-        tag.eq_ignore_ascii_case("sheet")
-            && (0..3).all(|_| {
-                fields
-                    .next()
-                    .is_some_and(|value| value.parse::<i32>().is_ok())
-            })
-            && fields.next().is_none()
-    })
+    records.next().is_some_and(supports_version)
+        && records.next().is_some_and(|[tag, fields]| {
+            let mut fields = fields.split_whitespace();
+            tag.eq_ignore_ascii_case("sheet")
+                && (0..3).all(|_| {
+                    fields
+                        .next()
+                        .is_some_and(|value| value.parse::<i32>().is_ok())
+                })
+                && fields.next().is_none()
+        })
 }
 
 #[derive(Clone, Debug)]
@@ -70,116 +69,13 @@ impl Schematic {
             return Err("Expected an LTspice Version 4 schematic with a SHEET record".into());
         }
         let text = decode_ltspice_drawing(bytes);
-        let mut drawing = Drawing::new();
-        let mut symbols = Vec::<Option<Placement>>::new();
-        let mut wire_count = 0;
-        let mut symbol_count = 0;
-        let mut wire_ends = BTreeMap::<[i32; 2], u32>::new();
-        for (index, [tag, fields]) in records(&text).enumerate().skip(2) {
-            if index.is_multiple_of(256) {
-                check_cancelled(cancel, "LTspice schematic parse cancelled")?;
-            }
-            let mut fields = fields.split_whitespace();
-            match tag {
-                "WIRE" | "BUSTAP" => {
-                    if let Some([a, b]) = points(&mut fields) {
-                        if tag == "WIRE" {
-                            wire_count += 1;
-                        }
-                        if drawing.scene.items.len() < MAX_ITEMS {
-                            for p in [a, b] {
-                                *wire_ends.entry(p.map(|x| x as i32)).or_default() += 1;
-                            }
-                            drawing.add(0, Role::Wire, line(vec![a, b], 1.5));
-                        } else {
-                            drawing.limited = true;
-                        }
-                    }
-                }
-                "SYMBOL" => {
-                    symbol_count += 1;
-                    if symbols.len() < MAX_SYMBOLS {
-                        let name = fields.next().unwrap_or_default();
-                        let pos = point(&mut fields);
-                        let orientation = fields.next().unwrap_or_default();
-                        let orientation = match orientation {
-                            "R0" | "R90" | "R180" | "R270" | "M0" | "M90" | "M180" | "M270" => {
-                                Some(orientation)
-                            }
-                            _ => None,
-                        };
-                        symbols.push(pos.zip(orientation).map(|(pos, orientation)| Placement {
-                            name: name.chars().take(256).collect(),
-                            pos,
-                            orientation,
-                            properties: Definition::default(),
-                        }));
-                    } else {
-                        drawing.limited = true;
-                    }
-                }
-                "SYMATTR" | "WINDOW" if symbol_count <= MAX_SYMBOLS => {
-                    if let Some(Some(symbol)) = symbols.last_mut() {
-                        symbol.properties.read_field(tag, fields);
-                    }
-                }
-                "FLAG" | "DATAFLAG" => {
-                    if let Some(p) = point(&mut fields) {
-                        let label = words(fields);
-                        if tag == "FLAG" && label == "0" {
-                            let [x, y] = p;
-                            drawing.add(
-                                0,
-                                Role::Label,
-                                line(
-                                    vec![[x - 8.0, y], [x, y + 9.0], [x + 8.0, y], [x - 8.0, y]],
-                                    1.5,
-                                ),
-                            );
-                        } else {
-                            drawing.text(p, "Bottom", 2, &label);
-                        }
-                    }
-                }
-                "TEXT" => drawing.annotation(fields),
-                "LINE" | "RECTANGLE" | "CIRCLE" | "ARC" => {
-                    if let Some(prim) = shape(tag, fields, true, |p| p) {
-                        drawing.add(1, Role::Graphic, prim);
-                    }
-                }
-                _ => {}
-            }
-        }
-        for ([x, y], count) in wire_ends {
-            if count > 2 {
-                drawing.add(
-                    0,
-                    Role::Junction,
-                    Prim::Circle {
-                        center: [f64::from(x), f64::from(y)],
-                        radius: 3.0,
-                        fill: true,
-                        stroke: 0.0,
-                    },
-                );
-            }
-        }
-        let mut definitions = BTreeMap::new();
-        let mut unresolved = BTreeSet::new();
-        for (index, placement) in symbols.into_iter().flatten().enumerate() {
-            if index.is_multiple_of(32) {
-                check_cancelled(cancel, "LTspice symbol resolution cancelled")?;
-            }
-            if !definitions.contains_key(&placement.name) && definitions.len() < MAX_DEFINITIONS {
-                let definition =
-                    companion_dir.and_then(|dir| read_symbol(dir, &placement.name, cancel));
-                definitions.insert(placement.name.clone(), definition);
-            }
-            let definition = definitions.get(&placement.name).and_then(Option::as_ref);
-            if !placement.paint(&mut drawing, definition) {
-                unresolved.insert(placement.name);
-            }
-        }
+        let Sheet {
+            mut drawing,
+            symbols,
+            wire_count,
+            symbol_count,
+        } = read_sheet(&text, cancel)?;
+        let unresolved = resolve_symbols(&mut drawing, symbols, companion_dir, cancel)?;
         drawing.scene.recompute_bbox();
         let bbox = drawing.scene.bbox;
         let bounds = if bbox.is_empty() {
@@ -193,7 +89,7 @@ impl Schematic {
             bounds,
             wire_count,
             symbol_count,
-            unresolved: unresolved.into_iter().collect(),
+            unresolved,
             limited: drawing.limited,
             source_excerpt: super::bounded_source_excerpt(&text),
         })
@@ -232,6 +128,112 @@ impl Schematic {
     ) -> Result<ImageThumbnail, String> {
         render_scene_region(&self.scene, region, background(), cancel)
     }
+}
+
+struct Sheet<'a> {
+    drawing: Drawing,
+    symbols: Vec<Option<Placement<'a>>>,
+    wire_count: usize,
+    symbol_count: usize,
+}
+
+fn read_sheet<'a>(text: &'a str, cancel: &AtomicBool) -> Result<Sheet<'a>, String> {
+    let mut drawing = Drawing::new();
+    let mut symbols = Vec::<Option<Placement>>::new();
+    let mut wire_count = 0;
+    let mut symbol_count = 0;
+    let mut wire_ends = BTreeMap::<[i32; 2], u32>::new();
+    for (index, [tag, fields]) in records(text).enumerate().skip(2) {
+        if index.is_multiple_of(256) {
+            check_cancelled(cancel, "LTspice schematic parse cancelled")?;
+        }
+        let mut fields = fields.split_whitespace();
+        match tag {
+            "WIRE" | "BUSTAP" => {
+                if let Some([a, b]) = points(&mut fields) {
+                    if tag == "WIRE" {
+                        wire_count += 1;
+                    }
+                    if drawing.scene.items.len() < MAX_ITEMS {
+                        for p in [a, b] {
+                            *wire_ends.entry(p.map(|x| x as i32)).or_default() += 1;
+                        }
+                        drawing.add(0, Role::Wire, line(vec![a, b], 1.5));
+                    } else {
+                        drawing.limited = true;
+                    }
+                }
+            }
+            "SYMBOL" => {
+                symbol_count += 1;
+                if symbols.len() < MAX_SYMBOLS {
+                    symbols.push(Placement::parse(fields));
+                } else {
+                    drawing.limited = true;
+                }
+            }
+            "SYMATTR" | "WINDOW" if symbol_count <= MAX_SYMBOLS => {
+                if let Some(Some(symbol)) = symbols.last_mut() {
+                    symbol.properties.read_field(tag, fields);
+                }
+            }
+            "FLAG" | "DATAFLAG" => drawing.flag(tag, fields),
+            "TEXT" => drawing.annotation(fields),
+            "LINE" | "RECTANGLE" | "CIRCLE" | "ARC" => {
+                if let Some(prim) = shape(tag, fields, true, |p| p) {
+                    drawing.add(1, Role::Graphic, prim);
+                }
+            }
+            _ => {}
+        }
+    }
+    for ([x, y], count) in wire_ends {
+        if count > 2 {
+            drawing.add(
+                0,
+                Role::Junction,
+                Prim::Circle {
+                    center: [f64::from(x), f64::from(y)],
+                    radius: 3.0,
+                    fill: true,
+                    stroke: 0.0,
+                },
+            );
+        }
+    }
+
+    Ok(Sheet {
+        drawing,
+        symbols,
+        wire_count,
+        symbol_count,
+    })
+}
+
+fn resolve_symbols(
+    drawing: &mut Drawing,
+    symbols: Vec<Option<Placement<'_>>>,
+    companion_dir: Option<&Path>,
+    cancel: &AtomicBool,
+) -> Result<Vec<String>, String> {
+    let mut definitions = BTreeMap::new();
+    let mut unresolved = BTreeSet::new();
+    for (index, placement) in symbols.into_iter().flatten().enumerate() {
+        if index.is_multiple_of(32) {
+            check_cancelled(cancel, "LTspice symbol resolution cancelled")?;
+        }
+        if !definitions.contains_key(&placement.name) && definitions.len() < MAX_DEFINITIONS {
+            let definition =
+                companion_dir.and_then(|dir| read_symbol(dir, &placement.name, cancel));
+            definitions.insert(placement.name.clone(), definition);
+        }
+        let definition = definitions.get(&placement.name).and_then(Option::as_ref);
+        if !placement.paint(drawing, definition) {
+            unresolved.insert(placement.name);
+        }
+    }
+
+    Ok(unresolved.into_iter().collect())
 }
 
 fn background() -> Color {
@@ -294,6 +296,25 @@ impl Drawing {
             group: None,
             props: Vec::new(),
         });
+    }
+
+    fn flag(&mut self, tag: &str, mut fields: std::str::SplitWhitespace<'_>) {
+        if let Some(p) = point(&mut fields) {
+            let label = words(fields);
+            if tag == "FLAG" && label == "0" {
+                let [x, y] = p;
+                self.add(
+                    0,
+                    Role::Label,
+                    line(
+                        vec![[x - 8.0, y], [x, y + 9.0], [x + 8.0, y], [x - 8.0, y]],
+                        1.5,
+                    ),
+                );
+            } else {
+                self.text(p, "Bottom", 2, &label);
+            }
+        }
     }
 
     fn annotation(&mut self, mut fields: std::str::SplitWhitespace<'_>) {
@@ -398,7 +419,25 @@ struct Placement<'a> {
     properties: Definition,
 }
 
-impl Placement<'_> {
+impl<'a> Placement<'a> {
+    fn parse(mut fields: std::str::SplitWhitespace<'a>) -> Option<Self> {
+        let name = fields.next()?;
+        let pos = point(&mut fields)?;
+        let orientation = fields.next()?;
+        if !matches!(
+            orientation,
+            "R0" | "R90" | "R180" | "R270" | "M0" | "M90" | "M180" | "M270"
+        ) {
+            return None;
+        }
+        Some(Self {
+            name: name.chars().take(256).collect(),
+            pos,
+            orientation,
+            properties: Definition::default(),
+        })
+    }
+
     fn paint(&self, drawing: &mut Drawing, definition: Option<&Definition>) -> bool {
         let transform = |p| transform(p, self.pos, self.orientation);
         if let Some(def) = definition {
@@ -500,13 +539,15 @@ fn read_symbol(dir: &Path, name: &str, cancel: &AtomicBool) -> Option<Definition
     }
     let (bytes, source) = file_source::read_held_snapshot(&mut file, MAX_SYMBOL_BYTES).ok()?;
     source.check().ok()?;
-    let text = decode_ltspice_drawing(&bytes);
-    let mut records = records(&text);
-    if !records.next().is_some_and(|[tag, value]| {
-        tag.eq_ignore_ascii_case("version") && matches!(value, "4" | "4.1")
-    }) || !records
-        .next()
-        .is_some_and(|[tag, _]| tag.eq_ignore_ascii_case("symboltype"))
+    parse_symbol(&decode_ltspice_drawing(&bytes))
+}
+
+fn parse_symbol(text: &str) -> Option<Definition> {
+    let mut records = records(text);
+    if !records.next().is_some_and(supports_version)
+        || !records
+            .next()
+            .is_some_and(|[tag, _]| tag.eq_ignore_ascii_case("symboltype"))
     {
         return None;
     }
@@ -530,9 +571,17 @@ fn read_symbol(dir: &Path, name: &str, cancel: &AtomicBool) -> Option<Definition
     Some(definition)
 }
 
+fn supports_version([tag, value]: [&str; 2]) -> bool {
+    tag.eq_ignore_ascii_case("version") && matches!(value, "4" | "4.1")
+}
+
 fn records(text: &str) -> impl Iterator<Item = [&str; 2]> {
     text.split(['\r', '\n']).filter_map(|line| {
-        let (tag, rest) = line.trim().split_once(char::is_whitespace)?;
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        let (tag, rest) = line.split_once(char::is_whitespace).unwrap_or((line, ""));
         Some([tag, rest.trim()])
     })
 }
