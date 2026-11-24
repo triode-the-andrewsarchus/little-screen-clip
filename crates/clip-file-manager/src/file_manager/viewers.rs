@@ -1378,7 +1378,7 @@ mod tests {
 
     #[test]
     fn files_compare_opens_kicad_sheet_changes() {
-        use egui_kittest::{Harness, kittest::Queryable};
+        use egui_kittest::kittest::Queryable;
         let folder = tempfile::tempdir().unwrap();
         let paths = ["before.kicad_sch", "after.kicad_sch"].map(|name| folder.path().join(name));
         for (path, end_y) in paths.iter().zip([0, 3]) {
@@ -1386,8 +1386,38 @@ mod tests {
                 "(kicad_sch (version 20231120) (generator eeschema) (wire (pts (xy 0 0) (xy 10 {end_y}))))"
             )).unwrap();
         }
+        let harness = files_comparison(paths.into(), "Changed source objects");
+        assert!(harness.query_by_label("Changes only").is_some());
+    }
+
+    #[test]
+    fn files_compare_opens_spice_waveforms_and_selects_residual() {
+        use egui_kittest::kittest::Queryable;
+        let folder = tempfile::tempdir().unwrap();
+        let paths = ["before.raw", "after.raw"].map(|name| folder.path().join(name));
+        for (path, middle) in paths.iter().zip([1, 2]) {
+            std::fs::write(path, format!(
+                "Title: Compare\nPlotname: Transient Analysis\nFlags: real\nNo. Variables: 2\nNo. Points: 3\nVariables:\n0 time time\n1 v(out) voltage\nValues:\n0 0 0\n1 1 {middle}\n2 3 0\n"
+            )).unwrap();
+        }
+        let mut harness = files_comparison(paths.into(), "Overlay");
+        assert!(harness.query_by_label("Waveforms").is_some());
+        harness.get_by_label("B − A").click();
+        harness.run();
+        assert!(
+            harness
+                .query_by_label_contains("linear interpolation in the shared domain")
+                .is_some()
+        );
+    }
+
+    fn files_comparison(
+        paths: Vec<PathBuf>,
+        ready_label: &str,
+    ) -> egui_kittest::Harness<'static, Viewers> {
+        use egui_kittest::{Harness, kittest::Queryable};
         let mut viewers = Viewers::default();
-        viewers.open_engineering(paths.into(), super::super::EngineeringAction::Compare);
+        viewers.open_engineering(paths, super::super::EngineeringAction::Compare);
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut copies = super::super::preview_copy::Copies::default();
@@ -1402,15 +1432,15 @@ mod tests {
                 viewers,
             );
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while harness.query_by_label("Changed source objects").is_none() {
+        while harness.query_by_label(ready_label).is_none() {
             assert!(
                 std::time::Instant::now() < deadline,
-                "sheet comparison did not publish"
+                "comparison did not publish {ready_label}"
             );
             harness.step();
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(harness.query_by_label("Changes only").is_some());
+        harness
     }
 
     #[test]

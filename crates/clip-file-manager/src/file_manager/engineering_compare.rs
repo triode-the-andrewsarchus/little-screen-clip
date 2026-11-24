@@ -2,6 +2,7 @@
 mod artwork;
 mod eda_fields;
 mod facts;
+mod raw;
 mod tag_memory;
 use super::{preview_job::Task, scope_view, shelf::preview, tags_view};
 use crate::file_source::{FileSource, ReadCheck};
@@ -11,6 +12,7 @@ use egui_extras::{Column, TableBuilder};
 use facts::Facts;
 use little_clip_core::{
     BackgroundJobs,
+    eda::EdaFormat,
     engineering::{
         tags::{Document, Memory},
         waveforms::{Peak, display_value, time_span},
@@ -63,6 +65,7 @@ pub(super) struct Viewer {
     keys: Vec<String>,
     tags: Option<tag_memory::View>,
     artwork: artwork::View,
+    raw: raw::View,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,6 +74,7 @@ enum Mode {
     Fields,
     Memory,
     Artwork,
+    Waveforms,
 }
 
 enum Action {
@@ -103,15 +107,13 @@ impl Viewer {
         let keys = diff_keys(&sources[0].facts, &sources[1].facts, false);
         let tags = tag_memory::View::compare([sources[0].memory(), sources[1].memory()]);
         let mode = match (sources[0].eda, sources[1].eda) {
-            (Some(a), Some(b)) if a == b => {
-                if is_artwork(a) {
-                    Mode::Artwork
-                } else if eda_fields::supported(a) {
+            (Some(a), Some(b)) if a == b => preview_mode(a).unwrap_or_else(|| {
+                if eda_fields::supported(a) {
                     Mode::Fields
                 } else {
                     Mode::Sources
                 }
-            }
+            }),
             _ => Mode::Sources,
         };
         Ok(Self {
@@ -131,6 +133,7 @@ impl Viewer {
             keys,
             tags,
             artwork: artwork::View::new(),
+            raw: raw::View::default(),
         })
     }
 
@@ -156,8 +159,8 @@ impl Viewer {
             return;
         }
         self.toolbar(ui);
-        let format = self.sources[self.base].eda;
-        let artwork_pair = format == self.sources[self.other].eda && format.is_some_and(is_artwork);
+        let format = self.pair_format();
+        let preview = format.and_then(preview_mode);
         if let Some(note) = &self.note {
             ui.label(note);
         }
@@ -165,8 +168,11 @@ impl Viewer {
         ui.horizontal(|ui| {
             clip_ui::buttons::choice(ui, &mut self.mode, Mode::Sources, "Sources");
             clip_ui::buttons::choice(ui, &mut self.mode, Mode::Fields, "Decoded fields");
-            if artwork_pair {
+            if preview == Some(Mode::Artwork) {
                 clip_ui::buttons::choice(ui, &mut self.mode, Mode::Artwork, "Artwork");
+            }
+            if preview == Some(Mode::Waveforms) {
+                clip_ui::buttons::choice(ui, &mut self.mode, Mode::Waveforms, "Waveforms");
             }
             if self.tags.is_some() {
                 clip_ui::buttons::choice(ui, &mut self.mode, Mode::Memory, "Memory map");
@@ -182,12 +188,15 @@ impl Viewer {
         if self.mode != Mode::Artwork {
             self.artwork.cancel_pending();
         }
+        if self.mode != Mode::Waveforms {
+            self.raw.cancel_pending();
+        }
         let pair = [&self.sources[self.base], &self.sources[self.other]];
         match self.mode {
             Mode::Sources => self.summaries(ui),
             Mode::Fields => self.fields(ui),
             Mode::Artwork => {
-                if let Some(format) = format.filter(|_| artwork_pair) {
+                if let Some(format) = format {
                     self.artwork.ui(
                         ui,
                         [self.base, self.other],
@@ -197,6 +206,13 @@ impl Viewer {
                     );
                 }
             }
+            Mode::Waveforms => self.raw.ui(
+                ui,
+                [self.base, self.other],
+                pair.map(|input| &input.file),
+                pair.map(|input| input.title.as_str()),
+                crate::ui_appearance::WorkbenchColors::from_palette(palette),
+            ),
             Mode::Memory => {
                 if let Some(tags) = &mut self.tags {
                     let names =
@@ -217,7 +233,7 @@ impl Viewer {
             if self.sources.len() > 2 && self.task.is_none() {
                 self.select_pair(ui);
             }
-            if self.mode == Mode::Artwork {
+            if matches!(self.mode, Mode::Artwork | Mode::Waveforms) {
                 return;
             }
             let max = self.sources[self.base]
@@ -266,11 +282,11 @@ impl Viewer {
 
     fn select_pair(&mut self, ui: &mut Ui) {
         let before = [self.base, self.other];
-        let artwork = self
+        let graphical = self
             .sources
             .iter()
-            .all(|source| source.eda.is_some_and(is_artwork));
-        if artwork {
+            .all(|source| source.eda.and_then(preview_mode).is_some());
+        if graphical {
             select_source(ui, "A", &self.sources, &mut self.base, self.other);
         }
         select_source(ui, "B", &self.sources, &mut self.other, self.base);
@@ -286,12 +302,20 @@ impl Viewer {
         if self.mode == Mode::Memory && self.tags.is_none() {
             self.mode = Mode::Sources;
         }
-        if self.mode == Mode::Artwork && pair[0].eda != pair[1].eda {
-            self.mode = Mode::Sources;
+        if matches!(self.mode, Mode::Artwork | Mode::Waveforms)
+            || graphical && self.mode == Mode::Sources
+        {
+            self.mode = self
+                .pair_format()
+                .and_then(preview_mode)
+                .unwrap_or(Mode::Sources);
         }
-        if artwork && pair[0].eda == pair[1].eda && self.mode == Mode::Sources {
-            self.mode = Mode::Artwork;
-        }
+    }
+
+    fn pair_format(&self) -> Option<EdaFormat> {
+        self.sources[self.base]
+            .eda
+            .filter(|format| Some(*format) == self.sources[self.other].eda)
     }
 
     fn poll(&mut self, ui: &Ui) {
@@ -631,9 +655,15 @@ impl Input {
     }
 }
 
-fn is_artwork(format: little_clip_core::eda::EdaFormat) -> bool {
-    use little_clip_core::eda::EdaFormat::{Excellon, Gerber, KicadPcb, KicadSchematic};
-    matches!(format, Gerber | Excellon | KicadPcb | KicadSchematic)
+fn preview_mode(format: EdaFormat) -> Option<Mode> {
+    match format {
+        EdaFormat::Gerber
+        | EdaFormat::Excellon
+        | EdaFormat::KicadPcb
+        | EdaFormat::KicadSchematic => Some(Mode::Artwork),
+        EdaFormat::SpiceRaw => Some(Mode::Waveforms),
+        _ => None,
+    }
 }
 
 fn compare(

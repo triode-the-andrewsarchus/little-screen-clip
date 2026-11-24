@@ -220,7 +220,7 @@ pub(super) fn render_plt_details(ui: &mut Ui, plt: &LtspicePlotDocument) {
     }
 }
 
-pub(super) fn raw_plot_rect(rect: Rect) -> Rect {
+pub(in crate::file_manager) fn raw_plot_rect(rect: Rect) -> Rect {
     Rect::from_min_max(rect.min + vec2(28.0, 14.0), rect.max - vec2(14.0, 28.0))
 }
 
@@ -293,7 +293,7 @@ fn compute_y_bounds(plot: &SpiceRawPlot, state: &ViewerState) -> (f64, f64) {
     }
 }
 
-fn paint_scope_grid(painter: &egui::Painter, rect: Rect) {
+pub(in crate::file_manager) fn paint_scope_grid(painter: &egui::Painter, rect: Rect) {
     let grid = Stroke::new(1.0, Color32::from_rgb(38, 46, 58));
     painter.rect_stroke(rect, 0.0, grid, egui::StrokeKind::Inside);
     for i in 1..4 {
@@ -341,7 +341,7 @@ fn paint_trace_curves(
     }
 }
 
-fn paint_axis_labels(
+pub(in crate::file_manager) fn paint_axis_labels(
     painter: &egui::Painter,
     rect: Rect,
     [x, y]: [PlotAxis; 2],
@@ -364,22 +364,32 @@ fn paint_axis_labels(
         pos2(rect.right(), rect.bottom() + 4.0),
         Align2::RIGHT_TOP,
         format!("{x1:.3e}"),
-        font.clone(),
+        font,
         colors.text_secondary,
     );
+    paint_ordinate_labels(painter, rect, y, colors.text_secondary);
+}
+
+pub(in crate::file_manager) fn paint_ordinate_labels(
+    painter: &egui::Painter,
+    rect: Rect,
+    y: PlotAxis,
+    color: Color32,
+) {
+    let font = FontId::proportional(10.0);
     painter.text(
         pos2(rect.left() + 4.0, rect.top() + 2.0),
         Align2::LEFT_TOP,
         fmt_num(y.value_at(rect.top())),
         font.clone(),
-        colors.text_secondary,
+        color,
     );
     painter.text(
         pos2(rect.left() + 4.0, rect.bottom() - 2.0),
         Align2::LEFT_BOTTOM,
         fmt_num(y.value_at(rect.bottom())),
         font,
-        colors.text_secondary,
+        color,
     );
 }
 

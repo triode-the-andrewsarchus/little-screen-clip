@@ -2,7 +2,7 @@
 
 mod kicad;
 pub(super) mod raster_task;
-mod spice;
+pub(super) mod spice;
 
 use super::{
     filesystem::Entry,

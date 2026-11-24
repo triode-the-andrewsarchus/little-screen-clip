@@ -2,6 +2,7 @@
 //! output waveforms (`.raw`), and LTspice plot settings (`.plt`).
 
 mod peaks;
+pub mod raw_compare;
 mod sweeps;
 
 pub use peaks::{SpicePreviewSample, SpiceRawTrace};
