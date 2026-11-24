@@ -3,6 +3,7 @@
 mod compare;
 mod flipper;
 mod memory;
+pub mod ndef;
 mod signal;
 mod source;
 mod trace;

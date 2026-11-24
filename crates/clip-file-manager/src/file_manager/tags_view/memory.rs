@@ -1,7 +1,7 @@
 use super::hex;
 use crate::ui_appearance::WorkbenchColors;
 use egui::{Align, Key, Layout, Modifiers, ScrollArea, Ui, vec2};
-use little_clip_core::engineering::tags::{Format, Memory, MemoryRow, RowRole};
+use little_clip_core::engineering::tags::{Format, Memory, MemoryRow, RowRole, ndef};
 
 pub(super) struct View {
     memory: Memory,
@@ -11,12 +11,19 @@ pub(super) struct View {
     byte: Option<usize>,
     field: Option<usize>,
     reveal_field: bool,
+    ndef: Option<ndef::Records>,
+    show_records: bool,
 }
 
 impl View {
     pub fn new(memory: Memory) -> Self {
         let selected = (!memory.rows.is_empty()).then_some(0);
         let coverage = memory.coverage();
+        let ndef = ndef::type2_records(&memory)
+            .filter(|records| !records.entries.is_empty() || records.partial);
+        let show_records = ndef
+            .as_ref()
+            .is_some_and(|records| !records.entries.is_empty());
         Self {
             memory,
             coverage,
@@ -25,6 +32,8 @@ impl View {
             byte: None,
             field: None,
             reveal_field: false,
+            ndef,
+            show_records,
         }
     }
 
@@ -34,14 +43,31 @@ impl View {
         }
         let ordinal = ordinal.min(self.memory.rows.len() as u64 - 1) as usize;
         self.selected = Some(ordinal);
+        self.show_records = false;
         self.scroll_to = Some(ordinal.saturating_sub(4));
         self.byte = None;
     }
 
     pub fn ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
-        self.navigate(ui);
         self.title(ui, colors);
+        if self.ndef.is_some() {
+            ui.horizontal(|ui| {
+                for (label, records) in [("NDEF records", true), ("Memory", false)] {
+                    if ui
+                        .add(egui::Button::new(label).selected(self.show_records == records))
+                        .clicked()
+                    {
+                        self.show_records = records;
+                    }
+                }
+            });
+        }
         ui.separator();
+        if self.show_records {
+            self.records(ui);
+            return;
+        }
+        self.navigate(ui);
         if self.memory.rows.len() <= 1 {
             self.details(ui, colors);
             return;
@@ -66,6 +92,76 @@ impl View {
             self.list(ui, (height * 0.42).max(86.0), colors);
             ui.separator();
             self.details(ui, colors);
+        }
+    }
+
+    fn records(&mut self, ui: &mut Ui) {
+        let Some(records) = &self.ndef else { return };
+        let mut jump = None;
+        ScrollArea::vertical()
+            .id_salt("tag NDEF records")
+            .show(ui, |ui| {
+                if records.partial {
+                    ui.weak("Some NDEF data is unread or incomplete");
+                }
+                for record in &records.entries {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.strong(&record.title);
+                        if ui
+                            .small_button(format!("Source page {}", record.page))
+                            .clicked()
+                        {
+                            jump = Some(record.page);
+                        }
+                        if ui.small_button("Copy value").clicked() {
+                            ui.ctx().copy_text(record.value.clone());
+                        }
+                    });
+                    if record.title == "Contact · vCard" {
+                        let mut any = false;
+                        for line in record.value.lines() {
+                            if let Some((key, value)) = line.split_once(':') {
+                                let field = key.split(';').next().unwrap_or(key);
+                                let label = match field.to_ascii_uppercase().as_str() {
+                                    "FN" => "Name",
+                                    "TEL" => "Phone",
+                                    "EMAIL" => "Email",
+                                    "ORG" => "Organization",
+                                    "ADR" => "Address",
+                                    "URL" => "Website",
+                                    _ => continue,
+                                };
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.weak(label);
+                                    if field.eq_ignore_ascii_case("ADR") {
+                                        ui.label(
+                                            value
+                                                .split(';')
+                                                .filter(|part| !part.is_empty())
+                                                .collect::<Vec<_>>()
+                                                .join(", "),
+                                        );
+                                    } else {
+                                        ui.label(value);
+                                    }
+                                });
+                                any = true;
+                            }
+                        }
+                        if !any {
+                            ui.add(egui::Label::new(&record.value).wrap());
+                        }
+                    } else {
+                        ui.add(egui::Label::new(&record.value).wrap());
+                    }
+                    ui.separator();
+                }
+            });
+        if let Some(index) =
+            jump.and_then(|page| self.memory.rows.iter().position(|row| row.address == page))
+        {
+            self.show_records = false;
+            self.focus(index as u64);
         }
     }
 
