@@ -539,7 +539,7 @@ impl Smith {
     fn reactance_grid(&self, painter: &Painter, ink: Color32, stroke: Stroke, values: &[f64]) {
         let resolution = (self.zoom.sqrt() * 40.0) as u32;
         let clip = painter.clip_rect();
-        let rect = Rect::from_min_max(clip.min + vec2(24.0, 29.0), clip.max - vec2(24.0, 19.0));
+        let rect = Rect::from_min_max(clip.min + vec2(24.0, 44.0), clip.max - vec2(24.0, 19.0));
         let mut labels: Vec<Pos2> = Vec::new();
         for reactance in values.iter().flat_map(|&value| [value, -value]) {
             let mut arc: Vec<_> = (0..resolution)
