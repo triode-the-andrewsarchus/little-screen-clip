@@ -8,7 +8,10 @@ use super::{
 use crate::{ImageThumbnail, file_source};
 use eda_view::{
     strokes::{HJustify, TextSpec, VJustify, to_strokes},
-    vector::{Item, Layer, LayerKind, Point, Prim, Role, Scene, SceneKind, Side},
+    vector::{
+        Group, GroupId, GroupKind, Item, Layer, LayerKind, Point, Prim, Prop, Role, Scene,
+        SceneKind, Side,
+    },
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -130,6 +133,37 @@ impl Schematic {
     }
 }
 
+pub(super) fn comparison_drawing(
+    bytes: &[u8],
+    companion_dir: Option<&Path>,
+    side: &str,
+    cancel: &AtomicBool,
+) -> Result<super::source_compare::Drawing, String> {
+    let sheet = Schematic::parse(bytes, companion_dir, cancel)?;
+    let mut drawing = super::source_compare::Drawing::from_scene(&sheet.scene, cancel)?;
+    drawing.warnings.push(
+                    "One LTspice sheet · wire endpoints, flags and resolved pins are compared · hierarchical connectivity and electrical rules are outside coverage".into(),
+                );
+    if sheet.limited {
+        drawing.warnings.push(format!(
+            "{side}: some LTspice records could not be drawn or exceeded preview limits"
+        ));
+    }
+    if !sheet.unresolved.is_empty() {
+        let names = sheet
+            .unresolved
+            .iter()
+            .take(4)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        drawing.warnings.push(format!(
+                        "{side}: {} missing or unreadable local .asy definitions ({names}). Placements remain comparable.", sheet.unresolved.len()
+                    ));
+    }
+    Ok(drawing)
+}
+
 struct Sheet<'a> {
     drawing: Drawing,
     symbols: Vec<Option<Placement<'a>>>,
@@ -158,7 +192,12 @@ fn read_sheet<'a>(text: &'a str, cancel: &AtomicBool) -> Result<Sheet<'a>, Strin
                         for p in [a, b] {
                             *wire_ends.entry(p.map(|x| x as i32)).or_default() += 1;
                         }
-                        drawing.add(0, Role::Wire, line(vec![a, b], 1.5));
+                        drawing.add_properties(
+                            0,
+                            Role::Wire,
+                            line(vec![a, b], 1.5),
+                            vec![Prop::new("kind", tag)],
+                        );
                     } else {
                         drawing.limited = true;
                     }
@@ -167,7 +206,9 @@ fn read_sheet<'a>(text: &'a str, cancel: &AtomicBool) -> Result<Sheet<'a>, Strin
             "SYMBOL" => {
                 symbol_count += 1;
                 if symbols.len() < MAX_SYMBOLS {
-                    symbols.push(Placement::parse(fields));
+                    let placement = Placement::parse(fields);
+                    drawing.limited |= placement.is_none();
+                    symbols.push(placement);
                 } else {
                     drawing.limited = true;
                 }
@@ -177,7 +218,7 @@ fn read_sheet<'a>(text: &'a str, cancel: &AtomicBool) -> Result<Sheet<'a>, Strin
                     symbol.properties.read_field(tag, fields);
                 }
             }
-            "FLAG" | "DATAFLAG" => drawing.flag(tag, fields),
+            "FLAG" | "DATAFLAG" | "IOPIN" => drawing.flag(tag, fields),
             "TEXT" => drawing.annotation(fields),
             "LINE" | "RECTANGLE" | "CIRCLE" | "ARC" => {
                 if let Some(prim) = shape(tag, fields, true, |p| p) {
@@ -244,6 +285,7 @@ struct Drawing {
     scene: Scene,
     glyphs: usize,
     limited: bool,
+    symbol: Option<GroupId>,
 }
 
 impl Drawing {
@@ -279,10 +321,15 @@ impl Drawing {
             scene,
             glyphs: MAX_GLYPHS,
             limited: false,
+            symbol: None,
         }
     }
 
     fn add(&mut self, layer: u16, role: Role, prim: Prim) {
+        self.add_properties(layer, role, prim, Vec::new());
+    }
+
+    fn add_properties(&mut self, layer: u16, role: Role, prim: Prim, props: Vec<Prop>) {
         if self.scene.items.len() >= MAX_ITEMS {
             self.limited = true;
             return;
@@ -293,8 +340,8 @@ impl Drawing {
             role,
             prim,
             net: None,
-            group: None,
-            props: Vec::new(),
+            group: self.symbol,
+            props,
         });
     }
 
@@ -303,16 +350,25 @@ impl Drawing {
             let label = words(fields);
             if tag == "FLAG" && label == "0" {
                 let [x, y] = p;
-                self.add(
+                self.add_properties(
                     0,
                     Role::Label,
                     line(
                         vec![[x - 8.0, y], [x, y + 9.0], [x + 8.0, y], [x - 8.0, y]],
                         1.5,
                     ),
+                    vec![Prop::new("kind", tag), Prop::new("text", "0")],
+                );
+            } else if tag == "IOPIN" {
+                let [x, y] = p;
+                self.add_properties(
+                    0,
+                    Role::Label,
+                    line(vec![[x - 5.0, y - 4.0], p, [x - 5.0, y + 4.0]], 1.5),
+                    vec![Prop::new("kind", tag), Prop::new("text", label)],
                 );
             } else {
-                self.text(p, "Bottom", 2, &label);
+                self.text_with_kind(p, "Bottom", 2, &label, tag);
             }
         }
     }
@@ -323,12 +379,28 @@ impl Drawing {
             && let Some(size) = fields.next().and_then(|n| n.parse().ok())
         {
             let text = words(fields);
+            let kind = if text.starts_with('!') {
+                "Directive"
+            } else {
+                "Annotation"
+            };
             let text = text.trim_start_matches(['!', ';']).replace("\\n", "\n");
-            self.text(pos, justify, size, &text);
+            self.text_with_kind(pos, justify, size, &text, kind);
         }
     }
 
     fn text(&mut self, pos: Point, justification: &str, size: u8, text: &str) {
+        self.text_with_kind(pos, justification, size, text, "Field");
+    }
+
+    fn text_with_kind(
+        &mut self,
+        pos: Point,
+        justification: &str,
+        size: u8,
+        text: &str,
+        kind: &str,
+    ) {
         if size == 0 || justification == "Invisible" || text.is_empty() {
             return;
         }
@@ -363,7 +435,21 @@ impl Drawing {
             justify_v,
             ..TextSpec::default()
         };
-        self.add(2, Role::Text, to_strokes(&spec).into_prim());
+        let role = if matches!(kind, "FLAG" | "DATAFLAG") {
+            Role::Label
+        } else {
+            Role::Text
+        };
+        self.add_properties(
+            2,
+            role,
+            to_strokes(&spec).into_prim(),
+            vec![
+                Prop::new("kind", kind),
+                Prop::new("text", &spec.text),
+                Prop::new("position", format!("{pos:?}")),
+            ],
+        );
     }
 }
 
@@ -372,8 +458,13 @@ struct Definition {
     attributes: BTreeMap<&'static str, String>,
     windows: BTreeMap<u8, Window>,
     shapes: Vec<Prim>,
-    pins: Vec<Point>,
+    pins: Vec<Pin>,
     limited: bool,
+}
+
+struct Pin {
+    at: Point,
+    properties: Vec<Prop>,
 }
 
 struct Window {
@@ -403,7 +494,7 @@ impl Definition {
                 );
             }
         } else if let Some(key) = fields.next().and_then(|key| {
-            ["InstName", "Value"]
+            ["InstName", "Value", "Value2", "SpiceLine", "SpiceLine2"]
                 .into_iter()
                 .find(|candidate| candidate.eq_ignore_ascii_case(key))
         }) {
@@ -439,6 +530,34 @@ impl<'a> Placement<'a> {
     }
 
     fn paint(&self, drawing: &mut Drawing, definition: Option<&Definition>) -> bool {
+        let property = |key| {
+            self.properties
+                .attributes
+                .get(key)
+                .or_else(|| definition?.attributes.get(key))
+        };
+        let reference = property("InstName")
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&self.name);
+        let group_id = drawing.scene.groups.len() as GroupId;
+        let mut props = vec![
+            Prop::new("symbol", self.name.replace('\\', "/")),
+            Prop::new("orientation", self.orientation),
+            Prop::new("position", format!("{:?}", self.pos)),
+        ];
+        for key in ["Value", "Value2", "SpiceLine", "SpiceLine2"] {
+            if let Some(value) = property(key) {
+                props.push(Prop::new(key, value));
+            }
+        }
+        drawing.scene.groups.push(Group {
+            id: group_id,
+            label: reference.clone(),
+            kind: GroupKind::Symbol,
+            props,
+        });
+        drawing.symbol = Some(group_id);
+        let start = drawing.scene.items.len();
         let transform = |p| transform(p, self.pos, self.orientation);
         if let Some(def) = definition {
             drawing.limited |= def.limited;
@@ -455,16 +574,17 @@ impl<'a> Placement<'a> {
                     );
                 }
             }
-            for &pin in &def.pins {
-                drawing.add(
+            for pin in &def.pins {
+                drawing.add_properties(
                     1,
                     Role::Pin,
                     Prim::Circle {
-                        center: transform(pin),
+                        center: transform(pin.at),
                         radius: 1.5,
                         fill: true,
                         stroke: 0.0,
                     },
+                    pin.properties.clone(),
                 );
             }
         } else {
@@ -488,11 +608,7 @@ impl<'a> Placement<'a> {
             );
         }
         for (index, key) in [(0, "InstName"), (3, "Value")] {
-            let value = self
-                .properties
-                .attributes
-                .get(key)
-                .or_else(|| definition?.attributes.get(key));
+            let value = property(key);
             let window = self
                 .properties
                 .windows
@@ -502,6 +618,19 @@ impl<'a> Placement<'a> {
                 drawing.text(transform(window.at), &window.justify, window.size, value);
             }
         }
+        if drawing.scene.items.len() == start {
+            drawing.add(
+                3,
+                Role::SymbolBody,
+                Prim::Circle {
+                    center: self.pos,
+                    radius: 4.0,
+                    fill: false,
+                    stroke: 1.5,
+                },
+            );
+        }
+        drawing.symbol = None;
         definition.is_some()
     }
 }
@@ -558,7 +687,29 @@ fn parse_symbol(text: &str) -> Option<Definition> {
             break;
         }
         match tag {
-            "PIN" => definition.pins.extend(point(&mut value.split_whitespace())),
+            "PIN" => {
+                if let Some(at) = point(&mut value.split_whitespace()) {
+                    definition.pins.push(Pin {
+                        at,
+                        properties: Vec::new(),
+                    });
+                }
+            }
+            "PINATTR" => {
+                let mut fields = value.split_whitespace();
+                if let Some(kind @ ("PinName" | "SpiceOrder")) = fields.next()
+                    && let Some(pin) = definition.pins.last_mut()
+                {
+                    pin.properties.push(Prop::new(
+                        if kind == "SpiceOrder" {
+                            "number"
+                        } else {
+                            "name"
+                        },
+                        words(fields),
+                    ));
+                }
+            }
             "WINDOW" | "SYMATTR" => definition.read_field(tag, value.split_whitespace()),
             "LINE" | "CIRCLE" | "ARC" | "RECTANGLE" => {
                 definition
@@ -660,7 +811,71 @@ fn shape(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eda::{Document, read_document};
+    use crate::{
+        eda::{Document, read_document, source_compare::compare_sources},
+        file_source::FileSource,
+    };
+
+    #[test]
+    fn asc_compare_registers_wires_symbols_and_labels_across_encodings() {
+        let folder = tempfile::tempdir().unwrap();
+        let paths = ["a.asc", "b.asc"].map(|name| folder.path().join(name));
+        std::fs::write(folder.path().join("local.asy"),
+            "Version 4\nSymbolType CELL\nLINE Normal 0 0 10 0\nPIN 10 0 NONE 0\nPINATTR PinName Plus\nPINATTR SpiceOrder 1\n"
+        ).unwrap();
+        let original = "Version 4\nSHEET 1 880 680\nWIRE 20 10 20 70\nFLAG 20 70 entrée\nSYMBOL local 20 10 R90\nSYMATTR InstName X1\nSYMBOL missing 60 70 R0\nSYMATTR InstName X2\n";
+        let equivalent = "Version 4.1\r\nSHEET 1 880 680\r\nSYMBOL missing 60 70 R0\r\nSYMATTR InstName X2\r\nWIRE 20 70 20 10\r\nFLAG 20 70 entrée\r\nSYMBOL local 20 10 R90\r\nSYMATTR InstName X1\r\n";
+        std::fs::write(
+            &paths[0],
+            original.chars().map(|c| c as u8).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let utf16 = [0xff, 0xfe]
+            .into_iter()
+            .chain(equivalent.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect::<Vec<_>>();
+        std::fs::write(&paths[1], utf16).unwrap();
+        let compare = || {
+            let files = paths
+                .each_ref()
+                .map(|path| FileSource::capture(path).unwrap());
+            compare_sources(
+                EdaFormat::LtspiceSchematic,
+                files.each_ref(),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        };
+        let same = compare();
+        assert_eq!(same.counts, [0, 0]);
+        assert!(
+            same.warnings
+                .iter()
+                .any(|line| line.contains("local .asy") && line.contains("missing"))
+        );
+        let changed = original
+            .replace("local 20 10 R90", "local 20 10 M270")
+            .replace("missing 60 70 R0", "missing 60 70 M0")
+            .replace("WIRE 20 10 20 70", "WIRE 20 10 40 70")
+            .replace("entrée", "sortie");
+        std::fs::write(&paths[1], changed).unwrap();
+        let changed = compare();
+        for target in ["Wire", "X1", "X2", "sortie"] {
+            assert!(
+                changed
+                    .changes
+                    .iter()
+                    .any(|change| change.side == 1 && change.label.contains(target)),
+                "{target}"
+            );
+        }
+        assert!(
+            changed
+                .changes
+                .iter()
+                .any(|change| change.side == 1 && change.label.contains("Pin · X1 · 1"))
+        );
+    }
 
     #[test]
     fn asc_uses_sheet_coordinates_encoding_and_local_rotated_symbols() {

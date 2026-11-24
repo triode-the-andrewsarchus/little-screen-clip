@@ -146,7 +146,7 @@ pub fn compare_sources(
     let load = |side: usize| -> Result<Drawing, String> {
         let file = files[side];
         let path = file.path();
-        let (drawing, observed) = read_snapshot(path, cancel, |bytes, _| match format {
+        let (drawing, observed) = read_snapshot(path, cancel, |bytes, snapshot| match format {
             EdaFormat::KicadPcb => pcb::comparison_drawing(bytes, cancel),
             EdaFormat::KicadSchematic => {
                 let sheet = KicadSchematicDocument::parse(path, bytes, cancel)?;
@@ -184,6 +184,12 @@ pub fn compare_sources(
                 );
                 Ok(drawing)
             }
+            EdaFormat::LtspiceSchematic => super::ltspice::comparison_drawing(
+                bytes,
+                snapshot.path().parent(),
+                ["A", "B"][side],
+                cancel,
+            ),
             _ => Err("Expected a supported board or schematic".into()),
         })?;
         if &observed != file {

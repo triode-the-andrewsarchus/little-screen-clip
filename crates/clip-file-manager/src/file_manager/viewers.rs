@@ -1411,6 +1411,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn files_compare_opens_ltspice_schematics_with_source_units() {
+        use egui_kittest::kittest::Queryable;
+        let folder = tempfile::tempdir().unwrap();
+        let paths = ["before.asc", "after.asc"].map(|name| folder.path().join(name));
+        for (path, angle) in paths.iter().zip(["R90", "M90"]) {
+            std::fs::write(path, format!(
+                "Version 4\nSHEET 1 880 680\nWIRE 0 0 60 0\nSYMBOL missing 60 0 {angle}\nSYMATTR InstName X1\n"
+            )).unwrap();
+        }
+        let harness = files_comparison(paths.into(), "Changed source objects");
+        assert!(harness.query_by_label_contains("sheet units/px").is_some());
+        assert!(
+            harness
+                .query_by_label_contains("missing or unreadable local .asy")
+                .is_some()
+        );
+        assert!(harness.query_by_label("Edge tolerance").is_none());
+    }
+
     fn files_comparison(
         paths: Vec<PathBuf>,
         ready_label: &str,

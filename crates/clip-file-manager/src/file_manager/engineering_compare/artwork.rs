@@ -125,6 +125,11 @@ impl View {
         format: EdaFormat,
     ) {
         let fabrication = matches!(format, EdaFormat::Gerber | EdaFormat::Excellon);
+        let unit = if format == EdaFormat::LtspiceSchematic {
+            "sheet units"
+        } else {
+            "mm"
+        };
         self.controls(ui, fabrication);
         let show_b = ui
             .horizontal_wrapped(|ui| {
@@ -147,7 +152,7 @@ impl View {
                 return;
             }
         };
-        let focus = display.describe(ui);
+        let focus = display.describe(ui, unit);
         let (bounds, y_down) = display.comparison.frame();
         let (rect, response) = ui.allocate_exact_size(
             vec2(
@@ -203,7 +208,7 @@ impl View {
                     let painter = painter.with_clip_rect(clip);
                     painter.rect_filled(detail_rect, 0.0, background());
                     canvas.paint(&painter, detail_rect, textures);
-                    detail_text = format!("Detail {:.4} mm/px", textures.pitch);
+                    detail_text = format!("Detail {:.4} {unit}/px", textures.pitch);
                 }
             }
             if let Some((_, error)) = &self.detail.failed {
@@ -224,7 +229,7 @@ impl View {
         }
         if let Some(pointer) = response.hover_pos() {
             let [x, y] = mapping.world(pointer);
-            ui.label(format!("X {x:.3} mm · Y {y:.3} mm"));
+            ui.label(format!("X {x:.3} · Y {y:.3} {unit}"));
         }
     }
 
@@ -348,7 +353,7 @@ impl Textures {
     fn upload(ctx: &egui::Context, raster: ArtworkRaster) -> Self {
         let upload = |thumb: ImageThumbnail| {
             ctx.load_texture(
-                "fabrication comparison",
+                "artwork comparison",
                 egui::ColorImage::from_rgba_premultiplied(
                     [thumb.width as usize, thumb.height as usize],
                     &thumb.premultiplied_rgba,
@@ -451,7 +456,7 @@ impl Canvas {
 }
 
 impl Display {
-    fn describe(&self, ui: &mut Ui) -> Option<[f64; 2]> {
+    fn describe(&self, ui: &mut Ui, unit: &str) -> Option<[f64; 2]> {
         let mut focus = None;
         ui.horizontal_wrapped(|ui| {
             let [a, b] = &self.roles;
@@ -472,7 +477,7 @@ impl Display {
                 Color32::from_rgb(248, 140, 78),
                 format!("Removed {removed}"),
             );
-            ui.label(format!("Overview {:.4} mm/px", self.overview.pitch));
+            ui.label(format!("Overview {:.4} {unit}/px", self.overview.pitch));
         });
         if let Comparison::Source(result) = self.comparison.as_ref() {
             source_changes(ui, result, &mut focus);

@@ -660,7 +660,8 @@ fn preview_mode(format: EdaFormat) -> Option<Mode> {
         EdaFormat::Gerber
         | EdaFormat::Excellon
         | EdaFormat::KicadPcb
-        | EdaFormat::KicadSchematic => Some(Mode::Artwork),
+        | EdaFormat::KicadSchematic
+        | EdaFormat::LtspiceSchematic => Some(Mode::Artwork),
         EdaFormat::SpiceRaw => Some(Mode::Waveforms),
         _ => None,
     }
