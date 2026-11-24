@@ -511,12 +511,26 @@ pub fn is_spice_raw_bytes(bytes: &[u8]) -> bool {
         return false;
     }
     let prefix = &bytes[..bytes.len().min(4096)];
-    let decoded = decode_spice_text(prefix).to_ascii_lowercase();
-    decoded.contains("title:")
-        && (decoded.contains("plotname:")
-            || decoded.contains("no. variables:")
-            || decoded.contains("variables:")
-            || decoded.contains("flags:"))
+    let header = decode_spice_text(prefix);
+    let mut title = false;
+    let mut plot_name = false;
+    let mut variable_count = false;
+    for (key, value) in header
+        .lines()
+        .filter_map(|line| line.trim().split_once(':'))
+    {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "title" => title = true,
+            "plotname" => plot_name = !value.trim().is_empty(),
+            "no. variables" => variable_count = value.trim().parse::<usize>().is_ok_and(|n| n > 0),
+            "values" | "binary" => break,
+            _ => {}
+        }
+        if title && plot_name && variable_count {
+            return true;
+        }
+    }
+    false
 }
 
 /// Returns whether an on-disk `.raw` path holds a SPICE/LTspice simulation output.
@@ -1234,8 +1248,12 @@ fn find_raw_data_marker(bytes: &[u8]) -> Option<(bool, usize)> {
         .filter_map(|(pat, is_bin)| {
             bytes
                 .windows(pat.len())
-                .position(|w| w == *pat)
-                .map(|pos| (*is_bin, pos, pos + pat.len()))
+                .enumerate()
+                .find(|&(pos, window)| {
+                    window == *pat
+                        && (bytes[..pos].ends_with(b"\n") || bytes[..pos].ends_with(b"\n\0"))
+                })
+                .map(|(pos, _)| (*is_bin, pos, pos + pat.len()))
         })
         .min_by_key(|(_, pos, _)| *pos)
         .map(|(is_bin, _, end)| (is_bin, end))
@@ -1840,6 +1858,18 @@ Binary:
 
         let fake_tiff = b"II*\0\x08\0\0\0\x01\0\x00\x01\x03\0\x01\0\0\0";
         assert!(!is_spice_raw_bytes(fake_tiff));
+    }
+
+    #[test]
+    fn raw_identification_requires_waveform_header_lines() {
+        assert!(!is_spice_raw_bytes(
+            b"Comparison document: Title: Demo, No. Variables: 2, Plotname: Sweep"
+        ));
+        assert!(is_spice_raw_bytes(
+            b"TITLE: Demo\nPlotname: Sweep\nNo. Variables: 2\n"
+        ));
+        let raw = b"Title: Saved as Binary:\nPlotname: Sweep\nNo. Variables: 2\nValues:\n";
+        assert_eq!(find_raw_data_marker(raw), Some((false, raw.len())));
     }
 
     #[test]
