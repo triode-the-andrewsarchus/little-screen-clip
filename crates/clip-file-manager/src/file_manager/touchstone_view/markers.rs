@@ -187,11 +187,13 @@ impl Markers {
             for (index, marker) in self.markers.iter().enumerate() {
                 let label = Self::label(index);
                 if ui
-                    .selectable_label(
-                        self.active == index,
-                        egui::RichText::new(label)
-                            .strong()
-                            .color(Self::color(colors, index)),
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(label)
+                                .strong()
+                                .color(Self::color(colors, index)),
+                        )
+                        .selected(self.active == index),
                     )
                     .on_hover_text(format!("Place marker {label}"))
                     .clicked()
@@ -201,7 +203,7 @@ impl Markers {
                 match marker.exact.as_ref() {
                     Some(point) => {
                         if ui
-                            .link(readout(point, trace, metadata))
+                            .button(readout(point, trace, metadata))
                             .on_hover_text(format!("Open measured row {}", point.index + 1))
                             .clicked()
                         {

@@ -122,14 +122,24 @@ impl View {
         let lane = usize::from(pointer.y >= rect.center().y);
         let hz = axis::at(rect, &self.span, pointer.x);
         let painter = ui.painter_at(rect);
-        painter.vline(
-            pointer.x,
-            rect.y_range(),
-            Stroke::new(0.85, colors.text_muted),
-        );
         let tick = self.nearest(rect, lane, hz, selected);
         let clicked = response.clicked();
-        response.on_hover_text(self.tooltip(channels, tick, lane, hz));
+        let x = tick.map_or(pointer.x, |tick| {
+            axis::x_at(rect, &self.span, tick.hz as f64)
+        });
+        let y = egui::lerp(rect.y_range(), if lane == 0 { 0.25 } else { 0.75 });
+        crate::file_manager::scope_view::hover::paint_trace_readout(
+            &painter,
+            rect,
+            x,
+            Some(y),
+            Some(Self::readout(channels, tick, lane, hz)),
+            if lane == 0 {
+                colors.accent
+            } else {
+                colors.focus
+            },
+        );
         if clicked && let Some(tick) = tick {
             if !self.includes(&channels[tick.channel]) {
                 self.brush = None;
@@ -171,17 +181,14 @@ impl View {
             .copied()
     }
 
-    fn tooltip(&self, channels: &[Channel], tick: Option<Tick>, lane: usize, hz: f64) -> String {
+    fn readout(channels: &[Channel], tick: Option<Tick>, lane: usize, hz: f64) -> String {
+        let label = ["RX", "TX"][lane];
         let Some(tick) = tick else {
-            return format!(
-                "{}\nDrag to filter both lanes · Scroll to zoom\nMiddle drag to pan · Right-click to clear",
-                frequency_label(hz.round() as u64)
-            );
+            return format!("{label} {}", frequency_label(hz.round() as u64));
         };
         let channel = &channels[tick.channel];
-        let label = ["RX", "TX"][lane];
         format!(
-            "{label} {}\n{}  {}",
+            "{label} {} · {} {}",
             frequency_label(tick.hz),
             channel.number,
             channel.name

@@ -1,6 +1,6 @@
 //! Shared power, spectrum, and sample-coordinate drawing for I/Q views.
 use super::spectrum::strongest_bin;
-use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, pos2};
+use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, pos2};
 use little_clip_core::engineering::{
     iq::{DBFS_FLOOR, PowerOverview, Spectrum},
     waveforms::{display_axis_value, display_value},
@@ -149,7 +149,7 @@ pub(super) fn spectrum(
     rect: Rect,
     frame: &Spectrum,
     frequency_cursor: Option<f32>,
-    crossed: Option<Pos2>,
+    crossed: Option<usize>,
     ink: Color32,
     density: bool,
 ) {
@@ -199,8 +199,20 @@ pub(super) fn spectrum(
             Stroke::new(1.0, Color32::GOLD),
         );
     }
-    if let Some(hover) = crossed {
-        paint.vline(hover.x, rect.y_range(), Stroke::new(0.6, ink));
+    if let Some(bin) = crossed {
+        let x = egui::lerp(rect.x_range(), plotted_bin_fraction(rect, bin, bins.len()));
+        let level = bins[bin] + shift;
+        crate::file_manager::scope_view::hover::paint_trace_readout(
+            &paint,
+            rect,
+            x,
+            Some(y_at(rect, &scale, level)),
+            Some(format!(
+                "{} · {level:.1} {unit}",
+                frequency_label(frame, bin, true)
+            )),
+            SIGNAL,
+        );
     }
     frequency_ticks(painter, rect, frame, true, ink);
     painter.text(

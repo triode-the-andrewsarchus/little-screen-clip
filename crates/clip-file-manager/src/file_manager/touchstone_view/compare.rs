@@ -350,10 +350,20 @@ impl Viewer {
         let db_label = self.decibel_label(has_antenna);
         ui.horizontal_wrapped(|ui| {
             if self.selected.parameter == Parameter::S {
-                ui.selectable_value(&mut self.projection, Projection::Decibels, db_label);
+                if ui
+                    .add(Button::new(db_label).selected(self.projection == Projection::Decibels))
+                    .clicked()
+                {
+                    self.projection = Projection::Decibels;
+                }
             }
             for projection in [Projection::Magnitude, Projection::Phase] {
-                ui.selectable_value(&mut self.projection, projection, projection.title());
+                if ui
+                    .add(Button::new(projection.title()).selected(self.projection == projection))
+                    .clicked()
+                {
+                    self.projection = projection;
+                }
             }
             if has_antenna {
                 antenna::controls(ui, &mut self.antenna, &mut self.projection, true);

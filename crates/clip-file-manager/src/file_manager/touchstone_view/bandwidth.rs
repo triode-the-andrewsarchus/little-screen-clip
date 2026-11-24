@@ -127,7 +127,7 @@ impl View {
                 (Rule::Above, "At least"),
                 (Rule::FromPeak, "Below peak"),
             ] {
-                ui.selectable_value(rule, value, label);
+                clip_ui::buttons::choice(ui, rule, value, label);
             }
             let level = match *rule {
                 Rule::Below => &mut self.inputs.below,

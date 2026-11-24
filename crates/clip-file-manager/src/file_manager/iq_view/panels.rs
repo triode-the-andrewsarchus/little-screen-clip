@@ -323,13 +323,19 @@ impl Viewer {
                 let clipped = paint.with_clip_rect(rect);
                 let crosshair = Stroke::new(0.6, Color32::WHITE);
                 clipped.hline(rect.x_range(), position.y, crosshair);
-                clipped.vline(position.x, rect.y_range(), crosshair);
                 let dbfs = point.spectrum.bins_dbfs[point.bin];
-                response.clone().on_hover_text(format!(
-                    "{} · {} · {dbfs:.1} dBFS",
-                    plot::sample_label(cursor, self.rate()),
-                    plot::frequency_label(point.spectrum, point.bin, true),
-                ));
+                crate::file_manager::scope_view::hover::paint_trace_readout(
+                    &clipped,
+                    rect,
+                    position.x,
+                    Some(position.y),
+                    Some(format!(
+                        "{} · {} · {dbfs:.1} dBFS",
+                        plot::sample_label(cursor, self.rate()),
+                        plot::frequency_label(point.spectrum, point.bin, true),
+                    )),
+                    ui.visuals().text_color(),
+                );
             }
             waterfall_labels(&paint, rect, frame, ink);
         }
@@ -492,29 +498,15 @@ impl Viewer {
         let pointed = response
             .hover_pos()
             .and_then(|position| plot::displayed_bin(rect, bins, x_fraction(rect, position)));
-        let hover = pointed.zip(response.hover_pos()).map(|(bin, mut point)| {
-            point.x = egui::lerp(
-                rect.x_range(),
-                plot::plotted_bin_fraction(rect, bin, bins.len()),
-            );
-            point
-        });
         plot::spectrum(
             &paint,
             rect,
             frame,
             marker,
-            hover,
+            pointed,
             ui.visuals().weak_text_color(),
             density,
         );
-        if let Some(bin) = pointed {
-            response.clone().on_hover_text(format!(
-                "{} · {}",
-                plot::frequency_label(frame, bin, true),
-                spectrum_level(frame, bin, density),
-            ));
-        }
         let clicked = response
             .interact_pointer_pos()
             .filter(|_| response.clicked())
@@ -633,7 +625,7 @@ impl Viewer {
                 }
             }
             if self.rate().is_some() && !self.peak_hold {
-                ui.toggle_value(&mut self.show_density, "dBFS/Hz")
+                clip_ui::buttons::toggle(ui, &mut self.show_density, "dBFS/Hz")
                     .on_hover_text("Show power per Hertz instead of coherent peak amplitude");
             }
         });

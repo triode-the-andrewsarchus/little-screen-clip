@@ -45,10 +45,21 @@ pub(super) fn controls(
     projection: &mut Projection,
     available: bool,
 ) -> bool {
-    ui.selectable_value(projection, Projection::Vswr, "VSWR");
+    if ui
+        .add(egui::Button::new("VSWR").selected(*projection == Projection::Vswr))
+        .clicked()
+    {
+        *projection = Projection::Vswr;
+    }
     ui.separator();
     let open = *enabled && available && primary(*projection);
-    if !ui.selectable_label(open, "Antenna analysis").clicked() {
+    if !ui
+        .add_enabled(
+            available,
+            egui::Button::new("Antenna analysis").selected(open),
+        )
+        .clicked()
+    {
         return false;
     }
     *enabled = !open;
@@ -141,7 +152,7 @@ pub(super) fn companions(
             colors.text_secondary,
         );
     }
-    let smith_hit = ui.interact(smith_rect, frame.id.with("Smith"), Sense::click());
+    let smith_hit = ui.interact(smith_rect, frame.id.with("Smith"), Sense::click_and_drag());
     let frequency_hit = ui.interact(
         impedance_rect,
         frame.id.with("Impedance"),
@@ -183,7 +194,7 @@ fn smith_chart(
 ) -> Option<TracePoint> {
     painter.rect_filled(rect, 3.0, colors.recessed);
     let painter = painter.with_clip_rect(rect);
-    let chart = Smith::new(rect);
+    let chart = Smith::interactive(rect, &hit);
     chart.grid(&painter, colors.text_muted);
     for sweep in sweeps {
         chart.trace(
@@ -210,9 +221,9 @@ fn smith_chart(
         .iter()
         .flat_map(|sweep| plot::visible(sweep.points, band, false));
     let picked = chart.nearest(pointer, points.copied())?;
-    if !hit.clicked_by(PointerButton::Primary) {
+    if !hit.clicked_by(PointerButton::Primary) || hit.double_clicked_by(PointerButton::Primary) {
         hit.on_hover_text(format!(
-            "Select source point · {:.6} MHz",
+            "Select source point · {:.6} MHz\nScroll to zoom · Middle-drag to pan · Double-click to reset",
             picked.frequency_hz * 1e-6
         ));
         return None;

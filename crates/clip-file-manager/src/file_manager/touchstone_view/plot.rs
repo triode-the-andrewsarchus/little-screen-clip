@@ -446,13 +446,53 @@ pub(super) fn marker(
 pub(super) struct Smith {
     center: Pos2,
     radius: f32,
+    zoom: f32,
+}
+
+#[derive(Clone, Copy)]
+struct SmithCamera {
+    zoom: f32,
+    offset: egui::Vec2,
 }
 
 impl Smith {
-    pub fn new(rect: Rect) -> Self {
+    pub fn interactive(rect: Rect, hit: &Response) -> Self {
+        let id = hit.id.with("smith-camera");
+        let ctx = &hit.ctx;
+        let mut camera = ctx.data_mut(|data| {
+            data.get_temp::<SmithCamera>(id).unwrap_or(SmithCamera {
+                zoom: 1.0,
+                offset: egui::Vec2::ZERO,
+            })
+        });
+        let radius = (rect.width().min(rect.height()) * 0.44).max(1.0);
+        if hit.double_clicked_by(PointerButton::Primary) {
+            camera.zoom = 1.0;
+            camera.offset = egui::Vec2::ZERO;
+        } else if let Some(point) = hit.hover_pos().filter(|p| rect.contains(*p)) {
+            let wheel = ctx.input_mut(|input| {
+                let wheel = input.smooth_scroll_delta().y;
+                if wheel != 0.0 {
+                    input.smooth_scroll_delta().y = 0.0;
+                }
+                wheel
+            });
+            let zoom = (camera.zoom * (wheel * 0.004).exp()).clamp(1.0, 24.0);
+            let anchor = (point - rect.center()) / radius;
+            camera.offset = anchor + (camera.offset - anchor) * (zoom / camera.zoom);
+            camera.zoom = zoom;
+        }
+        if hit.dragged_by(PointerButton::Middle) && camera.zoom > 1.0 {
+            camera.offset += hit.drag_delta() / radius;
+        }
+        if camera.offset.length() > camera.zoom - 1.0 {
+            camera.offset = camera.offset.normalized() * (camera.zoom - 1.0);
+        }
+        ctx.data_mut(|data| data.insert_temp(id, camera));
         Self {
-            center: rect.center(),
-            radius: (rect.width().min(rect.height()) * 0.44).max(1.0),
+            center: rect.center() + camera.offset * radius,
+            radius: radius * camera.zoom,
+            zoom: camera.zoom,
         }
     }
 
@@ -483,7 +523,8 @@ impl Smith {
             ],
             grid,
         );
-        for factor in [0.2_f64, 0.5, 1.0, 2.0, 5.0] {
+        let values = self.grid_values();
+        for &factor in values {
             let center = Complex64::new(factor / (1.0 + factor), 0.0);
             painter.circle_stroke(
                 self.screen(center),
@@ -491,52 +532,90 @@ impl Smith {
                 grid,
             );
         }
-        for reactance in [0.2, 0.5, 1.0, 2.0, 5.0, -0.2, -0.5, -1.0, -2.0, -5.0] {
-            let arc = (0..=40).map(|step| {
-                if step == 40 {
-                    self.screen(Complex64::new(1.0, 0.0))
-                } else {
-                    let r = step as f64 / (40 - step) as f64;
-                    let z = Complex64::new(r, reactance);
-                    self.screen((z - 1.0) / (z + 1.0))
-                }
-            });
-            painter.add(Shape::line(arc.collect(), grid));
-        }
-        self.grid_labels(painter, ink);
+        self.reactance_grid(painter, ink, grid, values);
+        self.resistance_labels(painter, ink);
     }
 
-    fn grid_labels(&self, painter: &Painter, ink: Color32) {
+    fn reactance_grid(&self, painter: &Painter, ink: Color32, stroke: Stroke, values: &[f64]) {
+        let resolution = (self.zoom.sqrt() * 40.0) as u32;
+        let clip = painter.clip_rect();
+        let rect = Rect::from_min_max(clip.min + vec2(24.0, 29.0), clip.max - vec2(24.0, 19.0));
+        let mut labels: Vec<Pos2> = Vec::new();
+        for reactance in values.iter().flat_map(|&value| [value, -value]) {
+            let mut arc: Vec<_> = (0..resolution)
+                .map(|step| {
+                    let r = f64::from(step) / f64::from(resolution - step);
+                    let z = Complex64::new(r, reactance);
+                    self.screen((z - 1.0) / (z + 1.0))
+                })
+                .collect();
+            let origin = arc[0];
+            let label = if rect.contains(origin) {
+                Some(origin)
+            } else if self.zoom > 1.0 {
+                arc.iter()
+                    .copied()
+                    .find(|point| rect.contains(*point) && (point.y - self.center.y).abs() >= 22.0)
+            } else {
+                None
+            };
+            arc.push(self.screen(Complex64::new(1.0, 0.0)));
+            painter.add(Shape::line(arc, stroke));
+            if let Some(point) = label
+                && (self.zoom > 1.0 || reactance.abs() == 1.0)
+                && labels
+                    .iter()
+                    .all(|p| p.distance_sq(point) >= 28.0_f32.powi(2))
+            {
+                labels.push(point);
+                let sign = if reactance < 0.0 { "−" } else { "+" };
+                let offset = -5.0 * reactance.signum() as f32;
+                painter.text(
+                    point + vec2(0.0, offset),
+                    if reactance < 0.0 {
+                        Align2::CENTER_TOP
+                    } else {
+                        Align2::CENTER_BOTTOM
+                    },
+                    format!("{sign}j{}", reactance.abs()),
+                    FontId::monospace(10.0),
+                    ink,
+                );
+            }
+        }
+    }
+
+    fn grid_values(&self) -> &'static [f64] {
+        match self.zoom {
+            zoom if zoom >= 6.0 => &[
+                0.025, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0,
+                7.5, 10.0, 15.0, 20.0, 40.0,
+            ],
+            zoom if zoom >= 2.0 => &[0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0],
+            _ => &[0.2, 0.5, 1.0, 2.0, 5.0],
+        }
+    }
+
+    fn resistance_labels(&self, painter: &Painter, ink: Color32) {
         let font = FontId::monospace(10.0);
-        let values: &[(f64, &str)] = if self.radius > 96.0 {
-            &[
-                (0.0, "0"),
-                (0.2, "0.2"),
-                (0.5, "0.5"),
-                (1.0, "1"),
-                (2.0, "2"),
-                (5.0, "5"),
-            ]
-        } else {
-            &[(0.0, "0"), (1.0, "1"), (2.0, "2")]
-        };
-        for &(resistance, label) in values {
+        let rect = painter.clip_rect();
+        let mut last_x = f32::NEG_INFINITY;
+        for resistance in std::iter::once(0.0).chain(self.grid_values().iter().copied()) {
             let point = self.screen(Complex64::new((resistance - 1.0) / (resistance + 1.0), 0.0));
+            if point.x - last_x < 25.0 || !(rect.left()..=rect.right()).contains(&point.x) {
+                continue;
+            }
+            last_x = point.x;
+            let y = (point.y + 3.0)
+                .min(rect.bottom() - 14.0)
+                .max(rect.top() + 3.0);
             painter.text(
-                point + vec2(0.0, 3.0),
+                pos2(point.x, y),
                 Align2::CENTER_TOP,
-                label,
+                resistance.to_string(),
                 font.clone(),
                 ink,
             );
-        }
-        if self.radius > 43.0 {
-            for (reactance, label) in [(1.0, "+j1"), (-1.0, "−j1")] {
-                let z = Complex64::new(0.0, reactance);
-                let point = self.screen((z - 1.0) / (z + 1.0));
-                let inset = (self.center - point).normalized() * 4.0;
-                painter.text(point + inset, Align2::LEFT_CENTER, label, font.clone(), ink);
-            }
         }
     }
 

@@ -195,9 +195,7 @@ impl Viewer {
                     for stimulus in 0..ports {
                         let selected = [response, stimulus];
                         let label = meta.parameter_label(response, stimulus).unwrap_or_default();
-                        if ui.selectable_label(trace == selected, label).clicked() {
-                            trace = selected;
-                        }
+                        clip_ui::buttons::choice(ui, &mut trace, selected, label);
                     }
                 }
             } else {
@@ -212,11 +210,11 @@ impl Viewer {
                 Projection::Phase,
             ] {
                 if mode != Projection::Decibels || s_parameters {
-                    ui.selectable_value(&mut self.projection, mode, mode.title());
+                    clip_ui::buttons::choice(ui, &mut self.projection, mode, mode.title());
                 }
             }
             if s_parameters && trace[0] == trace[1] {
-                ui.selectable_value(&mut self.projection, Projection::Smith, "Smith");
+                clip_ui::buttons::choice(ui, &mut self.projection, Projection::Smith, "Smith");
                 if marker_value(meta, trace).is_some() {
                     if antenna::controls(
                         ui,
@@ -227,7 +225,7 @@ impl Viewer {
                         self.panel = Panel::None;
                     }
                 } else {
-                    ui.selectable_value(&mut self.projection, Projection::Vswr, "VSWR");
+                    clip_ui::buttons::choice(ui, &mut self.projection, Projection::Vswr, "VSWR");
                 }
             }
             fit = ui.button("Fit").clicked();
@@ -381,7 +379,7 @@ impl Viewer {
         painter.rect_filled(rect, 3.0, colors.recessed);
         if self.projection == Projection::Smith {
             self.smith(&painter, rect, &response, colors);
-            response.on_hover_text("Click a trace point to select its source frequency");
+            response.on_hover_text("Scroll to zoom · Middle-drag to pan · Double-click to reset · Click a point to select its source frequency");
         } else {
             self.frequency_plot(ui, &painter, rect, &response, colors);
             response.on_hover_text("Scroll to zoom · Middle-drag to pan · Click or drag to place a marker · Shift-drag to select a band");
@@ -457,7 +455,7 @@ impl Viewer {
         response: &Response,
         colors: WorkbenchColors,
     ) {
-        let smith = Smith::new(rect);
+        let smith = Smith::interactive(rect, response);
         let data = plot::visible(self.current_trace(), self.viewport, false);
         let picked = response
             .hover_pos()
@@ -500,7 +498,9 @@ impl Viewer {
                     impedance.im,
                 ));
             }
-            if response.clicked_by(PointerButton::Primary) {
+            if response.clicked_by(PointerButton::Primary)
+                && !response.double_clicked_by(PointerButton::Primary)
+            {
                 self.markers
                     .set(self.markers.active, Target::Row(point.index));
             }
@@ -901,7 +901,7 @@ fn choose_panel(ui: &mut Ui, panel: &mut Panel, s_parameters: bool) {
             continue;
         }
         let open = *panel == option;
-        if ui.selectable_label(open, label).clicked() {
+        if ui.add(egui::Button::new(label).selected(open)).clicked() {
             *panel = if open { Panel::None } else { option };
         }
     }

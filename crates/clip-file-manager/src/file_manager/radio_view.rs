@@ -124,8 +124,8 @@ impl Viewer {
                 ui.label(model);
             }
             if !self.plan.channels.is_empty() && !self.plan.records.is_empty() {
-                ui.selectable_value(&mut self.memory, false, "Channels");
-                ui.selectable_value(&mut self.memory, true, "Clone records");
+                clip_ui::buttons::choice(ui, &mut self.memory, false, "Channels");
+                clip_ui::buttons::choice(ui, &mut self.memory, true, "Clone records");
             }
         });
         if self.memory {
@@ -172,24 +172,28 @@ impl Viewer {
             changed |= ui
                 .add(egui::TextEdit::singleline(&mut self.search).hint_text("Find channels"))
                 .changed();
-            changed |= ui
-                .selectable_value(
-                    &mut self.band,
-                    None,
-                    format!("All {}", self.plan.channels.len()),
-                )
-                .changed();
+            changed |= clip_ui::buttons::choice(
+                ui,
+                &mut self.band,
+                None,
+                format!("All {}", self.plan.channels.len()),
+            )
+            .changed();
             for (index, name) in BANDS.iter().enumerate() {
                 let count = self.band_counts[index];
                 if count == 0 {
                     continue;
                 }
-                changed |= ui
-                    .selectable_value(&mut self.band, Some(index), format!("{name}  {count}"))
-                    .on_hover_text("Filter by receive band")
-                    .changed();
+                changed |= clip_ui::buttons::choice(
+                    ui,
+                    &mut self.band,
+                    Some(index),
+                    format!("{name}  {count}"),
+                )
+                .on_hover_text("Filter by receive band")
+                .changed();
             }
-            ui.toggle_value(&mut self.frequency.open, "Frequency map");
+            clip_ui::buttons::toggle(ui, &mut self.frequency.open, "Frequency map");
             if self.frequency.open && ui.small_button("Fit map").clicked() {
                 self.frequency.fit();
             }
@@ -409,7 +413,7 @@ impl Viewer {
                 copy_channel(ui, channel);
             }
             if has_extra {
-                ui.toggle_value(&mut self.show_fields, "Stored fields");
+                clip_ui::buttons::toggle(ui, &mut self.show_fields, "Stored fields");
             }
         });
         channel_frequencies(ui, channel, tones);
