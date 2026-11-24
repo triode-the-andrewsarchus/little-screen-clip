@@ -6,7 +6,8 @@ use crate::ui_appearance::WorkbenchColors;
 use egui::{Color32, Ui, vec2};
 use little_clip_core::eda::kicad::{
     GerberJobDocument, KicadFootprintDocument, KicadPcbDocument, KicadProjectDocument,
-    KicadSchematicDocument, KicadSymbolLibDocument, PcbLayerBucket, project::stackup_layer_rgba,
+    KicadSchematicDocument, KicadSymbolEntry, KicadSymbolLibDocument, PcbLayerBucket,
+    project::stackup_layer_rgba,
 };
 use std::sync::atomic::AtomicBool;
 
@@ -201,9 +202,21 @@ pub(super) fn render_symbol_lib_details(
         ui.text_edit_singleline(&mut state.filter_query);
     });
     let q = state.filter_query.trim().to_ascii_lowercase();
+    render_symbol_list(ui, &lib.symbols, &q, state);
 
-    for (idx, sym) in lib.symbols.iter().enumerate() {
-        if !q.is_empty() && !sym.name.to_ascii_lowercase().contains(&q) {
+    if let Some(entry) = lib.symbols.get(state.selected_symbol) {
+        render_selected_symbol_info(ui, entry, state);
+    }
+}
+
+fn render_symbol_list(
+    ui: &mut Ui,
+    symbols: &[KicadSymbolEntry],
+    query: &str,
+    state: &mut ViewerState,
+) {
+    for (idx, sym) in symbols.iter().enumerate() {
+        if !query.is_empty() && !sym.name.to_ascii_lowercase().contains(query) {
             continue;
         }
         let selected = state.selected_symbol == idx;
@@ -218,38 +231,38 @@ pub(super) fn render_symbol_lib_details(
             state.raster = None;
         }
     }
+}
 
-    if let Some(entry) = lib.symbols.get(state.selected_symbol) {
-        ui.separator();
-        ui.strong(&entry.name);
-        if entry.units > 1 {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Unit:");
-                for unit in 1..=entry.units {
-                    if ui
-                        .selectable_label(state.selected_unit == unit, format!("{unit}"))
-                        .clicked()
-                        && state.selected_unit != unit
-                    {
-                        state.selected_unit = unit;
-                        state.raster = None;
-                    }
+fn render_selected_symbol_info(ui: &mut Ui, entry: &KicadSymbolEntry, state: &mut ViewerState) {
+    ui.separator();
+    ui.strong(&entry.name);
+    if entry.units > 1 {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Unit:");
+            for unit in 1..=entry.units {
+                if ui
+                    .selectable_label(state.selected_unit == unit, format!("{unit}"))
+                    .clicked()
+                    && state.selected_unit != unit
+                {
+                    state.selected_unit = unit;
+                    state.raster = None;
                 }
-            });
-        }
-        for (k, v) in &entry.properties {
-            if !v.is_empty() {
-                ui.label(format!("{k}: {v}"));
             }
+        });
+    }
+    for (k, v) in &entry.properties {
+        if !v.is_empty() {
+            ui.label(format!("{k}: {v}"));
         }
-        ui.separator();
-        ui.strong(format!("Pins ({})", entry.pins.len()));
-        for pin in entry.pins.iter().take(128) {
-            ui.label(format!(
-                "#{} {} [{}] (U{})",
-                pin.number, pin.name, pin.pin_type, pin.unit
-            ));
-        }
+    }
+    ui.separator();
+    ui.strong(format!("Pins ({})", entry.pins.len()));
+    for pin in entry.pins.iter().take(128) {
+        ui.label(format!(
+            "#{} {} [{}] (U{})",
+            pin.number, pin.name, pin.pin_type, pin.unit
+        ));
     }
 }
 
