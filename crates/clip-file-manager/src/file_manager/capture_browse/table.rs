@@ -1,8 +1,9 @@
-use crate::ui_appearance::WorkbenchColors;
-use egui::{Color32, FontId, Rect, ScrollArea, Sense, Ui, pos2, text::LayoutJob, vec2};
+use crate::{
+    file_manager::table_body::{ROW_HEIGHT, TableBody, paint_cell},
+    ui_appearance::WorkbenchColors,
+};
+use egui::{Color32, Rect, ScrollArea, Sense, Ui, pos2, vec2};
 use std::{cmp::Ordering, ops::Range};
-
-const ROW_HEIGHT: f32 = 21.0;
 
 pub(in crate::file_manager) struct Page<'a> {
     pub offset: u64,
@@ -146,49 +147,42 @@ impl<const N: usize> Columns<N> {
             area = area
                 .vertical_scroll_offset(row as f32 * (ROW_HEIGHT + ui.spacing().item_spacing.y));
         }
-        let mut output = Response {
-            visible: page.offset..page.offset,
-            clicked: None,
-            sort,
-            scroll_offset: 0.0,
-        };
-        let scroll = area.show_rows(ui, ROW_HEIGHT, page.count, |ui, rows| {
-            output.visible = page.offset + rows.start as u64..page.offset + rows.end as u64;
-            for index in output.visible.clone() {
-                let (rect, response) =
-                    ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::click());
-                if index % 2 == 1 {
-                    ui.painter().rect_filled(rect, 0.0, colors.panel);
-                }
-                let Some(row) = read(index) else {
+        let scroll = TableBody {
+            rows: page.offset..page.offset + page.count as u64,
+            width,
+            selected: page.selected,
+            selected_range: page.selection,
+            selected_fill: self.selected_fill,
+            hover_fill: self.hover_fill,
+        }
+        .show(
+            ui,
+            area,
+            colors,
+            |index| {
+                let row = read(index);
+                (row.map(&ordinal), row)
+            },
+            |ui, rect, index, row| {
+                if let Some(row) = row {
+                    paint(ui, rect, row);
+                } else {
                     let number = (index + 1).to_string();
                     let mut pending = [""; N];
                     for (slot, value) in pending.iter_mut().zip([number.as_str(), "…"]) {
                         *slot = value;
                     }
                     self.cells(ui, rect, pending, colors.text_muted);
-                    continue;
-                };
-                let ordinal = ordinal(row);
-                let selected = page.selected == Some(ordinal);
-                let ranged = page.selection.is_some_and(|range| range.contains(&ordinal));
-                if selected || ranged || response.hovered() {
-                    let fill = if selected {
-                        self.selected_fill
-                    } else {
-                        self.hover_fill
-                    };
-                    ui.painter()
-                        .rect_filled(rect, 2.0, colors.focus.gamma_multiply(fill));
                 }
-                if response.clicked() {
-                    output.clicked = Some((ordinal, ui.input(|input| input.modifiers.shift)));
-                }
-                paint(ui, rect, row);
-            }
-        });
-        output.scroll_offset = scroll.state.clamped_offset().y;
-        output
+                None
+            },
+        );
+        Response {
+            visible: scroll.inner.visible,
+            clicked: scroll.inner.clicked,
+            sort,
+            scroll_offset: scroll.state.clamped_offset().y,
+        }
     }
 
     fn sort_headers(
@@ -242,16 +236,7 @@ impl<const N: usize> Columns<N> {
         for (value, fraction) in values.into_iter().zip(self.fractions) {
             let right = left + fraction * rect.width();
             let cell = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
-            let painter = ui.painter().with_clip_rect(cell);
-            let inset = 3.0;
-            let width = (cell.width() - 2.0 * inset).max(0.0);
-            let mut job =
-                LayoutJob::simple(value.to_owned(), FontId::monospace(12.0), color, width);
-            job.wrap.max_rows = 1;
-            job.wrap.break_anywhere = true;
-            let text = painter.layout_job(job);
-            let y = cell.center().y - text.size().y * 0.5;
-            painter.galley(pos2(left + inset, y), text, color);
+            paint_cell(ui, cell, value, color);
             left = right;
         }
     }

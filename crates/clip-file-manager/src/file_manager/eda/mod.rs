@@ -3,7 +3,12 @@
 mod kicad;
 mod spice;
 
-use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
+use super::{
+    filesystem::Entry,
+    media::PreviewData,
+    shelf::preview::Ready,
+    table_body::{TableBody, paint_cell},
+};
 use crate::{
     icons::Icon,
     shell::{StudioPanelLayout, StudioShell},
@@ -177,6 +182,7 @@ struct ViewerState {
     selected_tool: Option<u32>,
     selected_placement: Option<usize>,
     side_filter: Option<PlacementSide>,
+    placement_rows_by_side: [Vec<usize>; 3],
     hidden_pens: BTreeSet<u16>,
     show_rapid_moves: bool,
     show_vector_overlay: bool,
@@ -219,6 +225,11 @@ impl Viewer {
         let doc = read_document(path, cancelled)?;
         let source_lines = index_source_lines(source_text_for(&doc));
         let mut state = ViewerState::new(source_lines);
+        if let Document::PickAndPlace(placements) = &doc {
+            for (index, placement) in placements.placements.iter().enumerate() {
+                state.placement_rows_by_side[placement_side_index(placement.side)].push(index);
+            }
+        }
         if let Document::KicadSymbolLib(lib) = &doc
             && let Some(symbol) = lib.symbols.first()
         {
@@ -269,23 +280,30 @@ fn render_left_panel(
     state: &mut ViewerState,
     palette: &AppPalette,
 ) {
-    egui::ScrollArea::vertical()
-        .id_salt("eda-details")
-        .auto_shrink([false, false])
-        .show(ui, |ui| match doc {
-            Document::Gerber(gerber) => render_gerber_details(ui, gerber, state),
-            Document::PickAndPlace(pos_doc) => render_pick_place_details(ui, pos_doc, state),
-            Document::Hpgl(hpgl) => render_hpgl_details(ui, hpgl, state, palette),
-            Document::KicadPcb(pcb) => kicad::render_pcb_details(ui, pcb, state),
-            Document::KicadSchematic(sch) => kicad::render_schematic_details(ui, sch, state),
-            Document::KicadFootprint(fp) => kicad::render_footprint_details(ui, fp),
-            Document::KicadSymbolLib(lib) => kicad::render_symbol_lib_details(ui, lib, state),
-            Document::GerberJob(job) => kicad::render_gbrjob_details(ui, job),
-            Document::KicadProject(proj) => kicad::render_project_details(ui, proj),
-            Document::SpiceNetlist(net) => spice::render_netlist_details(ui, net, state),
-            Document::SpiceRaw(raw) => spice::render_raw_details(ui, raw, state),
-            Document::LtspicePlot(plt) => spice::render_plt_details(ui, plt),
-        });
+    let mut render = |ui: &mut egui::Ui| match doc {
+        Document::Gerber(gerber) => render_gerber_details(ui, gerber, state),
+        Document::PickAndPlace(pos_doc) => {
+            render_pick_place_details(ui, pos_doc, state, WorkbenchColors::from_palette(palette));
+        }
+        Document::Hpgl(hpgl) => render_hpgl_details(ui, hpgl, state, palette),
+        Document::KicadPcb(pcb) => kicad::render_pcb_details(ui, pcb, state),
+        Document::KicadSchematic(sch) => kicad::render_schematic_details(ui, sch, state),
+        Document::KicadFootprint(fp) => kicad::render_footprint_details(ui, fp),
+        Document::KicadSymbolLib(lib) => kicad::render_symbol_lib_details(ui, lib, state),
+        Document::GerberJob(job) => kicad::render_gbrjob_details(ui, job),
+        Document::KicadProject(proj) => kicad::render_project_details(ui, proj),
+        Document::SpiceNetlist(net) => spice::render_netlist_details(ui, net, state),
+        Document::SpiceRaw(raw) => spice::render_raw_details(ui, raw, state),
+        Document::LtspicePlot(plt) => spice::render_plt_details(ui, plt),
+    };
+    if matches!(doc, Document::PickAndPlace(_)) {
+        render(ui);
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt("eda-details")
+            .auto_shrink([false, false])
+            .show(ui, render);
+    }
 }
 
 fn text_only_heading(doc: &Document) -> Option<&'static str> {
@@ -963,10 +981,19 @@ fn render_gerber_details(ui: &mut egui::Ui, gerber: &GerberDocument, state: &mut
     }
 }
 
+fn placement_side_index(side: PlacementSide) -> usize {
+    match side {
+        PlacementSide::Top => 0,
+        PlacementSide::Bottom => 1,
+        PlacementSide::Other => 2,
+    }
+}
+
 fn render_pick_place_details(
     ui: &mut egui::Ui,
     pos_doc: &PickAndPlaceDocument,
     state: &mut ViewerState,
+    colors: WorkbenchColors,
 ) {
     let w = (pos_doc.bounds_mm[2] - pos_doc.bounds_mm[0]).max(0.0);
     let h = (pos_doc.bounds_mm[3] - pos_doc.bounds_mm[1]).max(0.0);
@@ -1004,27 +1031,53 @@ fn render_pick_place_details(
         ));
     }
     ui.separator();
-    for (idx, item) in pos_doc.placements.iter().enumerate() {
-        if state.side_filter.is_some_and(|side| item.side != side) {
-            continue;
-        }
-        let selected = state.selected_placement == Some(idx);
-        let row = format!(
-            "{} · {} · {} ({:.1}, {:.1}) {:.0}°",
-            item.ref_des,
-            item.side.label(),
-            if item.package.is_empty() {
+    let filter = state.side_filter;
+    let filtered =
+        filter.map(|side| state.placement_rows_by_side[placement_side_index(side)].as_slice());
+    let count = filtered.map_or(pos_doc.placements.len(), <[_]>::len);
+    let area = egui::ScrollArea::vertical()
+        .id_salt(("placement-rows", filter.map(PlacementSide::label)))
+        .auto_shrink([false, false])
+        .min_scrolled_height(0.0)
+        .max_height(ui.available_height().max(0.0));
+    let scroll = TableBody {
+        rows: 0..count as u64,
+        width: (ui.available_width() - ui.spacing().scroll.allocated_width()).max(0.0),
+        selected: state.selected_placement.map(|index| index as u64),
+        selected_range: None,
+        selected_fill: 0.38,
+        hover_fill: 0.18,
+    }
+    .show(
+        ui,
+        area,
+        colors,
+        |index| {
+            let index = index as usize;
+            let source = filtered.map_or(index, |rows| rows[index]);
+            (Some(source as u64), &pos_doc.placements[source])
+        },
+        |ui, rect, _, item| {
+            let package = if item.package.is_empty() {
                 &item.value
             } else {
                 &item.package
-            },
-            item.x_mm,
-            item.y_mm,
-            item.rotation_deg
-        );
-        if ui.selectable_label(selected, row).clicked() {
-            state.selected_placement = Some(idx);
-        }
+            };
+            let row = format!(
+                "{} · {} · {} ({:.1}, {:.1}) {:.0}°",
+                item.ref_des,
+                item.side.label(),
+                package,
+                item.x_mm,
+                item.y_mm,
+                item.rotation_deg
+            );
+            paint_cell(ui, rect, &row, colors.text_primary);
+            Some(row)
+        },
+    );
+    if let Some((source, _)) = scroll.inner.clicked {
+        state.selected_placement = Some(source as usize);
     }
 }
 
@@ -1192,6 +1245,7 @@ fn cursor_coords(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
     use little_clip_core::config::WorkbenchAppearance;
 
     fn render_single_frame(viewer: &mut Viewer, palette: &AppPalette) {
@@ -1203,6 +1257,49 @@ mod tests {
             });
         });
         assert!(!close);
+    }
+
+    #[test]
+    fn placement_table_scrolls_to_late_rows_and_selects_the_original_index() {
+        use std::fmt::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("many.pos");
+        let mut source = String::from("Ref,Val,Package,PosX,PosY,Rot,Side\n");
+        for index in 0..=1024 {
+            let side = match index {
+                0 => "unclassified",
+                n if n % 2 == 0 => "bottom",
+                _ => "top",
+            };
+            writeln!(&mut source, "R{index},10k,R0603,{index},0,0,{side}").unwrap();
+        }
+        std::fs::write(&path, source).unwrap();
+        let viewer = Viewer::load(&path, &AtomicBool::new(false)).unwrap();
+        let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
+        let mut harness = Harness::builder()
+            .with_size(vec2(380.0, 355.0))
+            .with_max_steps(24)
+            .build_ui_state(
+                move |ui, viewer: &mut Viewer| {
+                    render_left_panel(ui, &viewer.doc, &mut viewer.state, &palette);
+                },
+                viewer,
+            );
+        harness.run();
+        assert!(harness.query_by_label_contains("R0 · Other").is_some());
+        assert!(harness.query_by_label_contains("R1024 · Bottom").is_none());
+
+        harness.get_by_label("Bottom").click();
+        harness.run();
+        assert!(harness.query_by_label_contains("R0 · Other").is_none());
+        harness.get_by_label_contains("R2 · Bottom").hover();
+        harness.event(clip_ui::test_support::scroll(vec2(0.0, -25_000.0)));
+        harness.run();
+
+        harness.get_by_label_contains("R1024 · Bottom").click();
+        harness.run();
+        assert_eq!(harness.state().state.selected_placement, Some(1024));
     }
 
     #[test]

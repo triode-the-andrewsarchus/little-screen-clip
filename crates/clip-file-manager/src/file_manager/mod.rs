@@ -67,6 +67,7 @@ mod spreadsheet_strip;
 mod subtitle_strip;
 pub(crate) mod system;
 mod system_route;
+mod table_body;
 mod tags_view;
 mod text_editor;
 mod text_strip;
