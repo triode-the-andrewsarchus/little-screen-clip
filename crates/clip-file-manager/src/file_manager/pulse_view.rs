@@ -18,11 +18,60 @@ const MAX_DRAW_PULSES: usize = 4096;
 const MAX_COPY_PULSES: usize = 8192;
 const PULSE_COLOR: Color32 = Color32::from_rgb(239, 187, 98);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SignalColumn {
+    Name,
+    Device,
+    Protocol,
+}
+
+impl SignalColumn {
+    fn value(self, signal: &Signal) -> &str {
+        match self {
+            Self::Name => &signal.name,
+            Self::Device => signal.model.as_deref().unwrap_or_default(),
+            Self::Protocol => signal_protocol(signal),
+        }
+    }
+}
+
+fn signal_protocol(signal: &Signal) -> &str {
+    signal
+        .protocol
+        .as_deref()
+        .unwrap_or(if signal.pulses.is_empty() { "" } else { "Raw" })
+}
+
+fn signal_cells(row: &mut egui_extras::TableRow<'_, '_>, signal: &Signal, show_codes: bool) {
+    for column in [
+        SignalColumn::Name,
+        SignalColumn::Device,
+        SignalColumn::Protocol,
+    ] {
+        row.col(|ui| {
+            let value = column.value(signal);
+            ui.add(egui::Label::new(if value.is_empty() { "—" } else { value }).truncate());
+        });
+    }
+    if show_codes {
+        for field in ["address", "command"] {
+            row.col(|ui| {
+                let value = signal
+                    .fields
+                    .iter()
+                    .find_map(|(key, value)| (key == field).then_some(value.as_str()));
+                ui.add(egui::Label::new(value.unwrap_or("—")).truncate());
+            });
+        }
+    }
+}
+
 pub(super) struct Viewer {
     capture: Capture,
     active: usize,
     query: String,
     matches: Vec<usize>,
+    order: Option<(SignalColumn, bool)>,
     reveal_signal: bool,
     reveal_pulse: bool,
     span: Range<f64>,
@@ -40,6 +89,7 @@ impl Viewer {
             active: 0,
             query: String::new(),
             matches,
+            order: None,
             reveal_signal: false,
             reveal_pulse: true,
             span,
@@ -71,7 +121,7 @@ impl Viewer {
             ui.weak("Showing the available prefix of this capture");
         }
         if self.capture.signals.len() > 1 {
-            let width = (ui.available_width() * 0.49).clamp(120.0, 580.0);
+            let width = (ui.available_width() * 0.56).clamp(120.0, 640.0);
             egui::Panel::left("ir_signal_bank")
                 .exact_size(width)
                 .show(ui, |ui| self.signal_list(ui));
@@ -106,20 +156,7 @@ impl Viewer {
             )
             .changed();
         if search_changed {
-            let query = self.query.trim().to_lowercase();
-            self.matches = self
-                .capture
-                .signals
-                .iter()
-                .enumerate()
-                .filter(|(_, signal)| {
-                    query.is_empty()
-                        || [&*signal.name, signal.model.as_deref().unwrap_or_default()]
-                            .iter()
-                            .any(|value| value.to_lowercase().contains(&query))
-                })
-                .map(|(index, _)| index)
-                .collect();
+            self.filter_signals();
         }
         if self.matches.is_empty() {
             ui.weak("No matching signals");
@@ -127,75 +164,73 @@ impl Viewer {
         }
         ui.spacing_mut().item_spacing.y = 1.0;
         let row_height = ui.text_style_height(&egui::TextStyle::Body) + 3.0;
+        let header_height = row_height.max(ui.spacing().interact_size.y) + 4.0;
         let width = ui.available_width();
-        let show_codes = width >= 386.0;
-        let headings = if show_codes {
-            &["Signal", "Device", "Protocol", "Address", "Command"][..]
-        } else {
-            &["Signal", "Device", "Protocol"][..]
-        };
+        let show_codes = width >= 480.0;
+        let headings = [
+            ("Signal", Some(SignalColumn::Name)),
+            ("Device", Some(SignalColumn::Device)),
+            ("Protocol", Some(SignalColumn::Protocol)),
+            ("Address", None),
+            ("Command", None),
+        ];
         let mut table = TableBuilder::new(ui)
             .id_salt("ir_signal_list")
             .striped(true)
             .sense(Sense::click())
             .auto_shrink([false, false])
-            .column(Column::exact(width * 0.21).clip(true))
-            .column(Column::exact(width * 0.22).clip(true));
-        if show_codes {
-            table = table
-                .column(Column::exact(width * 0.12).clip(true))
-                .column(Column::exact(width * 0.17).clip(true));
-        }
-        table = table.column(Column::remainder().clip(true));
+            .column(Column::exact((width * 0.22).clamp(62.0, 126.0)).clip(true));
+        table = if show_codes {
+            table
+                .column(Column::exact(width * 0.26).clip(true))
+                .column(Column::exact(width * 0.13).clip(true))
+                .column(Column::exact(width * 0.17).clip(true))
+                .column(Column::remainder().clip(true))
+        } else {
+            table
+                .column(Column::remainder().clip(true))
+                .column(Column::exact((width * 0.22).clamp(68.0, 105.0)).clip(true))
+        };
         if search_changed {
             table = table.vertical_scroll_offset(0.0);
         } else if std::mem::take(&mut self.reveal_signal)
-            && let Ok(index) = self.matches.binary_search(&self.active)
+            && let Some(index) = self.matches.iter().position(|&index| index == self.active)
         {
             table = table.scroll_to_row(index, None);
         }
         let mut selected = self.active;
+        let mut order = self.order;
         table
-            .header(row_height, |mut row| {
-                for title in headings {
+            .header(header_height, |mut row| {
+                for (title, column) in headings.into_iter().take(if show_codes { 5 } else { 3 }) {
                     row.col(|ui| {
-                        ui.strong(*title);
+                        let Some(column) = column else {
+                            ui.strong(title);
+                            return;
+                        };
+                        let direction = order
+                            .filter(|(sorted, _)| *sorted == column)
+                            .map(|(_, descending)| descending);
+                        let caption = match direction {
+                            Some(true) => format!("{title} ↓"),
+                            Some(false) => format!("{title} ↑"),
+                            None => title.to_owned(),
+                        };
+                        if ui
+                            .add(egui::Button::new(caption).frame(false).truncate())
+                            .on_hover_text("Sort the matching signals")
+                            .clicked()
+                        {
+                            order = Some((column, direction == Some(false)));
+                        }
                     });
                 }
             })
             .body(|body| {
                 body.rows(row_height, self.matches.len(), |mut row| {
                     let index = self.matches[row.index()];
-                    let signal = &self.capture.signals[index];
                     row.set_selected(index == self.active);
-                    row.col(|ui| {
-                        ui.add(egui::Label::new(&signal.name).truncate());
-                    });
-                    row.col(|ui| {
-                        ui.add(egui::Label::new(signal.model.as_deref().unwrap_or("—")).truncate());
-                    });
-                    row.col(|ui| {
-                        let protocol =
-                            signal
-                                .protocol
-                                .as_deref()
-                                .unwrap_or(if signal.pulses.is_empty() {
-                                    "—"
-                                } else {
-                                    "Raw"
-                                });
-                        ui.add(egui::Label::new(protocol).truncate());
-                    });
-                    if show_codes {
-                        for field in ["address", "command"] {
-                            row.col(|ui| {
-                                let value = signal.fields.iter().find_map(|(key, value)| {
-                                    (key == field).then_some(value.as_str())
-                                });
-                                ui.add(egui::Label::new(value.unwrap_or("—")).truncate());
-                            });
-                        }
-                    }
+                    signal_cells(&mut row, &self.capture.signals[index], show_codes);
                     if row.response().clicked() {
                         selected = index;
                     }
@@ -204,6 +239,47 @@ impl Viewer {
         if selected != self.active {
             self.focus_signal(selected);
             self.reveal_signal = false;
+        }
+        if order != self.order {
+            self.order = order;
+            self.sort_signals();
+            self.reveal_signal = true;
+            ui.ctx().request_repaint();
+        }
+    }
+
+    fn filter_signals(&mut self) {
+        let query = self.query.trim().to_lowercase();
+        self.matches = self
+            .capture
+            .signals
+            .iter()
+            .enumerate()
+            .filter(|(_, signal)| {
+                query.is_empty()
+                    || [signal.name.as_str(), SignalColumn::Device.value(signal)]
+                        .iter()
+                        .any(|value| value.to_lowercase().contains(&query))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        self.sort_signals();
+    }
+
+    fn sort_signals(&mut self) {
+        let Some((column, descending)) = self.order else {
+            return;
+        };
+        if descending {
+            self.matches.sort_by_cached_key(|&index| {
+                let value = column.value(&self.capture.signals[index]).to_lowercase();
+                (value.is_empty(), std::cmp::Reverse(value), index)
+            });
+        } else {
+            self.matches.sort_by_cached_key(|&index| {
+                let value = column.value(&self.capture.signals[index]).to_lowercase();
+                (value.is_empty(), value, index)
+            });
         }
     }
 

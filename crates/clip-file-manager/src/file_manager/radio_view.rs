@@ -25,6 +25,45 @@ pub(super) struct Viewer {
     show_fields: bool,
     memory: bool,
     record: usize,
+    order: Option<(ChannelColumn, bool)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChannelColumn {
+    Number,
+    Name,
+    Receive,
+    Transmit,
+    Mode,
+    Tone,
+    Band,
+}
+
+impl ChannelColumn {
+    const ALL: [(Self, &'static str); 7] = [
+        (Self::Number, "#"),
+        (Self::Name, "Channel"),
+        (Self::Receive, "Receive"),
+        (Self::Transmit, "Transmit"),
+        (Self::Mode, "Mode"),
+        (Self::Tone, "Tone mode"),
+        (Self::Band, "Band"),
+    ];
+
+    fn compare(self, a: &Channel, b: &Channel, format: radio::Format) -> std::cmp::Ordering {
+        match self {
+            Self::Number => a.number.cmp(&b.number),
+            Self::Name => super::sorting::natural_cmp(&a.name, &b.name),
+            Self::Receive => a.receive_hz.cmp(&b.receive_hz),
+            Self::Transmit => a.transmit_hz().cmp(&b.transmit_hz()),
+            Self::Mode => a.mode.cmp(&b.mode),
+            Self::Tone => Tones::for_channel(a, format)
+                .mode
+                .label()
+                .cmp(Tones::for_channel(b, format).mode.label()),
+            Self::Band => radio::band(a.receive_hz).cmp(&radio::band(b.receive_hz)),
+        }
+    }
 }
 
 impl Viewer {
@@ -48,6 +87,7 @@ impl Viewer {
             scroll_to: None,
             show_fields: false,
             record: 0,
+            order: None,
         })
     }
 
@@ -228,16 +268,37 @@ impl Viewer {
             .copied()
             .filter(|&index| self.frequency.includes(&self.plan.channels[index]))
             .collect();
+        self.sort_channels();
         self.selected = self
             .selected
-            .filter(|index| self.shown.binary_search(index).is_ok())
+            .filter(|index| self.shown.contains(index))
             .or_else(|| self.shown.first().copied());
+    }
+
+    fn sort_channels(&mut self) {
+        let Some((column, descending)) = self.order else {
+            return;
+        };
+        self.shown.sort_by(|&a, &b| {
+            let compare = column.compare(
+                &self.plan.channels[a],
+                &self.plan.channels[b],
+                self.plan.format,
+            );
+            let compare = if descending {
+                compare.reverse()
+            } else {
+                compare
+            };
+            compare.then(a.cmp(&b))
+        });
     }
 
     fn channel_table(&mut self, ui: &mut Ui, height: f32) {
         ui.spacing_mut().item_spacing.y = 1.0;
         ui.style_mut().interaction.selectable_labels = false;
         let row_height = ui.text_style_height(&egui::TextStyle::Body) + 3.0;
+        let header_height = row_height.max(ui.spacing().interact_size.y) + 4.0;
         let name_width = (ui.available_width() * 0.28).clamp(72.0, 250.0);
         let mut table = TableBuilder::new(ui)
             .id_salt("radio_channel_list")
@@ -255,23 +316,31 @@ impl Viewer {
         if let Some(row) = self
             .scroll_to
             .take()
-            .and_then(|index| self.shown.binary_search(&index).ok())
+            .and_then(|index| self.shown.iter().position(|&other| other == index))
         {
             table = table.scroll_to_row(row, Some(egui::Align::Center));
         }
+        let mut sorted = None;
         table
-            .header(row_height, |mut row| {
-                for title in [
-                    "#",
-                    "Channel",
-                    "Receive",
-                    "Transmit",
-                    "Mode",
-                    "Tone mode",
-                    "Band",
-                ] {
+            .header(header_height, |mut row| {
+                for (column, title) in ChannelColumn::ALL {
                     row.col(|ui| {
-                        ui.strong(title);
+                        let direction = self
+                            .order
+                            .filter(|(sorted, _)| *sorted == column)
+                            .map(|(_, descending)| descending);
+                        let caption = match direction {
+                            Some(true) => format!("{title} ↓"),
+                            Some(false) => format!("{title} ↑"),
+                            None => title.to_owned(),
+                        };
+                        if ui
+                            .add(egui::Button::new(caption).frame(false).truncate())
+                            .on_hover_text("Sort the filtered channels")
+                            .clicked()
+                        {
+                            sorted = Some((column, direction == Some(false)));
+                        }
                     });
                 }
             })
@@ -307,6 +376,12 @@ impl Viewer {
                     }
                 });
             });
+        if let Some(order) = sorted {
+            self.order = Some(order);
+            self.sort_channels();
+            self.scroll_to = self.selected;
+            ui.ctx().request_repaint();
+        }
     }
 
     fn channel_info(&mut self, ui: &mut Ui) {
@@ -331,31 +406,13 @@ impl Viewer {
                 ui.weak(scan);
             }
             if ui.button("Copy channel").clicked() {
-                let mut report = format!(
-                    "Location\t{}\nName\t{}\nRX (Hz)\t{}\n",
-                    channel.number, channel.name, channel.receive_hz
-                );
-                for (field, value) in &channel.fields {
-                    if extra_field(field) {
-                        report.push_str(&format!("{field}\t{value}\n"));
-                    }
-                }
-                ui.ctx().copy_text(report);
+                copy_channel(ui, channel);
             }
             if has_extra {
                 ui.toggle_value(&mut self.show_fields, "Stored fields");
             }
         });
-        ui.horizontal_wrapped(|ui| {
-            direction(
-                ui,
-                "RX",
-                radio::frequency_label(channel.receive_hz),
-                tones.receive,
-            );
-            ui.separator();
-            direction(ui, "TX", transmit_label(channel), tones.transmit);
-        });
+        channel_frequencies(ui, channel, tones);
         if !has_extra || !self.show_fields {
             return;
         }
@@ -426,6 +483,42 @@ impl Viewer {
             .join(" ");
         ui.monospace(hex);
     }
+}
+
+fn copy_channel(ui: &Ui, channel: &Channel) {
+    let mut report = format!(
+        "Location\t{}\nName\t{}\nRX (Hz)\t{}\n",
+        channel.number, channel.name, channel.receive_hz
+    );
+    for (field, value) in &channel.fields {
+        if extra_field(field) {
+            report.push_str(&format!("{field}\t{value}\n"));
+        }
+    }
+    ui.ctx().copy_text(report);
+}
+
+fn channel_frequencies(ui: &mut Ui, channel: &Channel, tones: Tones) {
+    ui.horizontal_wrapped(|ui| {
+        direction(
+            ui,
+            "RX",
+            radio::frequency_label(channel.receive_hz),
+            tones.receive,
+        );
+        ui.separator();
+        direction(ui, "TX", transmit_label(channel), tones.transmit);
+        if let Some(tx) = channel.transmit_hz()
+            && tx != channel.receive_hz
+        {
+            let offset = i128::from(tx) - i128::from(channel.receive_hz);
+            let sign = if offset < 0 { '−' } else { '+' };
+            ui.weak(format!(
+                "Offset {sign}{}",
+                radio::frequency_label(offset.unsigned_abs() as u64),
+            ));
+        }
+    });
 }
 
 fn direction(ui: &mut Ui, title: &str, frequency: String, tone: Tone) {
