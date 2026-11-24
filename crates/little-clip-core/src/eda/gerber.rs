@@ -83,7 +83,6 @@ pub struct GerberDocument {
     pub units: String,
     pub coordinate_format: String,
     pub polarity: String,
-    pub is_negative_polarity: bool,
     pub copper_thickness: Option<String>,
     pub attributes: Vec<(String, String)>,
     pub apertures: Vec<GerberApertureInfo>,
@@ -155,8 +154,6 @@ impl GerberDocument {
             units: meta.units,
             coordinate_format: meta.coordinate_format,
             polarity,
-            is_negative_polarity: gerber.is_negative()
-                || meta.x2_polarity == Some(FilePolarity::Negative),
             copper_thickness: meta.copper_thickness,
             attributes: meta.attributes,
             apertures: stats.apertures,
@@ -231,21 +228,36 @@ impl GerberDocument {
         let mut layer_canvas = Pixmap::new(image.width(), image.height())
             .ok_or_else(|| "Could not allocate Gerber layer buffer".to_string())?;
 
-        if self.is_negative_polarity {
-            let [r, g, b] = self.layer_color;
-            layer_canvas.fill(Color::from_rgba8(r, g, b, 215));
-        }
-
         render_flat_objects(
             &mut layer_canvas,
             &self.flat,
             self.layer_color,
             self.is_excellon,
-            self.is_negative_polarity,
             transform,
             scale,
             cancelled,
         )?;
+
+        // X2 FilePolarity describes the layer's material. Only legacy IPNEG
+        // complements the image, after dark and clear objects are composited.
+        if self.flat.negative {
+            let [r, g, b] = self.layer_color;
+            let mut negative = Pixmap::new(image.width(), image.height())
+                .ok_or_else(|| "Could not allocate negative Gerber layer buffer".to_string())?;
+            negative.fill(Color::from_rgba8(r, g, b, 255));
+            negative.draw_pixmap(
+                0,
+                0,
+                layer_canvas.as_ref(),
+                &PixmapPaint {
+                    blend_mode: BlendMode::DestinationOut,
+                    ..Default::default()
+                },
+                Transform::identity(),
+                None,
+            );
+            layer_canvas = negative;
+        }
 
         image.draw_pixmap(
             0,
@@ -720,7 +732,6 @@ fn build_excellon_document(
         units,
         coordinate_format: excellon.unit.to_string(),
         polarity: "Drill / Route".into(),
-        is_negative_polarity: false,
         copper_thickness: None,
         attributes: Vec::new(),
         apertures: Vec::new(),
@@ -1048,7 +1059,6 @@ fn render_flat_objects(
     flat: &FlatLayer,
     base_rgb: [u8; 3],
     color_by_tool: bool,
-    invert_polarity: bool,
     view: Transform,
     scale: f32,
     cancelled: &AtomicBool,
@@ -1075,11 +1085,10 @@ fn render_flat_objects(
             base_rgb
         };
         let mut dark_paint = Paint::default();
-        dark_paint.set_color_rgba8(rgb[0], rgb[1], rgb[2], 240);
+        dark_paint.set_color_rgba8(rgb[0], rgb[1], rgb[2], 255);
         dark_paint.anti_alias = true;
 
-        let effective_clear = (expanded.polarity == Polarity::Clear) ^ invert_polarity;
-        let paint = if effective_clear {
+        let paint = if expanded.polarity == Polarity::Clear {
             &clear_paint
         } else {
             &dark_paint
@@ -1246,6 +1255,34 @@ fn append_contour(pb: &mut PathBuilder, points: impl IntoIterator<Item = Point>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x2_file_polarity_preserves_the_layer_image() {
+        let picture = "%MOMM*%\n%FSLAX26Y26*%\n%ADD10C,2*%\nD10*\nX0Y0D03*\nM02*\n";
+        let parse = |polarity| {
+            let bytes = format!("%TF.FilePolarity,{polarity}*%\n{picture}");
+            GerberDocument::parse_gerber(
+                Path::new("mask.gbr"),
+                bytes.as_bytes(),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+        };
+        let positive = parse("Positive");
+        let negative = parse("Negative");
+        assert_eq!(negative.polarity, "Negative");
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            positive
+                .render_thumbnail([120, 80], &cancel)
+                .unwrap()
+                .premultiplied_rgba,
+            negative
+                .render_thumbnail([120, 80], &cancel)
+                .unwrap()
+                .premultiplied_rgba,
+        );
+    }
 
     #[test]
     fn gerber_x2_attributes_clear_polarity_and_thumbnail_render() {
