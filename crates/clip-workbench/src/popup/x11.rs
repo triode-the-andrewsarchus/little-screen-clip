@@ -21,6 +21,7 @@ x11rb::atom_manager! {
         RESOURCE_MANAGER,
         STRING,
         _NET_ACTIVE_WINDOW,
+        _NET_SUPPORTING_WM_CHECK,
         _NET_CURRENT_DESKTOP,
         _NET_WM_DESKTOP,
         _NET_WM_PID,
@@ -278,11 +279,21 @@ fn matches_workbench_window(
 }
 
 fn activate_window(conn: &RustConnection, root: Window, win: Window, atoms: &Atoms) {
+    if read_cardinal_u32(conn, root, atoms._NET_SUPPORTING_WM_CHECK, AtomEnum::WINDOW).is_none() {
+        let _ = conn.configure_window(
+            win,
+            &ConfigureWindowAux::new().stack_mode(xproto::StackMode::ABOVE),
+        );
+        let _ = conn.set_input_focus(xproto::InputFocus::PARENT, win, x11rb::CURRENT_TIME);
+        let _ = conn.flush();
+        return;
+    }
     let target_desktop = read_cardinal_u32(conn, win, atoms._NET_WM_DESKTOP, AtomEnum::CARDINAL);
     let current_desktop =
         read_cardinal_u32(conn, root, atoms._NET_CURRENT_DESKTOP, AtomEnum::CARDINAL);
     let mask = xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY;
     if let (Some(target), Some(current)) = (target_desktop, current_desktop)
+        && target != u32::MAX
         && target != current
     {
         let switch = ClientMessageEvent::new(

@@ -59,7 +59,7 @@ syntect = { version = "5.3", default-features = false, features = ["default-fanc
 rayon = "1.12"
 regex = "1.13"
 flashraw = { version = "0.3.1", default-features = false, features = ["rayon", "simd"] }
-x11rb = { version = "0.13", default-features = false, features = ["xtest", "xfixes", "randr"] }
+x11rb = { version = "0.13", default-features = false }
 
 
 # Keep local builds bounded: this workspace's incremental cache can exceed the

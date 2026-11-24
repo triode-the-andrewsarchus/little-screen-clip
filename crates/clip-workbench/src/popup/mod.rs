@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{Pos2, Vec2, ViewportBuilder};
+use little_clip_core::{SessionKind, detect_session_kind};
 use serde::Deserialize;
 
 const SCREEN_FRACTION: f32 = 0.92;
@@ -235,24 +236,24 @@ fn has_env(name: &str) -> bool {
 }
 
 fn focus_existing() {
-    if has_env("NIRI_SOCKET") {
+    if detect_session_kind() != SessionKind::X11 && has_env("NIRI_SOCKET") {
         if let Some(id) = wait_for_window(None, None) {
             niri_action("FocusWindow", id);
         }
-    } else if has_env("DISPLAY") {
+    } else if detect_session_kind() == SessionKind::X11 {
         x11::focus_existing();
     }
 }
 
 pub(crate) fn center_when_mapped() {
-    if has_env("NIRI_SOCKET") {
+    if detect_session_kind() != SessionKind::X11 && has_env("NIRI_SOCKET") {
         let expected_size = discover_size().unwrap_or(FALLBACK_SIZE);
         std::thread::spawn(move || {
             if let Some(id) = wait_for_window(Some(std::process::id()), Some(expected_size)) {
                 niri_action("CenterWindow", id);
             }
         });
-    } else if has_env("DISPLAY")
+    } else if detect_session_kind() == SessionKind::X11
         && let Some(pos) = discover_placement().physical_position
     {
         x11::center_when_mapped(pos);
@@ -281,7 +282,7 @@ fn discover_size() -> Result<Vec2, String> {
 }
 
 fn discover_placement() -> Placement {
-    if has_env("NIRI_SOCKET") {
+    if detect_session_kind() != SessionKind::X11 && has_env("NIRI_SOCKET") {
         let size = discover_size().unwrap_or_else(|err| {
             tracing::warn!(%err, "Using fallback workbench popup size");
             FALLBACK_SIZE
@@ -292,7 +293,7 @@ fn discover_placement() -> Placement {
             physical_position: None,
         };
     }
-    if has_env("DISPLAY") {
+    if detect_session_kind() == SessionKind::X11 {
         return *RESOLVED_X11_PLACEMENT.get_or_init(|| {
             x11::discover_placement().unwrap_or_else(|err| {
                 tracing::warn!(%err, "Using fallback X11 workbench popup placement");

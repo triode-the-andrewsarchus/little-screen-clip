@@ -1,7 +1,6 @@
 //! Local Wayland/X11 clipboard reading, writing, and shortcut synthesis.
 //!
-//! Adapter precedence tracks the active display session (`WAYLAND_DISPLAY` vs `DISPLAY`) while
-//! preserving Wayland-first ordering when neither variable is set so isolated tests keep working.
+//! Each adapter uses the same display selection as the desktop windows.
 //! Content is written through standard input rather than command-line arguments so it is not
 //! exposed through process listings. Callers that watch the clipboard must perform their own
 //! echo-loop suppression around these functions.
@@ -41,10 +40,10 @@ pub enum ClipboardShortcutAction {
     Paste,
 }
 
-/// Detects the active display session from `WAYLAND_DISPLAY` and `DISPLAY`.
+/// Detects the display backend using the same environment precedence as winit.
 #[must_use]
 pub fn detect_session_kind() -> SessionKind {
-    if has_nonempty_env("WAYLAND_DISPLAY") {
+    if has_nonempty_env("WAYLAND_DISPLAY") || has_nonempty_env("WAYLAND_SOCKET") {
         SessionKind::Wayland
     } else if has_nonempty_env("DISPLAY") {
         SessionKind::X11
@@ -57,19 +56,11 @@ fn has_nonempty_env(name: &str) -> bool {
     std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
-fn adapter_order<'a>(wayland: &'a str, x11: &'a str) -> [&'a str; 2] {
-    match detect_session_kind() {
-        SessionKind::X11 => [x11, wayland],
-        SessionKind::Wayland | SessionKind::Auto => [wayland, x11],
-    }
-}
-
-/// Writes UTF-8 text to the system clipboard as `text/plain;charset=utf-8`.
+/// Writes UTF-8 text to the system clipboard.
 ///
 /// # Errors
 ///
-/// Returns [`ClipboardError::Unavailable`] if neither `wl-copy` nor `xclip` is installed,
-/// or [`ClipboardError::Failed`] if the invoked clipboard tool fails.
+/// Returns an error when the session's clipboard adapter is unavailable or fails.
 pub fn copy_text_to_system_clipboard(text: &str) -> Result<(), ClipboardError> {
     copy_bytes_to_system_clipboard(text.as_bytes(), "text/plain;charset=utf-8")
 }
@@ -78,115 +69,83 @@ pub fn copy_text_to_system_clipboard(text: &str) -> Result<(), ClipboardError> {
 ///
 /// # Errors
 ///
-/// Returns an error when neither supported clipboard program is present, a program times out, or
-/// it exits unsuccessfully. This function blocks for at most five seconds per attempted adapter.
+/// Returns an error when the session's clipboard adapter is unavailable or fails.
 pub fn copy_bytes_to_system_clipboard(bytes: &[u8], mime: &str) -> Result<(), ClipboardError> {
-    let mut failures = Vec::new();
-    for program in adapter_order("wl-copy", "xclip") {
-        if command_available(program).is_none() {
-            continue;
-        }
-        let request = match program {
-            "wl-copy" => CommandRequest::new(program)
-                .arg("-t")
-                .arg(mime)
-                .stdin_bytes(bytes)
-                .discard_output()
-                .timeout(CLIPBOARD_TIMEOUT),
-            "xclip" => CommandRequest::new(program)
-                .arg("-selection")
-                .arg("clipboard")
-                .arg("-t")
-                .arg(mime)
-                .stdin_bytes(bytes)
-                .discard_output()
-                .timeout(CLIPBOARD_TIMEOUT),
-            _ => unreachable!("clipboard write adapters are fixed above"),
+    let (program, request) = if detect_session_kind() == SessionKind::X11 {
+        let target = if mime.eq_ignore_ascii_case("text/plain;charset=utf-8") {
+            "UTF8_STRING"
+        } else {
+            mime
         };
-        match request.run() {
-            Ok(output) if output.status.success() => return Ok(()),
-            Ok(output) => failures.push(format_exit_failure(program, &output)),
-            Err(error) => failures.push(format!("{program}: {error}")),
-        }
+        (
+            "xclip",
+            CommandRequest::new("xclip").args(["-selection", "clipboard", "-t", target]),
+        )
+    } else {
+        ("wl-copy", CommandRequest::new("wl-copy").args(["-t", mime]))
+    };
+    if command_available(program).is_none() {
+        return Err(ClipboardError::Unavailable);
     }
-    finish_failures(failures)
+    let output = request
+        .stdin_bytes(bytes)
+        .discard_output()
+        .timeout(CLIPBOARD_TIMEOUT)
+        // xclip and wl-copy fork a selection owner. It must outlive this command.
+        .run()
+        .map_err(|error| ClipboardError::Failed(error.to_string()))?;
+    if !output.status.success() {
+        return Err(ClipboardError::Failed(format!(
+            "{program} exited {}",
+            output.status
+        )));
+    }
+    Ok(())
 }
 
-/// Lists advertised MIME / target atoms on the requested system selection.
+/// Lists advertised MIME types or target atoms on the requested selection.
 ///
 /// # Errors
 ///
-/// Returns [`ClipboardError::Unavailable`] when no supported clipboard adapter is installed,
-/// [`ClipboardError::Truncated`] when target output exceeds the 64 KiB cap, or
-/// [`ClipboardError::Failed`] when the invoked tool exits unsuccessfully.
+/// Returns an error when the session's clipboard adapter is unavailable, fails or exceeds 64 KiB.
 pub fn list_system_clipboard_types(
     selection: ClipboardSelection,
 ) -> Result<Vec<String>, ClipboardError> {
-    let mut failures = Vec::new();
-    for program in adapter_order("wl-paste", "xclip") {
-        if command_available(program).is_none() {
-            continue;
-        }
-        let args = match (program, selection) {
-            ("wl-paste", ClipboardSelection::Clipboard) => vec!["--list-types"],
-            ("wl-paste", ClipboardSelection::Primary) => vec!["--primary", "--list-types"],
-            ("xclip", ClipboardSelection::Clipboard) => {
-                vec!["-selection", "clipboard", "-o", "-t", "TARGETS"]
-            }
-            ("xclip", ClipboardSelection::Primary) => {
-                vec!["-selection", "primary", "-o", "-t", "TARGETS"]
-            }
-            _ => unreachable!("clipboard read adapters are fixed above"),
+    let bytes = if detect_session_kind() == SessionKind::X11 {
+        read_xclip(selection, Some("TARGETS"), TYPES_LIMIT)
+    } else {
+        let args: &[&str] = if selection == ClipboardSelection::Primary {
+            &["--primary", "--list-types"]
+        } else {
+            &["--list-types"]
         };
-        match run_read_command(program, &args, TYPES_LIMIT) {
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes);
-                return Ok(text
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(str::to_owned)
-                    .collect());
-            }
-            Err(ReadAttempt::Fatal(err)) => return Err(err),
-            Err(ReadAttempt::Failure(msg)) => failures.push(msg),
-        }
-    }
-    finish_failures(failures)
+        run_read_command("wl-paste", args, TYPES_LIMIT)
+    }?;
+    Ok(String::from_utf8_lossy(&bytes)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
 }
 
 /// Reads bytes from the requested system selection (`clipboard` or `primary`).
 ///
-/// When `mime` is `None` under `xclip`, `UTF8_STRING` is attempted first before falling back to
-/// `xclip`'s default selection output so UTF-8 text is preserved without rejecting `STRING`-only
-/// owners.
+/// An unspecified X11 target requests UTF-8 text, with a legacy ISO-8859-1 fallback.
 ///
 /// # Errors
 ///
-/// Returns [`ClipboardError::Unavailable`] if no adapter exists, [`ClipboardError::Truncated`] if
-/// payload exceeds `max_bytes`, or [`ClipboardError::Failed`] if reading fails.
+/// Returns an error when the session's clipboard adapter is unavailable, fails or exceeds the cap.
 pub fn read_system_clipboard_bytes(
     selection: ClipboardSelection,
     mime: Option<&str>,
     max_bytes: usize,
 ) -> Result<Vec<u8>, ClipboardError> {
-    let mut failures = Vec::new();
-    for program in adapter_order("wl-paste", "xclip") {
-        if command_available(program).is_none() {
-            continue;
-        }
-        let attempt = match program {
-            "wl-paste" => read_wl_paste(selection, mime, max_bytes),
-            "xclip" => read_xclip(selection, mime, max_bytes),
-            _ => unreachable!("clipboard read adapters are fixed above"),
-        };
-        match attempt {
-            Ok(bytes) => return Ok(bytes),
-            Err(ReadAttempt::Fatal(err)) => return Err(err),
-            Err(ReadAttempt::Failure(msg)) => failures.push(msg),
-        }
+    if detect_session_kind() == SessionKind::X11 {
+        read_xclip(selection, mime, max_bytes)
+    } else {
+        read_wl_paste(selection, mime, max_bytes)
     }
-    finish_failures(failures)
 }
 
 /// Synthesizes Ctrl+C or Ctrl+V for the active desktop session.
@@ -196,90 +155,63 @@ pub fn read_system_clipboard_bytes(
 ///
 /// # Errors
 ///
-/// Returns [`ClipboardError::Unavailable`] or [`ClipboardError::Failed`] if no keystroke backend
-/// succeeds.
+/// Returns an error when the session's keystroke backend is unavailable or fails.
 pub fn send_clipboard_shortcut(
     action: ClipboardShortcutAction,
     release_alt: bool,
 ) -> Result<(), ClipboardError> {
-    if detect_session_kind() == SessionKind::X11 {
-        return send_x11_shortcut(action, release_alt);
-    }
     let key = match action {
         ClipboardShortcutAction::Copy => "c",
         ClipboardShortcutAction::Paste => "v",
     };
-    if command_available("wtype").is_none() {
-        return Err(ClipboardError::Unavailable);
-    }
-    let args: &[&str] = if release_alt {
-        &["-m", "alt", "-M", "ctrl", "-k", key, "-m", "ctrl"]
+    let mut native_error = None;
+    let (program, args) = if detect_session_kind() == SessionKind::X11 {
+        match x11_input::send_shortcut(action, release_alt) {
+            Ok(()) => return Ok(()),
+            Err(error) => native_error = Some(error),
+        }
+        let combo = format!("ctrl+{key}");
+        let mut args = vec!["key".to_owned()];
+        if release_alt {
+            args.push("--clearmodifiers".to_owned());
+        }
+        args.push(combo);
+        ("xdotool", args)
     } else {
-        &["-M", "ctrl", "-k", key, "-m", "ctrl"]
+        let mut args = Vec::new();
+        if release_alt {
+            args.extend(["-m", "alt"]);
+        }
+        args.extend(["-M", "ctrl", "-k", key, "-m", "ctrl"]);
+        ("wtype", args.into_iter().map(str::to_owned).collect())
     };
-    let output = CommandRequest::new("wtype")
-        .args(args.iter().copied())
+    if command_available(program).is_none() {
+        return Err(native_error.unwrap_or_else(|| {
+            ClipboardError::Failed(format!("clipboard shortcut requires {program}"))
+        }));
+    }
+    let output = CommandRequest::new(program)
+        .args(args)
         .timeout(SHORTCUT_TIMEOUT)
         .max_output_bytes(SHORTCUT_OUTPUT_LIMIT)
         .own_process_group()
+        .die_with_parent()
         .run()
-        .map_err(|e| ClipboardError::Failed(format!("wtype: {e}")))?;
+        .map_err(|error| ClipboardError::Failed(format!("{program}: {error}")))?;
     if output.status.success() {
         Ok(())
     } else {
         Err(ClipboardError::Failed(format_exit_failure(
-            "wtype", &output,
+            program, &output,
         )))
     }
-}
-
-fn send_x11_shortcut(
-    action: ClipboardShortcutAction,
-    release_alt: bool,
-) -> Result<(), ClipboardError> {
-    let x11_error = match x11_input::send_shortcut(action, release_alt) {
-        Ok(()) => return Ok(()),
-        Err(error) => error,
-    };
-    if command_available("xdotool").is_none() {
-        return Err(x11_error);
-    }
-    let combo = match action {
-        ClipboardShortcutAction::Copy => "ctrl+c",
-        ClipboardShortcutAction::Paste => "ctrl+v",
-    };
-    let args: &[&str] = if release_alt {
-        &["key", "--clearmodifiers", combo]
-    } else {
-        &["key", combo]
-    };
-    let output = CommandRequest::new("xdotool")
-        .args(args.iter().copied())
-        .timeout(SHORTCUT_TIMEOUT)
-        .max_output_bytes(SHORTCUT_OUTPUT_LIMIT)
-        .own_process_group()
-        .run()
-        .map_err(|e| ClipboardError::Failed(format!("{x11_error}; xdotool: {e}")))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(ClipboardError::Failed(format!(
-            "{x11_error}; {}",
-            format_exit_failure("xdotool", &output)
-        )))
-    }
-}
-
-enum ReadAttempt {
-    Failure(String),
-    Fatal(ClipboardError),
 }
 
 fn read_wl_paste(
     selection: ClipboardSelection,
     mime: Option<&str>,
     max_bytes: usize,
-) -> Result<Vec<u8>, ReadAttempt> {
+) -> Result<Vec<u8>, ClipboardError> {
     let mut args = Vec::with_capacity(4);
     if selection == ClipboardSelection::Primary {
         args.push("--primary");
@@ -296,7 +228,7 @@ fn read_xclip(
     selection: ClipboardSelection,
     mime: Option<&str>,
     max_bytes: usize,
-) -> Result<Vec<u8>, ReadAttempt> {
+) -> Result<Vec<u8>, ClipboardError> {
     let sel = match selection {
         ClipboardSelection::Clipboard => "clipboard",
         ClipboardSelection::Primary => "primary",
@@ -310,10 +242,21 @@ fn read_xclip(
         max_bytes,
     ) {
         Ok(bytes) => Ok(bytes),
-        Err(ReadAttempt::Fatal(err)) => Err(ReadAttempt::Fatal(err)),
-        Err(ReadAttempt::Failure(_)) => {
-            run_read_command("xclip", &["-selection", sel, "-o"], max_bytes)
+        Err(ClipboardError::Failed(_)) => {
+            let text: String = run_read_command(
+                "xclip",
+                &["-selection", sel, "-o", "-t", "STRING"],
+                max_bytes,
+            )?
+            .into_iter()
+            .map(char::from)
+            .collect();
+            if text.len() > max_bytes {
+                return Err(ClipboardError::Truncated(max_bytes));
+            }
+            Ok(text.into_bytes())
         }
+        Err(error) => Err(error),
     }
 }
 
@@ -321,7 +264,10 @@ fn run_read_command(
     program: &str,
     args: &[&str],
     max_bytes: usize,
-) -> Result<Vec<u8>, ReadAttempt> {
+) -> Result<Vec<u8>, ClipboardError> {
+    if command_available(program).is_none() {
+        return Err(ClipboardError::Unavailable);
+    }
     let output = CommandRequest::new(program)
         .args(args.iter().copied())
         .timeout(CLIPBOARD_TIMEOUT)
@@ -329,12 +275,14 @@ fn run_read_command(
         .own_process_group()
         .die_with_parent()
         .run()
-        .map_err(|error| ReadAttempt::Failure(format!("{program}: {error}")))?;
+        .map_err(|error| ClipboardError::Failed(format!("{program}: {error}")))?;
     if output.stdout_truncated {
-        return Err(ReadAttempt::Fatal(ClipboardError::Truncated(max_bytes)));
+        return Err(ClipboardError::Truncated(max_bytes));
     }
     if !output.status.success() {
-        return Err(ReadAttempt::Failure(format_exit_failure(program, &output)));
+        return Err(ClipboardError::Failed(format_exit_failure(
+            program, &output,
+        )));
     }
     Ok(output.stdout)
 }
@@ -345,14 +293,6 @@ fn format_exit_failure(program: &str, output: &CommandOutput) -> String {
         output.status.code(),
         output.stderr_lossy().trim()
     )
-}
-
-fn finish_failures<T>(failures: Vec<String>) -> Result<T, ClipboardError> {
-    if failures.is_empty() {
-        Err(ClipboardError::Unavailable)
-    } else {
-        Err(ClipboardError::Failed(failures.join("; ")))
-    }
 }
 
 /// Writes a standards-compliant `text/uri-list` for local paths to the system clipboard.
@@ -402,7 +342,7 @@ pub enum ClipboardError {
     #[error("clipboard payload exceeds {0} bytes")]
     Truncated(usize),
     /// Installed adapters or XTEST could not complete the clipboard operation.
-    #[error("clipboard write failed: {0}")]
+    #[error("clipboard operation failed: {0}")]
     Failed(String),
 }
 
@@ -445,14 +385,28 @@ mod tests {
     }
 
     #[test]
-    fn x11_session_prefers_xclip_and_enforces_truncation_limit() {
+    fn xclip_uses_utf8_targets_and_stays_on_its_display() {
         use std::os::unix::fs::PermissionsExt;
 
         const CHILD_ENV: &str = "LITTLE_CLIP_TEST_XCLIP";
-        if std::env::var_os(CHILD_ENV).is_some() {
+        if let Some(directory) = std::env::var_os(CHILD_ENV) {
+            if detect_session_kind() == SessionKind::Wayland {
+                assert!(matches!(
+                    copy_text_to_system_clipboard("Wayland text"),
+                    Err(ClipboardError::Unavailable)
+                ));
+                assert!(matches!(
+                    list_system_clipboard_types(ClipboardSelection::Clipboard),
+                    Err(ClipboardError::Unavailable)
+                ));
+                return;
+            }
             assert_eq!(detect_session_kind(), SessionKind::X11);
-            assert_eq!(adapter_order("wl-copy", "xclip"), ["xclip", "wl-copy"]);
             copy_bytes_to_system_clipboard(b"hello x11", "text/plain;charset=utf-8").unwrap();
+            assert_eq!(
+                std::fs::read_to_string(Path::new(&directory).join("mime")).unwrap(),
+                "UTF8_STRING"
+            );
             let types = list_system_clipboard_types(ClipboardSelection::Clipboard).unwrap();
             assert_eq!(types, vec!["TARGETS", "UTF8_STRING", "image/png"]);
             let got = read_system_clipboard_bytes(ClipboardSelection::Clipboard, None, 64).unwrap();
@@ -491,50 +445,57 @@ fi
         .unwrap();
         std::fs::set_permissions(&xclip, std::fs::Permissions::from_mode(0o700)).unwrap();
 
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "clipboard::tests::x11_session_prefers_xclip_and_enforces_truncation_limit",
-                "--test-threads=1",
-            ])
-            .env(CHILD_ENV, dir.path())
-            .env("PATH", dir.path())
-            .env("DISPLAY", ":99")
-            .env_remove("WAYLAND_DISPLAY")
-            .output()
-            .unwrap();
-        assert!(
-            status.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&status.stdout),
-            String::from_utf8_lossy(&status.stderr)
-        );
+        for wayland in ["", "wayland-test"] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "clipboard::tests::xclip_uses_utf8_targets_and_stays_on_its_display",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_ENV, dir.path())
+                .env("PATH", dir.path())
+                .env("DISPLAY", ":99")
+                .env("WAYLAND_DISPLAY", wayland)
+                .env_remove("WAYLAND_SOCKET")
+                .output()
+                .unwrap();
+            assert!(
+                status.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&status.stdout),
+                String::from_utf8_lossy(&status.stderr)
+            );
+        }
     }
 
     #[test]
-    fn wayland_and_unset_session_keep_wayland_first_order() {
+    fn wayland_endpoints_take_precedence_over_x11() {
         const CHILD_ENV: &str = "LITTLE_CLIP_TEST_SESSION";
         if let Some(mode) = std::env::var_os(CHILD_ENV) {
-            if mode == "wayland" {
+            if mode != "auto" {
                 assert_eq!(detect_session_kind(), SessionKind::Wayland);
             } else {
                 assert_eq!(detect_session_kind(), SessionKind::Auto);
             }
-            assert_eq!(adapter_order("wl-copy", "xclip"), ["wl-copy", "xclip"]);
             return;
         }
 
         for (mode, wayland, display) in [
             ("wayland", Some("wayland-1"), Some(":0")),
+            ("socket", None, Some(":0")),
             ("auto", None, None),
         ] {
             let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
             cmd.args([
                 "--exact",
-                "clipboard::tests::wayland_and_unset_session_keep_wayland_first_order",
+                "clipboard::tests::wayland_endpoints_take_precedence_over_x11",
                 "--test-threads=1",
             ])
-            .env(CHILD_ENV, mode);
+            .env(CHILD_ENV, mode)
+            .env_remove("WAYLAND_SOCKET");
+            if mode == "socket" {
+                cmd.env("WAYLAND_SOCKET", "3");
+            }
             match wayland {
                 Some(v) => cmd.env("WAYLAND_DISPLAY", v),
                 None => cmd.env_remove("WAYLAND_DISPLAY"),

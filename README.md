@@ -120,10 +120,12 @@ them on a shared account if clipboard contents or recipe scripts are sensitive.
 - **Permissions**: Ensure your user has permissions to access USB devices without root (add to `plugdev`/`uaccess` group, or see udev rules below).
 
 ### Software & Desktop Environment
-- **Operating System**: Linux with a Wayland Compositor (e.g. **Niri**, Sway, Hyprland, Wayfire).
+- **Operating System**: Linux with X11 or a Wayland compositor (e.g. **Niri**, Sway, Hyprland, Wayfire).
 - **Core CLI Utilities**:
   - `wtype` — Wayland virtual keyboard simulation (for synthetic copy/paste).
-  - `wl-clipboard` (`wl-copy`, `wl-paste`) — Wayland clipboard protocol tools.
+  - `wl-clipboard` (`wl-copy`, `wl-paste`) — Wayland clipboard tools.
+  - `xclip` — X11 clipboard tools used by Files and `clipctl`, and by the daemon if native XFixes clipboard events are unavailable. Synthetic shortcuts use XTEST, with optional `xdotool` fallback.
+  - Launch from the intended session so `DISPLAY` or `WAYLAND_DISPLAY` is available. Wayland takes precedence when both are set, as in a Wayland session with Xwayland.
   - `pipewire` / `pipewire-pulse` — for rolling system audio buffer capture (`pw-record`).
 - **Image codecs**: `pkg-config` and `libheif` >= 1.17 development headers, with HEVC (e.g. libde265) and AV1 decoder plugins for HEIF/HEIC and AVIF. All standard `image` crate formats and Rayon acceleration are enabled. JPEG XL, JPEG 2000 and PCX images, and Photoshop/Krita saved composites, use shared decoder integrations; edits export to supported raster formats while preserving their original sources. PCX can also save lossless RGB, compositing transparency on white. The View panel explores source layers for PSD and KRA without recompositing them. XCF canvases use an isolated installed GIMP renderer with source layer inspection; edits export to raster copies. PSB, KRZ and native PSD/KRA/XCF output are not supported.
 - **Media processing**: Common audio decoding, waveform/analysis, artwork, WAV selection and simple gain use native Rust. Remaining codec/filter jobs use the separate `clip-media-worker` through `ffmpeg-next` 9.x, tested against FFmpeg 9. Building the worker requires GStreamer 1.24+ with App/Video development packages, `pkg-config`, Clang and FFmpeg development libraries (`libavformat`, `libavcodec`, `libavutil`, `libavfilter`, `libswresample`, `libswscale`). Runtime deployments need matching shared libraries; the Rust bindings do not bundle them. The default `./launch.sh build` includes a `target/release/media-helper` companion with executable, vendored rebuildable source and GPL notice. Keep the companion beside deployed desktop binaries, or provide a sibling `clip-media-worker`; `LITTLE_CLIP_MEDIA_WORKER` overrides discovery. For direct targeted Cargo builds, include `-p clip-media-worker` alongside the application. See [worker delivery and protocol](crates/clip-media-worker/README.md).

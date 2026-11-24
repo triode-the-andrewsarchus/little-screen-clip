@@ -24,7 +24,7 @@ tempfile = "3.27"
 libc = "0.2"
 wayland-client = { version = "0.31", features = ["system"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
-x11rb.workspace = true
+x11rb = { workspace = true, features = ["xfixes"] }
 
 [dev-dependencies]
 little-clip-render = { path = "../little-clip-render", features = ["test-support"] }
