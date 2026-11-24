@@ -1,7 +1,8 @@
 //! Gerber RS-274X/X2 and Excellon drill parsing, attribute inspection, and bounded rendering.
 
 use super::{
-    allocate_canvas, bounded_source_text, check_cancelled, pixmap_to_thumbnail, update_bounds,
+    allocate_canvas, bounded_source_text, check_cancelled, extend_arc_bounds, pixmap_to_thumbnail,
+    update_bounds,
 };
 use crate::ImageThumbnail;
 use lib_gerber_edit::LayerCorners;
@@ -9,7 +10,8 @@ use lib_gerber_edit::excellon_format::{
     Command as ExcellonCommand, ExcellonLayerData, GeometricCode, Mode, parse_excellon,
 };
 use lib_gerber_edit::flatten::{
-    Affine2, ExpandedObject, FlatLayer, FlattenOptions, Point, Polarity, ResourceLimits, Shape,
+    Affine2, ExpandedObject, FlatLayer, FlattenOptions, GraphicsObject, Point, Polarity,
+    ResourceLimits, Segment, Shape,
 };
 use lib_gerber_edit::gerber::GerberLayerData;
 use lib_gerber_edit::gerber_parser;
@@ -19,7 +21,8 @@ use lib_gerber_edit::gerber_types::{
     Profile, StandardComment, Unit, ZeroOmission,
 };
 use lib_gerber_edit::layer::LayerType;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::f64::consts::TAU;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -812,22 +815,57 @@ struct FlatAccum {
     flash_by_code: BTreeMap<i32, usize>,
     stroke_by_code: BTreeMap<i32, usize>,
     polylines: Vec<VectorPolyline>,
-    computed_bounds: Option<[f64; 4]>,
 }
 
-fn transform_points(
-    points: Vec<Point>,
-    xf: &Affine2,
-    bounds: &mut Option<[f64; 4]>,
-) -> Vec<[f64; 2]> {
-    points
-        .into_iter()
-        .map(|p| {
-            let tp = xf.apply(p);
-            update_bounds(bounds, tp[0], tp[1]);
-            tp
-        })
-        .collect()
+fn transform_points(points: Vec<Point>, xf: &Affine2) -> Vec<[f64; 2]> {
+    points.into_iter().map(|p| xf.apply(p)).collect()
+}
+
+fn path_bounds(path: &lib_gerber_edit::flatten::Path, bounds: &mut Option<[f64; 4]>) {
+    let mut from = path.start;
+    update_bounds(bounds, from[0], from[1]);
+    for segment in &path.segments {
+        let to = segment.end();
+        update_bounds(bounds, to[0], to[1]);
+        if let Segment::Arc { center, ccw, .. } = *segment {
+            let start = (from[1] - center[1]).atan2(from[0] - center[0]);
+            let end = (to[1] - center[1]).atan2(to[0] - center[0]);
+            let direction = if ccw { 1.0 } else { -1.0 };
+            let sweep = ((end - start) * direction).rem_euclid(TAU);
+            let sweep = if sweep == 0.0 { TAU } else { sweep };
+            let radius = (from[0] - center[0]).hypot(from[1] - center[1]);
+            extend_arc_bounds(bounds, center, radius, start, start + direction * sweep);
+        }
+        from = to;
+    }
+}
+
+fn local_object_bounds(
+    object: &GraphicsObject,
+    apertures: &BTreeMap<i32, [f64; 4]>,
+) -> Option<[f64; 4]> {
+    let aperture = object
+        .aperture
+        .and_then(|code| apertures.get(&code))
+        .copied();
+    let mut bounds = None;
+    match &object.shape {
+        Shape::Flash => aperture,
+        Shape::Path(path) => {
+            path_bounds(path, &mut bounds);
+            bounds.map(|[x0, y0, x1, y1]| {
+                let [left, bottom, right, top] = aperture.unwrap_or_default();
+                [x0 + left, y0 + bottom, x1 + right, y1 + top]
+            })
+        }
+        Shape::Region { contours } => {
+            for path in contours {
+                path_bounds(path, &mut bounds);
+            }
+            bounds
+        }
+        _ => None,
+    }
 }
 
 fn record_flat_shape(
@@ -853,7 +891,6 @@ fn record_flat_shape(
             {
                 push_flash_polylines(
                     &mut acc.polylines,
-                    &mut acc.computed_bounds,
                     &img.shapes,
                     &expanded.transform,
                     clear,
@@ -875,11 +912,7 @@ fn record_flat_shape(
                 let width = aperture_img
                     .map(|img| aperture_stroke_width(&img.aperture))
                     .unwrap_or(0.05);
-                let pts = transform_points(
-                    path.to_polyline(ARC_TOLERANCE_MM),
-                    &expanded.transform,
-                    &mut acc.computed_bounds,
-                );
+                let pts = transform_points(path.to_polyline(ARC_TOLERANCE_MM), &expanded.transform);
                 if pts.len() >= 2 {
                     acc.polylines.push(VectorPolyline {
                         points: pts,
@@ -897,11 +930,8 @@ fn record_flat_shape(
                 if acc.polylines.len() >= MAX_OVERLAY_POLYLINES {
                     break;
                 }
-                let pts = transform_points(
-                    contour.to_polyline(ARC_TOLERANCE_MM),
-                    &expanded.transform,
-                    &mut acc.computed_bounds,
-                );
+                let pts =
+                    transform_points(contour.to_polyline(ARC_TOLERANCE_MM), &expanded.transform);
                 if pts.len() >= 3 {
                     acc.polylines.push(VectorPolyline {
                         points: pts,
@@ -959,25 +989,51 @@ fn collect_flat_stats(
         flash_by_code: BTreeMap::new(),
         stroke_by_code: BTreeMap::new(),
         polylines: Vec::new(),
-        computed_bounds: None,
     };
 
-    for (idx, expanded) in flat.iter_expanded().take(MAX_EXPANDED_OPS).enumerate() {
+    let mut aperture_bounds = BTreeMap::new();
+    for (&code, image) in &flat.apertures {
+        let mut bounds = None;
+        for &[x, y] in image.shapes.iter().flatten().flatten() {
+            update_bounds(&mut bounds, x, y);
+        }
+        if let Some(bounds) = bounds {
+            aperture_bounds.insert(code, bounds);
+        }
+    }
+    let mut object_bounds = HashMap::new();
+    let mut rendered_bounds = None;
+    for (idx, expanded) in flat.iter_expanded().enumerate() {
+        if idx >= MAX_EXPANDED_OPS {
+            return Err("Gerber object count exceeds the preview limit".into());
+        }
         if idx.is_multiple_of(512) {
             check_cancelled(cancelled, "Gerber analysis cancelled")?;
+        }
+        let bounds = object_bounds
+            .entry(std::ptr::from_ref(expanded.object))
+            .or_insert_with(|| local_object_bounds(expanded.object, &aperture_bounds));
+        if let Some([x0, y0, x1, y1]) = *bounds {
+            for point in [[x0, y0], [x0, y1], [x1, y0], [x1, y1]] {
+                let [x, y] = expanded.transform.apply(point);
+                update_bounds(&mut rendered_bounds, x, y);
+            }
         }
         record_flat_shape(&mut acc, flat, &expanded);
     }
 
-    let bounds_mm = if corners_lo.x.is_finite()
-        && corners_hi.x.is_finite()
-        && corners_lo.x <= corners_hi.x
-        && corners_lo.y <= corners_hi.y
-    {
-        [corners_lo.x, corners_lo.y, corners_hi.x, corners_hi.y]
-    } else {
-        acc.computed_bounds.unwrap_or([0.0, 0.0, 10.0, 10.0])
-    };
+    let bounds_mm = rendered_bounds.unwrap_or_else(|| {
+        if [corners_lo.x, corners_lo.y, corners_hi.x, corners_hi.y]
+            .iter()
+            .all(|n| n.is_finite())
+            && corners_lo.x <= corners_hi.x
+            && corners_lo.y <= corners_hi.y
+        {
+            [corners_lo.x, corners_lo.y, corners_hi.x, corners_hi.y]
+        } else {
+            [0.0, 0.0, 10.0, 10.0]
+        }
+    });
 
     let apertures =
         collect_aperture_summaries(aperture_defs, &acc.flash_by_code, &acc.stroke_by_code);
@@ -996,31 +1052,23 @@ fn collect_flat_stats(
 
 fn push_flash_polylines(
     out: &mut Vec<VectorPolyline>,
-    bounds: &mut Option<[f64; 4]>,
     shapes: &[Vec<Vec<Point>>],
     xf: &Affine2,
     clear: bool,
     aperture: Option<i32>,
 ) {
-    for shape in shapes {
-        if let Some(outer) = shape.first() {
-            let pts: Vec<[f64; 2]> = outer
-                .iter()
-                .map(|p| {
-                    let tp = xf.apply(*p);
-                    update_bounds(bounds, tp[0], tp[1]);
-                    tp
-                })
-                .collect();
-            if pts.len() >= 3 && out.len() < MAX_OVERLAY_POLYLINES {
-                out.push(VectorPolyline {
-                    points: pts,
-                    stroke_width_mm: 0.05,
-                    clear,
-                    closed: true,
-                    aperture,
-                });
-            }
+    for outer in shapes.iter().filter_map(|shape| shape.first()) {
+        if out.len() >= MAX_OVERLAY_POLYLINES {
+            break;
+        }
+        if outer.len() >= 3 {
+            out.push(VectorPolyline {
+                points: outer.iter().map(|&p| xf.apply(p)).collect(),
+                stroke_width_mm: 0.05,
+                clear,
+                closed: true,
+                aperture,
+            });
         }
     }
 }
@@ -1283,6 +1331,18 @@ fn append_contour(pb: &mut PathBuilder, points: impl IntoIterator<Item = Point>,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gerber_bounds_include_repeated_flashes() {
+        let bytes =
+            b"%MOMM*%\n%FSLAX26Y26*%\n%ADD10C,2*%\nD10*\n%SRX3Y1I20J0*%\nX0Y0D03*\n%SR*%\nM02*\n";
+        let doc =
+            GerberDocument::parse_gerber(Path::new("repeated.gbr"), bytes, &AtomicBool::new(false))
+                .unwrap();
+        assert_eq!(doc.flash_count, 3);
+        assert!((doc.bounds_mm[0] + 1.0).abs() < 1e-9);
+        assert!((doc.bounds_mm[2] - 41.0).abs() < 1e-9);
+    }
 
     #[test]
     fn x2_file_polarity_preserves_the_layer_image() {
