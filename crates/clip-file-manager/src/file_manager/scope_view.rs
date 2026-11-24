@@ -334,11 +334,10 @@ impl Viewer {
                 ..Interaction::default()
             }
         };
-        if showing_spectrum {
-            let filter_added = std::mem::take(&mut self.filters.reveal_spectrum);
-            let view = ui.scope(|ui| self.spectrum_ui(ui, link, true));
+        if self.spectrum && self.spectra.origin().is_none() {
+            let view = ui.scope(|ui| self.spectrum_ui(ui, link, true, None));
             let near_edge = view.response.rect.top() > ui.clip_rect().bottom() - 166.0;
-            if (spectrum_opened && near_edge) || filter_added || returned {
+            if (spectrum_opened && near_edge) || returned {
                 view.response.scroll_to_me(Some(egui::Align::Min));
             }
         } else {
@@ -424,6 +423,7 @@ impl Viewer {
                 range.is_some() && !copies.busy(),
                 egui::Button::new("Copy samples"),
             )
+            .on_hover_text("Copy recorded samples from the selected channel")
             .clicked()
             && let Some(range) = range
         {
@@ -528,7 +528,7 @@ impl Viewer {
         }
         let origin_in_fft = ui.input(|input| input.pointer.press_origin().is_some_and(in_fft_lane));
         if !origin_in_fft && (!hover_in_fft || self.drag.is_some()) {
-            self.move_cursors(ui, rect, &response);
+            self.move_cursors(ui, rect, &response, ScopeTrace::Recorded(self.active));
         }
         let painter = ui.painter_at(outer);
         let lane_count = self.lane_count();
@@ -563,11 +563,14 @@ impl Viewer {
             .highlight_analog_inputs(&clipped, &self.span, &channels, self.stacked);
         let clock = Link::clock(link);
         self.draw_math(ui, &painter, &clipped, rect, clock);
-        self.draw_filters(ui, &painter, &clipped, rect, clock);
+        let edit_filters = self.draw_filters(ui, &painter, rect, clock);
         self.paint_waveform_annotations(ui, &clipped, rect, link, &channels, &fft_lanes);
         if let Some(index) = fft_change {
             self.toggle_trace_fft(ScopeTrace::Recorded(index));
             ui.ctx().request_repaint();
+        }
+        if let Some(index) = edit_filters {
+            self.edit_filter_output(ui, index);
         }
         probe
     }
@@ -1256,7 +1259,7 @@ impl Viewer {
         )
     }
 
-    fn move_cursors(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
+    fn move_cursors(&mut self, ui: &Ui, rect: Rect, response: &egui::Response, trace: ScopeTrace) {
         let active = response.dragged_by(PointerButton::Primary);
         let stopped = response.drag_stopped_by(PointerButton::Primary);
         let (down, origin, latest, free) = ui.input(|input| {
@@ -1296,17 +1299,17 @@ impl Viewer {
             self.snaps.iter_mut().for_each(CursorSnap::clear);
             let slot = near(time).unwrap_or_else(|| {
                 self.archive_mark();
-                self.place_cursor(0, time, radius, free);
+                self.place_cursor(0, time, radius, free, trace);
                 1
             });
             self.drag = Some(CursorDrag { slot, origin });
         }
         if response.clicked_by(PointerButton::Primary) {
-            self.select_at(time, radius, free, near(time));
+            self.select_at(time, radius, free, near(time), trace);
         } else if (active || stopped)
             && let Some(drag) = self.drag
         {
-            self.place_cursor(drag.slot, time, radius, free);
+            self.place_cursor(drag.slot, time, radius, free, trace);
         }
         if !down {
             self.drag = None;
@@ -1331,7 +1334,14 @@ impl Viewer {
             .rposition(|mark| time >= mark.span.start && time <= mark.span.end)
     }
 
-    fn select_at(&mut self, time: f64, radius: f64, free: bool, cursor: Option<usize>) {
+    fn select_at(
+        &mut self,
+        time: f64,
+        radius: f64,
+        free: bool,
+        cursor: Option<usize>,
+        trace: ScopeTrace,
+    ) {
         self.snaps.iter_mut().for_each(CursorSnap::clear);
         if cursor.is_none() {
             let mark = self.mark_at(time).map(|index| self.marks.remove(index));
@@ -1341,10 +1351,19 @@ impl Viewer {
                 return;
             }
         }
-        self.place_cursor(cursor.unwrap_or(0), time, radius, free);
+        self.place_cursor(cursor.unwrap_or(0), time, radius, free, trace);
     }
 
-    fn place_cursor(&mut self, slot: usize, time: f64, radius: f64, free: bool) {
+    fn place_cursor(&mut self, slot: usize, time: f64, radius: f64, free: bool, trace: ScopeTrace) {
+        if let ScopeTrace::Filtered(index) = trace {
+            self.snaps[slot].clear();
+            self.cursors[slot] = Some(if free {
+                time
+            } else {
+                self.filters.snap(index, time, radius).unwrap_or(time)
+            });
+            return;
+        }
         let detail = self
             .detail
             .as_ref()

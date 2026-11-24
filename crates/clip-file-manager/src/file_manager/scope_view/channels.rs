@@ -1,5 +1,5 @@
 use super::{CursorSnap, ScopeTrace, Viewer, display_value, plot, time_span};
-use egui::{Color32, Painter, Rect, RichText, Ui, pos2};
+use egui::{Color32, Painter, Rect, Ui, pos2};
 use little_clip_core::engineering::waveforms::Peak;
 use std::ops::Range;
 
@@ -92,46 +92,12 @@ impl Viewer {
     }
 
     pub(super) fn offset_control(&mut self, ui: &mut Ui, index: usize, bounds: Peak) {
-        let unit = &self.overview.channels[index].unit;
-        let span = f64::from(bounds.max) - f64::from(bounds.min);
-        let speed = if span.is_finite() && span > 0.0 {
-            span / 100.0
-        } else {
-            0.01
-        };
-        let offset = &mut self.display_offsets[index];
-        let caption = if *offset != 0.0 {
-            RichText::new("Shifted ").color(ui.visuals().warn_fg_color)
-        } else if unit == "V" {
-            RichText::new("V offset ")
-        } else {
-            RichText::new("Offset ")
-        };
-        let response = ui
-            .add(
-                egui::DragValue::new(offset)
-                    .range(-1.0e12..=1.0e12)
-                    .speed(speed)
-                    .max_decimals(8)
-                    .prefix(caption)
-                    .suffix(if unit.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" {unit}")
-                    }),
-            )
-            .on_hover_text("Display offset. Measurements and export use the original samples.");
-        if *offset != 0.0
-            && ui
-                .small_button("Reset")
-                .on_hover_text("Reset display offset")
-                .clicked()
-        {
-            *offset = 0.0;
-            ui.ctx().request_repaint();
-        } else if response.changed() {
-            ui.ctx().request_repaint();
-        }
+        super::lanes::offset_control(
+            ui,
+            &self.overview.channels[index].unit,
+            bounds,
+            &mut self.display_offsets[index],
+        );
     }
 
     pub(super) fn channel_label(&self, index: usize) -> String {

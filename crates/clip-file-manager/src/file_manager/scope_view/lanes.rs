@@ -1,5 +1,7 @@
 use super::{Viewer, plot};
-use egui::{Align, Align2, Color32, FontId, Layout, Painter, Rect, Ui, UiBuilder, pos2, vec2};
+use egui::{
+    Align, Align2, Color32, FontId, Layout, Painter, Rect, RichText, Ui, UiBuilder, pos2, vec2,
+};
 use little_clip_core::engineering::waveforms::Peak;
 
 const HEADER_HEIGHT: f32 = 24.0;
@@ -32,7 +34,14 @@ impl Lane {
         }
     }
 
-    pub fn collapsed(area: Rect) -> Self {
+    pub fn comparison(area: Rect, visible: bool) -> Self {
+        if visible {
+            return Self::new(
+                Rect::from_min_max(area.min + vec2(78.0, 0.0), area.max),
+                0,
+                1,
+            );
+        }
         let frame = area.shrink2(vec2(0.0, 3.0));
         Self {
             plot: Rect::NOTHING,
@@ -73,6 +82,47 @@ impl Lane {
         child.spacing_mut().interact_size.y = 18.0;
         child.spacing_mut().button_padding.y = 1.0;
         child
+    }
+}
+
+pub(super) fn offset_control(ui: &mut Ui, unit: &str, bounds: Peak, offset: &mut f32) {
+    let span = f64::from(bounds.max) - f64::from(bounds.min);
+    let speed = if span.is_finite() && span > 0.0 {
+        span / 100.0
+    } else {
+        0.01
+    };
+    let caption = if *offset != 0.0 {
+        RichText::new("Shifted ").color(ui.visuals().warn_fg_color)
+    } else if unit == "V" {
+        RichText::new("V offset ")
+    } else {
+        RichText::new("Offset ")
+    };
+    let response = ui
+        .add(
+            egui::DragValue::new(offset)
+                .range(-1.0e12..=1.0e12)
+                .speed(speed)
+                .max_decimals(8)
+                .prefix(caption)
+                .suffix(if unit.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {unit}")
+                }),
+        )
+        .on_hover_text("Display offset. Measurements and export use the unshifted samples.");
+    if *offset != 0.0
+        && ui
+            .small_button("Reset")
+            .on_hover_text("Reset display offset")
+            .clicked()
+    {
+        *offset = 0.0;
+        ui.ctx().request_repaint();
+    } else if response.changed() {
+        ui.ctx().request_repaint();
     }
 }
 

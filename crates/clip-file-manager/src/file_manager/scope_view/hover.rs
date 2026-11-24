@@ -206,24 +206,18 @@ impl Viewer {
                     name: "Math",
                     unit: &self.math_unit(),
                     offset: 0.0,
+                    unshifted_label: "unshifted",
                     color: super::MATH_COLOR,
                 },
                 None,
             ));
         }
         let filter_start = math_slot + usize::from(self.math_state.numeric().is_some());
-        for (slot, index, name, bounds, value) in self.filters.probes(time) {
+        for (slot, probe) in self.filters.probes(time) {
+            let plot = self.lane(rect, filter_start + slot).plot;
             labels.extend(layout.label(
                 painter,
-                ProbeReading {
-                    plot: self.lane(rect, filter_start + slot).plot,
-                    bounds,
-                    value: Probe::from_sample(value),
-                    name,
-                    unit: &self.overview.channels[index].unit,
-                    offset: 0.0,
-                    color: super::filters::FILTER_COLOR,
-                },
+                self.filtered_reading(painter, plot, probe, true),
                 None,
             ));
         }
@@ -231,11 +225,26 @@ impl Viewer {
     }
 
     pub(super) fn paint_lane_probe(&self, painter: &Painter, channel: PlottedChannel) {
-        let Some(time) = self.hover.time.filter(|time| self.span.contains(time)) else {
-            return;
-        };
-        let x = plot::x_at(channel.plot, &self.span, time);
-        let Some(layout) = ProbeLayout::new(painter, channel.plot, x) else {
+        if let Some(time) = self.hover.time.filter(|time| self.span.contains(time)) {
+            self.paint_probe_reading(painter, time, self.recorded_label(&channel, time, false));
+        }
+    }
+
+    pub(super) fn paint_filtered_probe(&self, painter: &Painter, rect: Rect, index: usize) {
+        if let Some(time) = self.hover.time.filter(|time| self.span.contains(time))
+            && let Some(probe) = self.filters.probe(index, time)
+        {
+            self.paint_probe_reading(
+                painter,
+                time,
+                self.filtered_reading(painter, rect, probe, false),
+            );
+        }
+    }
+
+    fn paint_probe_reading(&self, painter: &Painter, time: f64, reading: ProbeReading<'_>) {
+        let x = plot::x_at(reading.plot, &self.span, time);
+        let Some(layout) = ProbeLayout::new(painter, reading.plot, x) else {
             return;
         };
         let painter = painter.with_clip_rect(layout.visible);
@@ -245,14 +254,31 @@ impl Viewer {
             layout.visible.y_range(),
             Stroke::new(1.0, visuals.text_color()),
         );
-        if let Some(label) = layout.label(
-            &painter,
-            self.recorded_label(&channel, time, false),
-            Some(visuals.text_color()),
-        ) {
+        if let Some(label) = layout.label(&painter, reading, Some(visuals.text_color())) {
             let height = label.1.size().y + PANEL_PADDING;
             let top = panel_top(label.0, height, layout.visible.y_range());
             layout.paint_panel(&painter, visuals.window_fill(), &[label], top, height);
+        }
+    }
+
+    fn filtered_reading<'a>(
+        &'a self,
+        painter: &Painter,
+        plot: Rect,
+        probe: super::filters::FilterProbe<'a>,
+        show_name: bool,
+    ) -> ProbeReading<'a> {
+        ProbeReading {
+            plot,
+            bounds: probe.bounds,
+            value: Probe::from_sample(probe.value),
+            name: if show_name { probe.name } else { "" },
+            unit: &self.overview.channels[probe.index].unit,
+            offset: probe.offset,
+            unshifted_label: "unshifted",
+            color: crate::file_manager::signal_view::filter_editor::filter_ink(
+                painter.ctx().global_style().visuals.dark_mode,
+            ),
         }
     }
 
@@ -271,6 +297,7 @@ impl Viewer {
             name: if name { &channel.name } else { "" },
             unit: &channel.unit,
             offset: plotted.display_offset,
+            unshifted_label: "raw",
             color: plot::color(index),
         }
     }
@@ -283,6 +310,7 @@ struct ProbeReading<'a> {
     name: &'a str,
     unit: &'a str,
     offset: f32,
+    unshifted_label: &'static str,
     color: Color32,
 }
 
@@ -297,7 +325,7 @@ impl ProbeReading<'_> {
             && let Probe::Value(value) = self.value
         {
             let displayed = display_value(f64::from(value) + f64::from(self.offset), self.unit);
-            caption.push_str(&format!(" raw · {displayed} shifted"));
+            caption.push_str(&format!(" {} · {displayed} shifted", self.unshifted_label));
         }
         caption
     }
@@ -479,12 +507,18 @@ mod tests {
             name: "",
             unit: "V",
             offset,
+            unshifted_label: "raw",
             color: Color32::WHITE,
         };
         assert_eq!(
             reading(Probe::Value(1.0), 0.5).caption(),
             "1 V raw · 1.5 V shifted"
         );
+        let filtered = ProbeReading {
+            unshifted_label: "unshifted",
+            ..reading(Probe::Value(1.0), 0.5)
+        };
+        assert_eq!(filtered.caption(), "1 V unshifted · 1.5 V shifted");
         assert_eq!(reading(Probe::Value(1.0), 0.0).caption(), "1 V");
         assert_eq!(reading(Probe::Gap, 0.5).caption(), "No sample");
     }

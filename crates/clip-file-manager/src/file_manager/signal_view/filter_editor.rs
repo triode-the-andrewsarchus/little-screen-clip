@@ -13,6 +13,14 @@ use std::{
 };
 
 pub(in crate::file_manager) const FILTER_COLOR: Color32 = Color32::from_rgb(221, 163, 93);
+
+pub(in crate::file_manager) fn filter_ink(dark: bool) -> Color32 {
+    if dark {
+        FILTER_COLOR
+    } else {
+        Color32::from_rgb(150, 85, 20)
+    }
+}
 const MAX_STAGES: usize = 8;
 
 #[derive(Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -152,11 +160,7 @@ impl StageList {
         span: &Range<f64>,
         rate: f64,
     ) {
-        let color = if ui.visuals().dark_mode {
-            FILTER_COLOR
-        } else {
-            Color32::from_rgb(150, 85, 20)
-        };
+        let color = filter_ink(ui.visuals().dark_mode);
         let painter = ui.painter_at(rect);
         if let Ok(chain) = FilterChain::new(rate, &self.0) {
             let points = (0..=160).filter_map(|index| {

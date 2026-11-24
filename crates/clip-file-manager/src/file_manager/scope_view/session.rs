@@ -148,15 +148,25 @@ mod tests {
         view.add_filter(FilterKind::HighPass);
         view.active = 0;
 
-        let original = serde_json::to_string(&view.session_settings()).unwrap();
+        let old_settings = serde_json::to_value(view.session_settings()).unwrap();
+        assert!(
+            old_settings["filters"][0]["settings"]
+                .get("offset")
+                .is_none()
+        );
+        let mut updated_settings = old_settings;
+        updated_settings["filters"][0]["settings"]["offset"] = serde_json::json!(0.5);
+        updated_settings["filters"][0]["settings"]["visible"] = serde_json::json!(false);
+        let original = serde_json::to_string(&updated_settings).unwrap();
         let mut reopened = Viewer::load(&path, &cancel).unwrap();
         reopened
             .restore_session(serde_json::from_str(&original).unwrap())
             .unwrap();
         assert_eq!(
-            serde_json::to_string(&reopened.session_settings()).unwrap(),
-            original
+            serde_json::to_value(reopened.session_settings()).unwrap(),
+            updated_settings
         );
+        assert!(reopened.analysis_edits() == view.analysis_edits());
 
         let ctx = egui::Context::default();
         let start = Instant::now();

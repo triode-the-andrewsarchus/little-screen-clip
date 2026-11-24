@@ -16,11 +16,39 @@ impl Viewer {
         ui: &mut Ui,
         link: Option<&Link>,
         allow_frequency_only: bool,
+        source: Option<&str>,
+    ) {
+        let panel = ui.scope(|ui| self.spectrum_panel(ui, link, allow_frequency_only, source));
+        if std::mem::take(&mut self.filters.reveal_spectrum) {
+            panel.response.scroll_to_me(None);
+        }
+    }
+
+    pub(super) fn edit_filter_output(&mut self, ui: &Ui, index: usize) {
+        self.spectra.finish_inspection(&mut self.span);
+        let viewport = self.span.clone();
+        if self.active != index {
+            self.activate_channel(index);
+            self.span = viewport;
+        }
+        self.set_spectrum_kind(LaneKind::Filtered);
+        self.spectra.only = false;
+        self.spectrum = true;
+        self.filters.reveal_spectrum = true;
+        ui.ctx().request_repaint();
+    }
+
+    fn spectrum_panel(
+        &mut self,
+        ui: &mut Ui,
+        link: Option<&Link>,
+        allow_frequency_only: bool,
+        source: Option<&str>,
     ) {
         if self.spectra.kind == LaneKind::Filtered && !self.filters.has_lane(self.active) {
             self.set_spectrum_kind(LaneKind::Recorded);
         }
-        self.spectrum_controls(ui, allow_frequency_only);
+        self.spectrum_controls(ui, allow_frequency_only, source);
         if !self.spectrum {
             self.spectra.suspend();
             return;
@@ -37,7 +65,7 @@ impl Viewer {
         let height = (ui.available_height() - 5.0).max(195.0);
         spectrum_workspace(ui, filterable, height, |ui, part| match part {
             SpectrumPane::Chart => self.spectrum_chart(ui, link, available),
-            SpectrumPane::Filters => self.filter_controls(ui),
+            SpectrumPane::Filters => self.filter_controls(ui, Link::clock(link)),
         });
     }
 
@@ -108,7 +136,7 @@ impl Viewer {
         }
     }
 
-    fn spectrum_controls(&mut self, ui: &mut Ui, allow_frequency_only: bool) {
+    fn spectrum_controls(&mut self, ui: &mut Ui, allow_frequency_only: bool, source: Option<&str>) {
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
@@ -118,6 +146,9 @@ impl Viewer {
                 &self.overview.channels[self.active].name
             };
             ui.strong(format!("{name} spectrum"));
+            if let Some(source) = source {
+                ui.weak(source);
+            }
             for (kind, available) in [
                 (LaneKind::Recorded, true),
                 (LaneKind::Calculated, self.math_state.numeric().is_some()),

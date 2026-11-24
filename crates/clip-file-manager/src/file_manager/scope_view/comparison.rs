@@ -3,7 +3,7 @@ use super::{
     lanes::{self, Lane},
     plot, timeline,
 };
-use egui::{Rect, Sense, Ui, vec2};
+use egui::{Rect, Sense, Ui};
 use little_clip_core::engineering::waveforms::Peak;
 
 #[derive(Default)]
@@ -11,6 +11,7 @@ pub(in crate::file_manager) struct TraceInteraction {
     pub selected: bool,
     pub probe: Option<f64>,
     pub span_changed: bool,
+    pub edit_filters: bool,
 }
 
 impl Viewer {
@@ -61,15 +62,7 @@ impl Viewer {
         key: T,
     ) -> TraceInteraction {
         let visible = self.comparison_visible(index);
-        let lane = if visible {
-            Lane::new(
-                Rect::from_min_max(area.min + vec2(78.0, 0.0), area.max),
-                0,
-                1,
-            )
-        } else {
-            Lane::collapsed(area)
-        };
+        let lane = Lane::comparison(area, visible);
         if !ui.is_rect_visible(lane.frame) {
             if let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index)) {
                 spectrum.suspend();
@@ -117,15 +110,15 @@ impl Viewer {
         heading
             .add(egui::Label::new(egui::RichText::new(source).weak()).truncate())
             .on_hover_text(source);
-        let mut interaction = TraceInteraction {
-            selected: selected || toggle,
-            ..Default::default()
-        };
-        if let Some(bounds) = bounds {
-            interaction = self.comparison_waveform(ui, lane, index, link, bounds, interaction);
+        let mut interaction = if let Some(bounds) = bounds {
+            let interaction = self.comparison_timeline(ui, lane.plot, index, link, trace);
+            self.comparison_waveform(ui, lane, index, link, bounds);
+            interaction
         } else {
             self.paint_trace_fft(ui, &mut heading, lane.plot, trace, link.clock);
-        }
+            TraceInteraction::default()
+        };
+        interaction.selected |= selected || toggle;
         if toggle {
             self.toggle_trace_fft(trace);
             ui.ctx().request_repaint();
@@ -133,19 +126,18 @@ impl Viewer {
         interaction
     }
 
-    fn comparison_waveform(
+    pub(super) fn comparison_timeline(
         &mut self,
         ui: &Ui,
-        lane: Lane,
+        rect: Rect,
         index: usize,
         link: &Link,
-        raw: Peak,
-        mut interaction: TraceInteraction,
+        trace: ScopeTrace,
     ) -> TraceInteraction {
-        let rect = lane.plot;
+        let mut interaction = TraceInteraction::default();
         let response = ui.interact(
             rect,
-            ui.make_persistent_id("trace-time"),
+            ui.make_persistent_id(("trace-time", trace)),
             Sense::click_and_drag(),
         );
         if let Some(span) = timeline::navigate(ui.ctx(), rect, &response, &self.span, true) {
@@ -164,7 +156,7 @@ impl Viewer {
             interaction.selected = true;
         }
         if index == self.active {
-            self.move_cursors(ui, rect, &response);
+            self.move_cursors(ui, rect, &response, trace);
         }
         interaction.probe = response
             .hover_pos()
@@ -173,23 +165,19 @@ impl Viewer {
         if interaction.probe.is_some() {
             self.hover.time = interaction.probe;
         }
+        interaction
+    }
+
+    fn comparison_waveform(&self, ui: &Ui, lane: Lane, index: usize, link: &Link, raw: Peak) {
+        let rect = lane.plot;
         let painter = ui.painter_at(lane.frame);
-        let ink = ui.visuals().weak_text_color();
         let color = plot::color(index);
         let display_offset = self.display_offsets[index];
         let display = lanes::stacked_scale(raw, display_offset);
         let bounds = lanes::shifted(display, -display_offset);
         let channel = &self.overview.channels[index];
         lane.scale(&painter, display, &channel.unit, color);
-        let divisions = plot::x_divisions(rect);
-        for tick in 0..=divisions {
-            let x = egui::lerp(rect.x_range(), tick as f32 / divisions as f32);
-            painter.vline(
-                x,
-                rect.y_range(),
-                egui::Stroke::new(1.0, ink.gamma_multiply(0.21)),
-            );
-        }
+        paint_time_grid(ui, &painter, rect);
         self.paint_channel(&painter, index, rect, bounds, color);
         Link::paint_trace_evidence(Some(link), &painter, rect, &self.span, index);
         if index == self.active {
@@ -201,7 +189,6 @@ impl Viewer {
                 self.math_envelope(),
             );
         }
-        self.paint_comparison_filter(&painter, index, rect, bounds);
         self.paint_time_markers(ui, &painter, rect, Some(link), index == self.active);
         self.paint_lane_probe(
             &painter,
@@ -212,7 +199,6 @@ impl Viewer {
                 display_offset,
             },
         );
-        interaction
     }
 
     pub(in crate::file_manager) fn comparison_tools(
@@ -235,6 +221,7 @@ impl Viewer {
         ui: &mut Ui,
         link: &Link,
         show: bool,
+        source: &str,
     ) -> bool {
         if !show {
             self.spectra.suspend();
@@ -250,7 +237,7 @@ impl Viewer {
                 link.clock,
             );
         } else {
-            self.spectrum_ui(ui, Some(link), false);
+            self.spectrum_ui(ui, Some(link), false, Some(source));
         }
         self.spectrum
     }
@@ -261,5 +248,18 @@ impl Viewer {
 
     pub(in crate::file_manager) fn comparison_overview(&mut self, ui: &mut Ui) {
         self.overview_ui(ui);
+    }
+}
+
+pub(super) fn paint_time_grid(ui: &Ui, painter: &egui::Painter, rect: Rect) {
+    let ink = ui.visuals().weak_text_color();
+    let divisions = plot::x_divisions(rect);
+    for tick in 0..=divisions {
+        let x = egui::lerp(rect.x_range(), tick as f32 / divisions as f32);
+        painter.vline(
+            x,
+            rect.y_range(),
+            egui::Stroke::new(1.0, ink.gamma_multiply(0.21)),
+        );
     }
 }

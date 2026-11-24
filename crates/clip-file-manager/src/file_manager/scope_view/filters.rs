@@ -1,17 +1,20 @@
 use super::ScopeTrace;
 use super::{
-    JOBS, Task, Viewer, plot, reads,
+    JOBS, Link, Task, Viewer,
+    comparison::TraceInteraction,
+    lanes, plot, reads,
     spectrum_input::{Input, LaneKind},
 };
 use crate::file_manager::signal_view::{
-    filter_editor::{StageFocus, StageList, add_buttons, reveal_frequency},
+    filter_editor::{StageFocus, StageList, add_buttons, filter_ink, reveal_frequency},
+    frequency_plot::time_range,
     take_query_result,
 };
-use egui::{Painter, Rect, Ui};
+use egui::{Label, Painter, Rect, RichText, Ui};
 use little_clip_core::engineering::{
-    analysis::FilterKind,
+    analysis::{Clock, FilterKind},
     scope::{Channel, MAX_SAMPLES_PER_READ},
-    waveforms::{Envelope, Peak, Recording, display_value, sample_span},
+    waveforms::{Envelope, Peak, Recording, sample_span},
 };
 use std::{
     collections::BTreeMap,
@@ -19,8 +22,6 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
-
-pub(super) use crate::file_manager::signal_view::filter_editor::FILTER_COLOR;
 
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct SavedFilter {
@@ -32,6 +33,8 @@ pub(super) struct SavedFilter {
 struct LaneSettings {
     name: String,
     visible: bool,
+    #[serde(default, skip_serializing_if = "zero_offset")]
+    offset: f32,
     rows: Range<u64>,
     stages: StageList,
 }
@@ -43,6 +46,10 @@ pub(super) struct Filters {
     retry_at: f64,
     generation: u64,
     pub(super) reveal_spectrum: bool,
+}
+
+fn zero_offset(offset: &f32) -> bool {
+    *offset == 0.0
 }
 
 struct Lane {
@@ -78,6 +85,18 @@ pub(in crate::file_manager) struct FilterSamples {
     pub raw: Arc<reads::RawChannel>,
 }
 
+pub(super) struct FilterProbe<'a> {
+    pub index: usize,
+    pub name: &'a str,
+    pub bounds: Peak,
+    pub value: f32,
+    pub offset: f32,
+}
+
+fn time_span(channel: &Channel, rows: &Range<u64>) -> Range<f64> {
+    channel.time_at(rows.start)..channel.time_at(rows.end)
+}
+
 impl Lane {
     fn new(settings: LaneSettings) -> Self {
         Self {
@@ -100,10 +119,23 @@ impl Lane {
     fn ready(&self) -> Option<&Output> {
         self.output.as_ref().filter(|_| self.finished())
     }
+
+    fn probe(&self, index: usize, time: f64) -> Option<FilterProbe<'_>> {
+        let output = self.ready()?;
+        let offset = self.settings.offset;
+        let display = lanes::stacked_scale(output.bounds, offset);
+        Some(FilterProbe {
+            index,
+            name: &self.settings.name,
+            bounds: lanes::shifted(display, -offset),
+            value: output.samples.raw.value_at(time)?,
+            offset,
+        })
+    }
 }
 
 impl Viewer {
-    pub(super) fn filter_controls(&mut self, ui: &mut Ui) {
+    pub(super) fn filter_controls(&mut self, ui: &mut Ui, clock: Clock) {
         let kind = ui
             .horizontal_wrapped(|ui| add_buttons(ui, self.can_add_filter()))
             .inner;
@@ -138,9 +170,8 @@ impl Viewer {
                     .char_limit(48),
             );
             ui.weak(format!(
-                "Filter range  {} to {}",
-                display_value(channel.time_at(lane.settings.rows.start), "s"),
-                display_value(channel.time_at(lane.settings.rows.end), "s")
+                "Filter range  {}",
+                time_range(&time_span(channel, &lane.settings.rows), clock)
             ));
             if ui
                 .add_enabled(
@@ -181,6 +212,7 @@ impl Viewer {
             Lane::new(LaneSettings {
                 name: format!("{} filtered", channel.name),
                 visible: true,
+                offset: 0.0,
                 rows,
                 stages: StageList::default(),
             })
@@ -200,77 +232,203 @@ impl Viewer {
         &mut self,
         ui: &mut Ui,
         painter: &Painter,
-        clip: &Painter,
         rect: Rect,
-        clock: little_clip_core::engineering::analysis::Clock,
-    ) {
+        clock: Clock,
+    ) -> Option<usize> {
         let first = self.physical_lanes() + usize::from(self.math_state.numeric().is_some());
+        let mut edit = None;
         let indices = self.filters.visible_indices().collect::<Vec<_>>();
         for (slot, index) in indices.into_iter().enumerate() {
-            let trace = ScopeTrace::Filtered(index);
             let lane = self.lane(rect, first + slot);
-            if !painter.clip_rect().intersects(lane.frame) {
-                if let Some(state) = self.trace_fft.get_mut(&trace) {
-                    state.suspend();
-                }
-                continue;
-            }
-            let channel = &self.overview.channels[index];
-            let derived = &self.filters.lanes[&index];
-            let output = derived.ready();
-            let status = match output {
-                Some(_) => "",
-                None if derived.error.is_some() => " · unavailable",
-                None => " · filtering…",
-            };
-            let mut heading = lane.heading(ui, ("scope-filter-lane", index));
-            let toggle = self.trace_fft_toggle(&mut heading, trace);
-            heading.colored_label(FILTER_COLOR, format!("{}{status}", derived.settings.name));
-            if self.trace_fft.contains_key(&trace) {
-                self.paint_trace_fft(ui, &mut heading, lane.plot, trace, clock);
-            } else if let Some(output) = output {
-                draw_output(
-                    &clip.with_clip_rect(lane.plot),
-                    lane.plot,
-                    &self.span,
-                    channel,
-                    output,
-                    output.bounds,
-                );
-                lane.scale(painter, output.bounds, &channel.unit, FILTER_COLOR);
-            }
-            if toggle {
-                self.toggle_trace_fft(trace);
-                ui.ctx().request_repaint();
+            let interaction = self.filtered_lane(ui, painter, lane, index, clock, None);
+            if interaction.edit_filters {
+                edit = Some(index);
             }
         }
+        edit
     }
 
-    pub(super) fn paint_comparison_filter(
-        &self,
-        painter: &Painter,
-        index: usize,
-        rect: Rect,
-        bounds: Peak,
-    ) {
-        let Some(output) = self
-            .filters
+    pub(in crate::file_manager) fn comparison_filter_visible(&self, index: usize) -> Option<bool> {
+        self.filters
             .lanes
             .get(&index)
-            .filter(|lane| lane.settings.visible)
-            .and_then(Lane::ready)
-        else {
-            return;
-        };
+            .map(|lane| lane.settings.visible)
+    }
+
+    pub(in crate::file_manager) fn comparison_filtered_trace(
+        &mut self,
+        ui: &mut Ui,
+        area: Rect,
+        index: usize,
+        source: &str,
+        link: &Link,
+    ) -> TraceInteraction {
+        let lane =
+            lanes::Lane::comparison(area, self.comparison_filter_visible(index) == Some(true));
+        let painter = ui.painter_at(area);
+        lane.background(ui, &painter);
+        let previous = self.span.clone();
+        let mut interaction =
+            self.filtered_lane(ui, &painter, lane, index, link.clock, Some((source, link)));
+        if interaction.edit_filters {
+            self.edit_filter_output(ui, index);
+            interaction.span_changed |= self.span != previous;
+        }
+        interaction
+    }
+
+    fn filtered_lane(
+        &mut self,
+        ui: &mut Ui,
+        painter: &Painter,
+        lane: lanes::Lane,
+        index: usize,
+        clock: Clock,
+        linked: Option<(&str, &Link)>,
+    ) -> TraceInteraction {
+        let trace = ScopeTrace::Filtered(index);
+        if !ui.is_rect_visible(lane.frame) {
+            if let Some(state) = self.trace_fft.get_mut(&trace) {
+                state.suspend();
+            }
+            return TraceInteraction::default();
+        }
+        let mut heading = lane.heading(ui, ("scope-filter-lane", index));
+        let mut interaction = TraceInteraction::default();
+        let visible = self.filters.lanes[&index].settings.visible;
+        let toggled_visibility =
+            linked.is_some() && self.filter_visibility_button(&mut heading, index, visible);
+        if !visible || toggled_visibility {
+            self.filtered_lane_caption(
+                &mut heading,
+                index,
+                clock,
+                linked.map(|(source, _)| source),
+            );
+            return interaction;
+        }
+        let fft = self.trace_fft.contains_key(&trace);
+        let toggle = self.trace_fft_toggle(&mut heading, trace);
+        let edit = heading.small_button("Edit filters").clicked();
+        if !fft {
+            let filter = self.filters.lanes.get_mut(&index).expect("filter lane");
+            let bounds = filter
+                .ready()
+                .map_or(Peak::default(), |output| output.bounds);
+            lanes::offset_control(
+                &mut heading,
+                &self.overview.channels[index].unit,
+                bounds,
+                &mut filter.settings.offset,
+            );
+        }
+        self.filtered_lane_caption(&mut heading, index, clock, linked.map(|(source, _)| source));
+        if fft {
+            self.paint_trace_fft(ui, &mut heading, lane.plot, trace, clock);
+        } else {
+            interaction =
+                self.filtered_time_plot(ui, painter, lane, index, linked.map(|(_, link)| link));
+        }
+        if toggle {
+            self.toggle_trace_fft(trace);
+            ui.ctx().request_repaint();
+        }
+        interaction.selected |= edit;
+        interaction.edit_filters = edit;
+        interaction
+    }
+
+    fn filter_visibility_button(&mut self, ui: &mut Ui, index: usize, visible: bool) -> bool {
+        let action = if visible { "Hide" } else { "Show" };
+        if ui.small_button(action).clicked() {
+            self.filters
+                .lanes
+                .get_mut(&index)
+                .expect("filter lane")
+                .settings
+                .visible = !visible;
+            if visible && let Some(state) = self.trace_fft.get_mut(&ScopeTrace::Filtered(index)) {
+                state.suspend();
+            }
+            ui.ctx().request_repaint();
+            return true;
+        }
+        false
+    }
+
+    fn filtered_lane_caption(&self, ui: &mut Ui, index: usize, clock: Clock, source: Option<&str>) {
+        let filter = &self.filters.lanes[&index];
         let channel = &self.overview.channels[index];
-        draw_output(
-            &painter.with_clip_rect(rect.intersect(painter.clip_rect())),
-            rect,
-            &self.span,
-            channel,
-            output,
-            bounds,
-        );
+        let mut caption = filter.settings.name.trim().to_owned();
+        if caption.is_empty() {
+            caption = format!("{} filtered", channel.name);
+        }
+        if let Some(source) = source {
+            caption.push_str(" · ");
+            caption.push_str(source);
+        }
+        let status = if filter.ready().is_some() {
+            ""
+        } else if filter.finished() {
+            " · unavailable"
+        } else {
+            " · filtering…"
+        };
+        caption.push_str(status);
+        ui.add(
+            Label::new(RichText::new(caption).color(filter_ink(ui.visuals().dark_mode))).truncate(),
+        )
+        .on_hover_ui(|ui| {
+            ui.label(format!("Filtered from {}", channel.name));
+            ui.label(format!(
+                "Filter range {}",
+                time_range(&time_span(channel, &filter.settings.rows), clock),
+            ));
+            if filter.finished()
+                && let Some(error) = &filter.error
+            {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+        });
+    }
+
+    fn filtered_time_plot(
+        &mut self,
+        ui: &mut Ui,
+        painter: &Painter,
+        lane: lanes::Lane,
+        index: usize,
+        link: Option<&Link>,
+    ) -> TraceInteraction {
+        let interaction = link.map_or_else(TraceInteraction::default, |link| {
+            self.comparison_timeline(ui, lane.plot, index, link, ScopeTrace::Filtered(index))
+        });
+        if link.is_some() {
+            super::comparison::paint_time_grid(ui, painter, lane.plot);
+        }
+        let channel = &self.overview.channels[index];
+        let filter = &self.filters.lanes[&index];
+        if let Some(output) = filter.ready() {
+            let offset = filter.settings.offset;
+            let display = lanes::stacked_scale(output.bounds, offset);
+            let raw = lanes::shifted(display, -offset);
+            let color = filter_ink(ui.visuals().dark_mode);
+            draw_output(
+                &painter.with_clip_rect(lane.plot.intersect(painter.clip_rect())),
+                lane.plot,
+                &self.span,
+                channel,
+                output,
+                raw,
+                color,
+            );
+            lane.scale(painter, display, &channel.unit, color);
+        }
+        if link.is_some() {
+            self.paint_time_markers(ui, painter, lane.plot, link, false);
+            self.paint_filtered_probe(painter, lane.plot, index);
+        }
+        interaction
     }
 
     pub(super) fn draw_filter_response(&mut self, ui: &mut Ui, rect: Rect, span: &Range<f64>) {
@@ -291,6 +449,7 @@ impl Filters {
         let mut filters = self.save();
         for filter in &mut filters {
             filter.settings.visible = false;
+            filter.settings.offset = 0.0;
         }
         filters
     }
@@ -320,6 +479,8 @@ impl Filters {
                 filter.settings.rows.start > filter.settings.rows.end
                     || filter.settings.rows.end > channel.sample_count
             }) || filter.settings.name.len() > 192
+                || !filter.settings.offset.is_finite()
+                || filter.settings.offset.abs() > 1.0e12
             {
                 return Err("Invalid scope filter channel or sample range".into());
             }
@@ -360,27 +521,25 @@ impl Filters {
                 .clicked()
             {
                 lane.settings.visible = !lane.settings.visible;
+                ui.ctx().request_repaint();
             }
         }
     }
 
-    pub(super) fn probes(
-        &self,
-        time: f64,
-    ) -> impl Iterator<Item = (usize, usize, &str, Peak, f32)> {
+    pub(super) fn probes(&self, time: f64) -> impl Iterator<Item = (usize, FilterProbe<'_>)> {
         self.visible()
             .enumerate()
-            .filter_map(move |(slot, (&index, lane))| {
-                let output = lane.ready()?;
-                let value = output.samples.raw.value_at(time)?;
-                Some((
-                    slot,
-                    index,
-                    lane.settings.name.as_str(),
-                    output.bounds,
-                    value,
-                ))
-            })
+            .filter_map(move |(slot, (&index, lane))| Some((slot, lane.probe(index, time)?)))
+    }
+
+    pub(super) fn probe(&self, index: usize, time: f64) -> Option<FilterProbe<'_>> {
+        self.lanes.get(&index)?.probe(index, time)
+    }
+
+    pub(super) fn snap(&self, index: usize, time: f64, radius: f64) -> Option<f64> {
+        let output = self.lanes.get(&index)?.ready()?;
+        let raw = &output.samples.raw;
+        raw.snap(time, radius.min(raw.step * reads::DETAIL_SAMPLES as f64))
     }
 
     pub(super) fn has_lane(&self, channel: usize) -> bool {
@@ -540,6 +699,7 @@ fn draw_output(
     channel: &Channel,
     output: &Output,
     bounds: Peak,
+    color: egui::Color32,
 ) {
     let (start, samples) = output.samples.raw.visible(span);
     if samples.len() <= 4096 {
@@ -551,7 +711,7 @@ fn draw_output(
             output.samples.raw.step,
             samples,
             bounds,
-            FILTER_COLOR,
+            color,
         );
         return;
     }
@@ -570,7 +730,7 @@ fn draw_output(
             channel,
             &output.overview,
             bounds,
-            FILTER_COLOR,
+            color,
         );
     }
 }

@@ -20,7 +20,8 @@ The branch adds four floating interfaces for adding a recording, editing equatio
 - [x] Exercise hover with missing samples and selections at the limits of the visible zoom range.
 - [x] Show each math lane's equation beside its result. Support independent editing, add and remove, naming, inline errors, and direct spectrum targeting. Keep source aliases, predicates, decoded inputs, filters, resampling and feedback connected to their existing evaluators. Preserve surviving bindings when an equation changes.
 - [x] Check the inline editor with the four-channel Rigol capture, PWM and I²S inputs, a rejected edit and its recovery, condition-based measurements and a short window.
-- [ ] Keep filter actions recognizable and near the affected trace. Move the remaining floating analysis controls into their workspaces.
+- [x] Put a direct filter editing action on each scope filter output and show that output beside its source in a multi-recording analysis.
+- [ ] Move the remaining floating analysis controls into their workspaces.
 
 Place each equation next to the trace it produces, with a direct Spectrum action on the same row. The new-equation action should bring the inline editor into view and focus it. Keep an unapplied draft local to the edited row, and validate the complete dependency graph before replacing the last applied result. Walk through adding two equations, fixing a bad edit in one, and switching their spectra while retaining the other lane's decoder, filter and time selection.
 
@@ -209,6 +210,12 @@ The single-recording CPU frame benchmark ran with a threshold equation on the 50
 The FFT lane header shows its frequency, amplitude, and contributing time window. Partial coverage is visible beside the result. Hovering shows the FFT input and covered sample count, and marks the contributing interval on the waveform lanes and overview. In an interleaved recording comparison, the shared ruler marks the same interval in the aligned clock. Clicking another frequency checks the window that contributed that bin.
 
 A 13-second capture placed a short burst in the first second and a stronger 1 kHz signal in the final second. The default peak read 12–13 s. Picking a bin near 4.1 kHz moved the highlight to 0–1 s. The readout reported 786,432 of 851,968 samples across 12 windows. The highlight aligned with the matching ends of the time plots at 1500 × 1000 and with the shared ruler at 800 × 620 in the light theme. A separate Rigol capture exercised the inline FFT for a channel sum and a low-pass output, and returned both lanes to waveform display.
+
+## 24. Edit a filter from the trace it produces
+
+In an interleaved scope comparison, each filtered waveform sits immediately below its input and follows it when the input is reordered. The output has a separate voltage scale, visibility, display offset and FFT. Its caption identifies the recording and shows the filter range on hover. The output and input use the shared time axis. Dragging cursors on the filtered waveform snaps to its zero crossings. The output’s Edit filters action opens the shared Spectrum panel for that recording and channel with Filtered selected. Closing the shared panel brings the trace back into view.
+
+The desktop check applied a 1.7 kHz low-pass to CH1 of a 40 ms two-tone capture. The filtered waveform was visible with the recorded input hidden. Its inline FFT showed the surviving 1 kHz component. With a 0.50 V display offset, the probe showed −205.8 mV unshifted and 294.2 mV shifted. Brushing the filtered waveform snapped to 5.144 and 10.144 ms. Reopening the filter editor kept the brush and showed the original 0–40 ms processing window. A separate check selected recording B first and opened A’s filter from its lane. The saved recipe reopened with the 1.7 kHz stage attached to A, and B had no filter. The shared editor also returned to the source and reopened from the output at 800 × 620 in the light theme.
 
 ## Review after each addition
 

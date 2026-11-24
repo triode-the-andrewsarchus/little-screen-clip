@@ -1,5 +1,6 @@
 use super::{Viewer, plot, spectrum_input};
 use crate::file_manager::signal_view::{
+    filter_editor::filter_ink,
     frequency_plot::{Display, paint_measurement, peak_reading, time_range},
     spectra::ResultView,
 };
@@ -25,11 +26,11 @@ impl Trace {
         }
     }
 
-    fn color(self) -> egui::Color32 {
+    fn color(self, ui: &Ui) -> egui::Color32 {
         match self {
             Self::Recorded(index) => plot::color(index),
             Self::Math => super::MATH_COLOR,
-            Self::Filtered(_) => super::filters::FILTER_COLOR,
+            Self::Filtered(_) => filter_ink(ui.visuals().dark_mode),
         }
     }
 }
@@ -132,7 +133,7 @@ impl TraceSpectrum {
         let ready = self.spectra.ready();
         let shown = ready.or_else(|| self.spectra.latest());
         let mut span = self.frequency.clone().unwrap_or(0.0..1.0);
-        let color = trace.color();
+        let color = trace.color(ui);
         let mut display = Display {
             span: &mut self.frequency,
             marker: &mut self.marker,

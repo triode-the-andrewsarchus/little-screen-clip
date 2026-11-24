@@ -18,6 +18,17 @@ struct TraceRow {
     source_index: usize,
     trace: Trace,
     visible: bool,
+    filtered: Option<bool>,
+}
+
+impl TraceRow {
+    fn lane_visibility(&self) -> impl Iterator<Item = bool> {
+        std::iter::once(self.visible).chain(self.filtered)
+    }
+
+    fn has_visible_lane(&self) -> bool {
+        self.visible || self.filtered == Some(true)
+    }
 }
 
 #[derive(Default)]
@@ -25,6 +36,8 @@ pub(super) struct Comparison {
     pub order: Vec<Trace>,
     pub active: Option<Trace>,
     pub spectrum: bool,
+    pub(super) reveal_spectrum: bool,
+    pub(super) return_to_trace: Option<Trace>,
     pub initialized: bool,
 }
 
@@ -54,7 +67,7 @@ impl Comparison {
         self.active = rows[start..]
             .iter()
             .chain(&rows[..start])
-            .find(|row| row.visible)
+            .find(|row| row.has_visible_lane())
             .map(|row| row.trace);
     }
 
@@ -102,7 +115,13 @@ impl Viewer {
                 .position(|source| source.id == trace.source)
             && let Some(link) = links.get(&trace.source)
         {
-            let Capture::Analog(view) = &mut self.sources[index].capture else {
+            let source = &mut self.sources[index];
+            let filename = source
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let Capture::Analog(view) = &mut source.capture else {
                 return (probe, action);
             };
             let previous = view.span().clone();
@@ -111,10 +130,20 @@ impl Viewer {
             if let Some(range) = view.comparison_tools(ui, copies, link) {
                 action = Some((index, SourceAction::Share(range)));
             }
-            ui.push_id(trace.source, |ui| {
-                self.comparison.spectrum =
-                    view.comparison_spectrum(ui, link, self.comparison.spectrum);
+            let was_open = self.comparison.spectrum;
+            let spectrum = ui.push_id(trace.source, |ui| {
+                view.comparison_spectrum(ui, link, was_open, &filename)
             });
+            self.comparison.spectrum = spectrum.inner;
+            if was_open && !spectrum.inner {
+                self.comparison.return_to_trace = Some(trace);
+                ui.ctx().request_repaint();
+            }
+            if std::mem::take(&mut self.comparison.reveal_spectrum)
+                && spectrum.response.rect.top() > ui.clip_rect().bottom() - 100.0
+            {
+                spectrum.response.scroll_to_me(None);
+            }
             if *view.span() != previous {
                 self.span = link.clock.workspace_range(view.span());
                 ui.ctx().request_repaint();
@@ -204,6 +233,10 @@ impl Viewer {
             .clicked()
         {
             self.comparison.spectrum = !self.comparison.spectrum;
+            self.comparison.reveal_spectrum = self.comparison.spectrum;
+            if !self.comparison.spectrum {
+                self.comparison.return_to_trace = self.comparison.active;
+            }
         }
     }
 
@@ -224,6 +257,7 @@ impl Viewer {
                     source_index,
                     trace,
                     visible: view.comparison_visible(trace.channel),
+                    filtered: view.comparison_filter_visible(trace.channel),
                 })
             })
             .collect()
@@ -244,26 +278,28 @@ impl Viewer {
         }
         let mut rows = self.comparison_rows();
         self.comparison.focus_visible(&rows);
-        let visible = rows.iter().filter(|row| row.visible).count();
+        let visibility = rows.iter().flat_map(TraceRow::lane_visibility);
+        let (total, visible) = visibility.fold((0, 0), |(total, visible), shown| {
+            (total + 1, visible + usize::from(shown))
+        });
         let desired = chart_height
-            - (rows.len() - visible) as f32 * COLLAPSED_HEIGHT
-            - rows.len().saturating_sub(1) as f32 * ui.spacing().item_spacing.y;
+            - (total - visible) as f32 * COLLAPSED_HEIGHT
+            - total.saturating_sub(1) as f32 * ui.spacing().item_spacing.y;
         let height = (desired / visible.max(1) as f32).max(88.0);
         let axis = (visible > 0).then(|| comparison_time_axis(ui, &self.span));
         let mut probe = None;
         let mut reorder = None;
         for row in &mut rows {
-            let height = if row.visible {
-                height
-            } else {
-                COLLAPSED_HEIGHT
-            };
-            let (rect, target) =
-                ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+            let (_, target) = reserve_trace_row(ui, height, row.visible);
+            let filter = row
+                .filtered
+                .map(|shown| reserve_trace_row(ui, height, shown).0);
             let Some(link) = links.get(&row.trace.source) else {
                 continue;
             };
-            probe = self.comparison_row(ui, rect, row, link).or(probe);
+            probe = self
+                .comparison_row(ui, target.rect, filter, row, link)
+                .or(probe);
             reorder = trace_drop(ui, &target, row.trace).or(reorder);
         }
         if let Some(axis) = axis {
@@ -294,6 +330,7 @@ impl Viewer {
         &mut self,
         ui: &mut Ui,
         rect: Rect,
+        filter: Option<Rect>,
         row: &mut TraceRow,
         link: &Link,
     ) -> Option<f64> {
@@ -320,20 +357,43 @@ impl Viewer {
             link,
             key,
         );
+        let filtered = filter
+            .map(|area| {
+                view.comparison_filtered_trace(&mut trace_ui, area, key.channel, &name, link)
+            })
+            .unwrap_or_default();
         row.visible = view.comparison_visible(key.channel);
-        if interaction.selected && row.visible {
+        row.filtered = view.comparison_filter_visible(key.channel);
+        if (interaction.selected || filtered.selected) && row.has_visible_lane() {
             self.comparison.active = Some(key);
         }
-        if interaction.span_changed {
+        self.comparison.spectrum |= filtered.edit_filters;
+        if interaction.span_changed || filtered.span_changed {
             self.span = link.clock.workspace_range(view.span());
             ui.ctx().request_repaint();
         }
         Link::reveal_trace(Some(link), ui, rect, key.channel);
+        if self
+            .comparison
+            .return_to_trace
+            .take_if(|trace| *trace == key)
+            .is_some()
+        {
+            ui.scroll_to_rect(rect, Some(Align::TOP));
+        }
         if self.reveal_source.take_if(|id| *id == source.id).is_some() {
             ui.scroll_to_rect(rect, Some(Align::TOP));
         }
-        interaction.probe.map(|time| link.clock.to_workspace(time))
+        filtered
+            .probe
+            .or(interaction.probe)
+            .map(|time| link.clock.to_workspace(time))
     }
+}
+
+fn reserve_trace_row(ui: &mut Ui, height: f32, visible: bool) -> (Rect, Response) {
+    let height = if visible { height } else { COLLAPSED_HEIGHT };
+    ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover())
 }
 
 fn comparison_time_axis(ui: &mut Ui, span: &std::ops::Range<f64>) -> Rect {
@@ -402,6 +462,7 @@ mod tests {
                 source_index,
                 trace,
                 visible: true,
+                filtered: None,
             })
             .collect::<Vec<_>>();
         let mut comparison = Comparison {
@@ -417,9 +478,13 @@ mod tests {
         rows[0].visible = false;
         comparison.focus_visible(&rows);
         assert_eq!(comparison.active, None);
-        rows[1].visible = true;
+        rows[1].filtered = Some(true);
         comparison.focus_visible(&rows);
         assert_eq!(comparison.active, Some(traces[1]));
+
+        rows[1].filtered = Some(false);
+        comparison.focus_visible(&rows);
+        assert_eq!(comparison.active, None);
     }
 
     #[test]
