@@ -8,7 +8,7 @@ use super::scene_render::append_arc_points;
 use crate::ImageThumbnail;
 use eda_view::kicad::sexp::{SExp, Value, parse as parse_sexp};
 use std::collections::BTreeSet;
-use std::f64::consts::PI;
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::sync::atomic::AtomicBool;
 use tiny_skia::{
     Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform,
@@ -150,9 +150,29 @@ impl PcbPrim {
                 update_bounds(bounds, center[0] - r, center[1] - r);
                 update_bounds(bounds, center[0] + r, center[1] + r);
             }
-            Self::Circle { center, radius, .. } | Self::Arc { center, radius, .. } => {
+            Self::Circle { center, radius, .. } => {
                 update_bounds(bounds, center[0] - radius, center[1] - radius);
                 update_bounds(bounds, center[0] + radius, center[1] + radius);
+            }
+            Self::Arc {
+                center,
+                radius,
+                start_rad,
+                end_rad,
+                ..
+            } => {
+                let lo = start_rad.min(*end_rad);
+                let hi = start_rad.max(*end_rad);
+                let extremes = (0..4)
+                    .map(|quarter| f64::from(quarter) * FRAC_PI_2)
+                    .filter(|&angle| (angle - lo).rem_euclid(TAU) <= hi - lo);
+                for angle in [lo, hi].into_iter().chain(extremes) {
+                    update_bounds(
+                        bounds,
+                        center[0] + radius * angle.cos(),
+                        center[1] + radius * angle.sin(),
+                    );
+                }
             }
             Self::Polygon { points, .. } => {
                 for p in points {
@@ -1092,6 +1112,18 @@ fn pcb_stroke(width: f64) -> Stroke {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_outline_uses_only_the_drawn_arc_sweep() {
+        let pcb = br#"(kicad_pcb
+            (gr_arc (start 10 0) (mid 6 8) (end 0 10) (layer "Edge.Cuts"))
+            (gr_arc (start 0 10) (mid 6 8) (end 10 0) (layer "Edge.Cuts")))"#;
+        let doc = KicadPcbDocument::parse(pcb, &AtomicBool::new(false)).unwrap();
+        let actual = doc.outline_mm.unwrap();
+        for size in actual {
+            assert!((size - 10.0).abs() < 1e-9, "incorrect outline: {actual:?}");
+        }
+    }
 
     #[test]
     fn board_pad_center_and_angle_use_their_respective_coordinate_frames() {
