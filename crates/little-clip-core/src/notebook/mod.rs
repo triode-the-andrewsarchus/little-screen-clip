@@ -8,7 +8,7 @@ mod worker;
 pub mod xournal;
 
 pub use vector::RetainedPage;
-pub use worker::{inspect, render_page, retain_xournal_page, run_worker_cli};
+pub use worker::{inspect, render_page, retain_page, run_worker_cli};
 
 use serde::{Deserialize, Serialize};
 

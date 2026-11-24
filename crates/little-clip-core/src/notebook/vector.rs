@@ -1,10 +1,13 @@
 //! Native notebook SVG rasterization with bundled fonts and no file/URL resolver.
 use crate::page_region::PageRegion;
+use base64::Engine;
 use resvg::{
     tiny_skia::{self as skia, Pixmap, Transform},
     usvg::{self, Group, ImageKind, Node},
 };
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
+use std::io::Cursor;
 use std::sync::{Arc, LazyLock, atomic::AtomicBool};
 
 pub(crate) fn rasterize(
@@ -34,7 +37,7 @@ pub(crate) fn rasterize(
     ))
 }
 
-fn parse(svg: &str) -> Result<usvg::Tree, String> {
+pub(super) fn parse(svg: &str) -> Result<usvg::Tree, String> {
     let options = usvg::Options {
         font_family: "Arimo".into(),
         fontdb: Arc::clone(fonts()),
@@ -47,13 +50,41 @@ fn parse(svg: &str) -> Result<usvg::Tree, String> {
     usvg::Tree::from_str(svg, &options).map_err(|error| error.to_string())
 }
 
+pub(super) fn page_svg(width: u32, height: u32) -> String {
+    format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='{width}' height='{height}'>"
+    )
+}
+
+pub(super) fn append_raster(
+    svg: &mut String,
+    page: [u32; 2],
+    image: image::RgbaImage,
+) -> Result<(), String> {
+    let mut png = Cursor::new(Vec::new());
+    image
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    append_png(svg, page, &png.into_inner());
+    Ok(())
+}
+
+pub(super) fn append_png(svg: &mut String, [width, height]: [u32; 2], png: &[u8]) {
+    let _ = write!(
+        svg,
+        "<image width='{width}' height='{height}' preserveAspectRatio='none' xlink:href='data:image/png;base64,"
+    );
+    base64::engine::general_purpose::STANDARD.encode_string(png, svg);
+    svg.push_str("'/>");
+}
+
 fn white_canvas(width: u32, height: u32) -> Result<Pixmap, String> {
     let mut pixmap = Pixmap::new(width, height).ok_or("Notebook raster allocation failed")?;
     pixmap.fill(skia::Color::WHITE);
     Ok(pixmap)
 }
 
-/// One Xournal page with authored geometry and separately decoded raster assets.
+/// One notebook page with its prepared geometry and separately decoded raster assets.
 pub struct RetainedPage {
     tree: usvg::Tree,
     assets: HashMap<usize, Pixmap>,

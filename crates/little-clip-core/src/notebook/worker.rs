@@ -56,21 +56,17 @@ pub fn render_page(
     Ok((png, size.width as u32, size.height as u32))
 }
 
-/// Loads one Xournal page's native paths and separate raster assets for viewing.
+/// Prepares one notebook page's paths and raster assets for bounded viewport rendering.
 ///
 /// # Errors
 /// Returns source, cancellation, unsupported notebook, or scene-budget errors.
-pub fn retain_xournal_page(
-    path: &Path,
-    page: usize,
-    cancel: &AtomicBool,
-) -> Result<RetainedPage, String> {
+pub fn retain_page(path: &Path, page: usize, cancel: &AtomicBool) -> Result<RetainedPage, String> {
     if !(1..=4096).contains(&page) {
         return Err("Notebook page is outside the supported range".into());
     }
     // PDF attachments are sampled once at a bounded size. The notebook's own
     // ink, paper geometry and text stay at authored resolution.
-    let svg = request(path, "xournal-svg", page, 2048, cancel)?;
+    let svg = request(path, "detail", page, 2048, cancel)?;
     super::check_cancel(cancel)?;
     RetainedPage::new(
         std::str::from_utf8(&svg).map_err(|error| error.to_string())?,
@@ -109,7 +105,7 @@ fn request(
         .resource_limit(rustix::process::Resource::As, 768 * 1024 * 1024)
         .resource_limit(rustix::process::Resource::Cpu, 15)
         .resource_limit(rustix::process::Resource::Fsize, MAX_OUTPUT as u64)
-        .max_output_bytes(if matches!(mode, "page" | "xournal-svg") {
+        .max_output_bytes(if matches!(mode, "page" | "detail") {
             MAX_OUTPUT
         } else {
             256 * 1024
@@ -201,11 +197,8 @@ fn prepare(input: &mut File, mode: &str, page: usize, edge: u32) -> Result<Vec<u
         ("page", 1..=4096, 1..=4096, Some(kind)) => {
             prepare_page(input, kind, page, edge).map(|result| result.0)
         }
-        ("xournal-svg", 1..=4096, 1..=4096, Some(SourceKind::Xournal)) => {
-            prepare_xournal(input, |input, source, cancel| {
-                super::xournal::with_page_svg(input, source, page, edge, cancel, Ok)
-                    .map(String::into_bytes)
-            })
+        ("detail", 1..=4096, 1..=4096, Some(kind)) => {
+            prepare_detail(input, kind, page, edge).map(String::into_bytes)
         }
         _ => Err("Invalid notebook helper operation".into()),
     }
@@ -216,6 +209,23 @@ enum SourceKind {
     Supernote,
     Xournal,
     Remarkable,
+}
+
+fn prepare_detail(
+    input: &mut File,
+    kind: SourceKind,
+    page: usize,
+    edge: u32,
+) -> Result<String, String> {
+    match kind {
+        SourceKind::Xournal => prepare_xournal(input, |input, source, cancel| {
+            super::xournal::with_page_svg(input, source, page, edge, cancel, Ok)
+        }),
+        SourceKind::Remarkable => {
+            super::remarkable::preview::retain_page(input, page, edge, &AtomicBool::new(false))
+        }
+        SourceKind::Supernote => Err("Supernote uses whole-page previews".into()),
+    }
 }
 
 fn source_kind(input: &mut File, header: &[u8]) -> Result<Option<SourceKind>, String> {

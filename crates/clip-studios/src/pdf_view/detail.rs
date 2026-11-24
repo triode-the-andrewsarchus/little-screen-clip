@@ -157,15 +157,14 @@ impl PageDetail {
         let check = source.check.clone();
         let backend = source.backend;
         let scene = self.scene.clone();
-        let preparing_notebook = backend == PageSource::Xournal && scene.is_none();
+        let preparing_notebook = backend == PageSource::RetainedNotebook && scene.is_none();
         self.job = Some(DetailJob {
             preparing_notebook,
             task: Task::start(&JOBS, Duration::from_secs(25), move |cancel| {
                 check.read(cancel, || {
                     if preparing_notebook {
-                        let scene = little_clip_core::notebook::retain_xournal_page(
-                            &path, page_num, cancel,
-                        )?;
+                        let scene =
+                            little_clip_core::notebook::retain_page(&path, page_num, cancel)?;
                         Ok(DetailOutput::Notebook(Arc::new(scene)))
                     } else {
                         render(backend, &path, page_num, scene.as_deref(), region, cancel)
@@ -192,8 +191,8 @@ fn render(
                 little_clip_core::pdf::render_pdf_page_region(path, page_num, region, cancel)?;
             decode_page_png(png, PageRegion::MAX_SIDE)
         }
-        PageSource::Xournal => {
-            let scene = scene.ok_or("Xournal page preparation is unavailable")?;
+        PageSource::RetainedNotebook => {
+            let scene = scene.ok_or("Notebook page preparation is unavailable")?;
             let raster = scene.render_region(region, cancel)?;
             Ok(ColorImage::from_rgba_premultiplied(
                 region.size.map(|side| side as usize),

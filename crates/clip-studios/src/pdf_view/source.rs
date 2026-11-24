@@ -7,20 +7,20 @@ pub(super) enum PageSource {
     #[default]
     Pdf,
     Notebook,
-    Xournal,
+    RetainedNotebook,
 }
 
 pub(super) struct SourceInfo {
     pub pdf: PdfInfo,
     pub warnings: Vec<String>,
-    pub xournal: bool,
+    pub retained_notebook: bool,
 }
 impl From<PdfInfo> for SourceInfo {
     fn from(pdf: PdfInfo) -> Self {
         Self {
             pdf,
             warnings: Vec::new(),
-            xournal: false,
+            retained_notebook: false,
         }
     }
 }
@@ -37,7 +37,7 @@ impl PageSource {
     pub fn info(self, path: &Path, cancel: &AtomicBool) -> Result<SourceInfo, String> {
         match self {
             Self::Pdf => get_pdf_info_cancellable(path, cancel).map(SourceInfo::from),
-            Self::Notebook | Self::Xournal => {
+            Self::Notebook | Self::RetainedNotebook => {
                 let info = little_clip_core::notebook::inspect(path, cancel)?;
                 let pdf = PdfInfo {
                     page_count: info.pages.len(),
@@ -51,7 +51,7 @@ impl PageSource {
                 Ok(SourceInfo {
                     pdf,
                     warnings: info.warnings,
-                    xournal: info.format == "Xournal",
+                    retained_notebook: matches!(info.format.as_str(), "Xournal" | "reMarkable"),
                 })
             }
         }
@@ -66,7 +66,7 @@ impl PageSource {
     ) -> Result<(Vec<u8>, u32, u32), String> {
         match self {
             Self::Pdf => render_pdf_page_preview_cancellable(path, page, edge, cancel),
-            Self::Notebook | Self::Xournal => {
+            Self::Notebook | Self::RetainedNotebook => {
                 little_clip_core::notebook::render_page(path, page, edge, cancel)
             }
         }

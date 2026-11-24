@@ -10234,8 +10234,6 @@ dependencies = [
 [[package]]
 name = "remarkable-rm"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c744972b29f1c782536b0bd1bbb2415867bc8e6dbba4ef7bca3642f5dd66afd"
 dependencies = [
  "resvg 0.47.0",
  "thiserror 2.0.21",

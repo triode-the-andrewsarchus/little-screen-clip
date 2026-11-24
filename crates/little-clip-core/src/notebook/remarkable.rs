@@ -10,6 +10,7 @@ mod background;
 mod legacy;
 mod package;
 pub mod preview;
+mod retained;
 
 const MAX_PAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BLOCKS: usize = 65_536;

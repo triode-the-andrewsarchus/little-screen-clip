@@ -60,12 +60,39 @@ pub fn render(
     edge: u32,
     cancel: &AtomicBool,
 ) -> Result<(Vec<u8>, u32, u32), String> {
+    let (model, options, background) = load_page(input, page, edge, cancel)?;
+    super::render_model(&model, options, background.as_ref(), cancel)
+}
+
+pub(in crate::notebook) fn retain_page(
+    input: &mut (impl Read + Seek),
+    page: usize,
+    edge: u32,
+    cancel: &AtomicBool,
+) -> Result<String, String> {
+    let (model, options, background) = load_page(input, page, edge, cancel)?;
+    super::retained::page_svg(&model, options, background, cancel)
+}
+
+fn load_page(
+    input: &mut (impl Read + Seek),
+    page: usize,
+    edge: u32,
+    cancel: &AtomicBool,
+) -> Result<
+    (
+        remarkable_rm::Page,
+        remarkable_rm::RenderOptions,
+        Option<remarkable_rm::BackgroundImage>,
+    ),
+    String,
+> {
     if let Some(model) = raw_page(input, cancel)? {
         if page != 1 {
             return Err("Raw reMarkable sources contain only one page".into());
         }
         let options = super::output_options(&model, edge)?;
-        return super::render_model(&model, options, None, cancel);
+        return Ok((model, options, None));
     }
     let mut package = Package::open(input, cancel)?;
     let index = archive::from_package(&mut package, cancel)?;
@@ -76,7 +103,7 @@ pub fn render(
     let model = annotation(&mut package, &index.root, reference, cancel)?;
     let options = super::output_options(&model, edge)?;
     let background = page_background(&mut package, &index.root, reference, options, cancel)?;
-    super::render_model(&model, options, background.as_ref(), cancel)
+    Ok((model, options, background))
 }
 
 fn page_background<R: Read + Seek>(

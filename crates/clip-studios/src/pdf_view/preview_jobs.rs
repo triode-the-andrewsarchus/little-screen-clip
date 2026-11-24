@@ -67,8 +67,8 @@ impl PdfEditorState {
         };
         self.source_warnings = info.warnings;
         if self.source.read_only() {
-            self.source = if info.xournal {
-                PageSource::Xournal
+            self.source = if info.retained_notebook {
+                PageSource::RetainedNotebook
             } else {
                 PageSource::Notebook
             };

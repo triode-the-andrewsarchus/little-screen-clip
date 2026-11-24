@@ -89,7 +89,7 @@ fn xournal_sources() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/notebooks/xournal");
     let cancel = AtomicBool::new(false);
     let packed = root.join("packaged/pdf-background.xopp");
-    let scene = notebook::retain_xournal_page(&packed, 2, &cancel).unwrap();
+    let scene = notebook::retain_page(&packed, 2, &cancel).unwrap();
     let raster = scene
         .render_region(
             little_clip_core::page_region::PageRegion {
@@ -101,7 +101,7 @@ fn xournal_sources() {
         )
         .unwrap();
     assert_eq!((raster.width(), raster.height()), (768, 512));
-    assert!(notebook::retain_xournal_page(&packed, 0, &cancel).is_err());
+    assert!(notebook::retain_page(&packed, 0, &cancel).is_err());
     for (name, page, count) in [
         ("legacy-stroke.xoj", 1, 1),
         ("load/pages.xopp", 11, 11),
