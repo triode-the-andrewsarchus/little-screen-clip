@@ -42,13 +42,7 @@ impl StrokeRequest {
 }
 
 pub(super) fn load_listing(path: &Path, revision: u64, token: &AtomicBool) -> PreviewData {
-    let check = || super::filesystem::check_revision(path, revision);
-    check()
-        .and_then(|()| {
-            let preview = load(path, token);
-            check().map(|()| preview)
-        })
-        .unwrap_or_else(|error| PreviewData::new(String::new(), error, Icon::Brush))
+    super::previews::with_listing_revision(path, revision, Icon::Brush, || load(path, token))
 }
 
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
