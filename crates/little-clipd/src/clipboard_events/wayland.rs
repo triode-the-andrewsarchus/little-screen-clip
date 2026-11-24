@@ -1,4 +1,6 @@
-//! Selection identities and tagged daemon publications on a dedicated Wayland connection.
+//! Wayland `wlr-data-control` clipboard event watcher and publisher.
+
+use super::{Command, Incoming, IncomingReader, Request, TRANSFER_TIMEOUT, preferred_mime};
 use std::{
     collections::HashMap,
     fs::File,
@@ -12,7 +14,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         mpsc,
     },
-    time::Duration,
 };
 use tokio::sync::{Semaphore, oneshot, watch};
 use wayland_client::{
@@ -27,134 +28,26 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_offer_v1 as offer, zwlr_data_control_source_v1 as source,
 };
 
-pub(super) const TRANSFER_LIMIT: u64 = 256 * 1024 * 1024;
-const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
-/// Runs a read-only compatibility adapter with the native transfer timeout.
-/// Incomplete, oversized and failed reads never become clipboard content.
-#[cfg(test)]
-pub(super) async fn read_with_tool(
-    request: little_clip_core::CommandRequest,
-    limit: usize,
-) -> Option<Vec<u8>> {
-    let request = request
-        .timeout(TRANSFER_TIMEOUT)
-        .max_output_bytes(limit)
-        .own_process_group()
-        .die_with_parent();
-    let output = tokio::task::spawn_blocking(move || request.run())
-        .await
-        .ok()?
-        .ok()?;
-    (output.status.success() && !output.stdout_truncated).then_some(output.stdout)
-}
-
 type Reply = Mutex<Option<oneshot::Sender<()>>>;
 
-pub(super) struct Incoming {
-    pub serial: u64,
-    pub observed: tokio::time::Instant,
-    pub initial: bool,
-    mime: String,
-    reader: Mutex<Option<UnixStream>>,
-}
-
-impl Incoming {
-    pub async fn read(&self) -> Result<(Vec<u8>, String), String> {
-        use tokio::io::AsyncReadExt;
-        let reader = self
-            .reader
-            .lock()
-            .map_err(|_| "Clipboard selection state is unavailable")?
-            .take()
-            .ok_or("Selection already read")?;
-        reader
-            .set_nonblocking(true)
-            .map_err(|error| error.to_string())?;
-        let reader = tokio::net::UnixStream::from_std(reader).map_err(|error| error.to_string())?;
-        let mut bytes = Vec::new();
-        tokio::time::timeout(
-            TRANSFER_TIMEOUT,
-            reader.take(TRANSFER_LIMIT + 1).read_to_end(&mut bytes),
-        )
-        .await
-        .map_err(|_| "Clipboard source timed out".to_string())?
-        .map_err(|error| error.to_string())?;
-        if bytes.len() as u64 > TRANSFER_LIMIT {
-            return Err("Clipboard selection exceeds 256 MiB".into());
-        }
-        Ok((bytes, self.mime.clone()))
-    }
-}
-
-enum Command {
-    Publish { bytes: Arc<[u8]>, mime: String },
-    Barrier,
-}
-struct Request {
-    command: Command,
-    reply: oneshot::Sender<()>,
-}
-
-pub(super) struct Clipboard {
-    commands: mpsc::SyncSender<Request>,
+pub(super) fn spawn_on(
+    connect: impl FnOnce() -> Result<Connection, String> + Send + 'static,
+    requests: mpsc::Receiver<Request>,
+    selection: watch::Sender<Option<Arc<Incoming>>>,
     serial: Arc<AtomicU64>,
-}
-
-impl Clipboard {
-    pub fn spawn() -> io::Result<(Self, watch::Receiver<Option<Arc<Incoming>>>)> {
-        Self::spawn_on(|| Connection::connect_to_env().map_err(|error| error.to_string()))
-    }
-
-    fn spawn_on(
-        connect: impl FnOnce() -> Result<Connection, String> + Send + 'static,
-    ) -> io::Result<(Self, watch::Receiver<Option<Arc<Incoming>>>)> {
-        let (commands, requests) = mpsc::sync_channel(16);
-        let (selection, receiver) = watch::channel(None);
-        let serial = Arc::new(AtomicU64::new(0));
-        let worker_serial = serial.clone();
-        let runtime = tokio::runtime::Handle::current();
-        std::thread::Builder::new()
-            .name("clipboard-events".into())
-            .spawn(move || {
-                if let Err(error) = connect()
-                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })
-                    .and_then(|connection| {
-                        run(connection, requests, selection, worker_serial, runtime)
-                    })
-                {
-                    tracing::warn!(%error, "Wayland clipboard event connection stopped");
-                }
-            })?;
-        Ok((Self { commands, serial }, receiver))
-    }
-
-    pub fn is_current(&self, serial: u64) -> bool {
-        self.serial.load(Ordering::Acquire) == serial
-    }
-
-    pub async fn publish(&self, bytes: Arc<[u8]>, mime: String) -> Result<bool, String> {
-        self.request(Command::Publish { bytes, mime }).await
-    }
-
-    pub async fn barrier(&self) -> Result<bool, String> {
-        self.request(Command::Barrier).await
-    }
-
-    // A closed command channel allows the existing external adapter to take over.
-    async fn request(&self, command: Command) -> Result<bool, String> {
-        let (reply, received) = oneshot::channel();
-        match self.commands.try_send(Request { command, reply }) {
-            Ok(()) => {}
-            Err(mpsc::TrySendError::Disconnected(_)) => return Ok(false),
-            Err(mpsc::TrySendError::Full(_)) => {
-                return Err("Clipboard request queue is full".into());
+    runtime: tokio::runtime::Handle,
+) -> io::Result<()> {
+    std::thread::Builder::new()
+        .name("clipboard-events".into())
+        .spawn(move || {
+            if let Err(error) = connect()
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })
+                .and_then(|connection| run(connection, requests, selection, serial, runtime))
+            {
+                tracing::warn!(%error, "Wayland clipboard event connection stopped");
             }
-        }
-        Ok(tokio::time::timeout(TRANSFER_TIMEOUT, received)
-            .await
-            .map_err(|_| "Clipboard compositor acknowledgement timed out".to_string())?
-            .is_ok())
-    }
+        })?;
+    Ok(())
 }
 
 struct State {
@@ -249,32 +142,6 @@ fn run(
     }
 }
 
-fn preferred_mime(types: &[String]) -> Option<String> {
-    types
-        .iter()
-        .find(|mime| mime.as_str() == "image/png")
-        .or_else(|| {
-            types
-                .iter()
-                .find(|mime| little_clip_core::item::image_extension_for_mime(mime).is_some())
-        })
-        .or_else(|| {
-            [
-                "text/uri-list",
-                "text/plain;charset=utf-8",
-                "text/plain",
-                "UTF8_STRING",
-                "TEXT",
-                "STRING",
-            ]
-            .into_iter()
-            .find_map(|wanted| types.iter().find(|mime| mime.as_str() == wanted))
-        })
-        .or_else(|| types.iter().find(|mime| mime.starts_with("text/")))
-        .or_else(|| types.first())
-        .cloned()
-}
-
 impl Dispatch<device::ZwlrDataControlDeviceV1, ()> for State {
     event_created_child!(State, device::ZwlrDataControlDeviceV1, [0 => (offer::ZwlrDataControlOfferV1, ())]);
     fn event(
@@ -309,7 +176,7 @@ impl Dispatch<device::ZwlrDataControlDeviceV1, ()> for State {
                         observed: tokio::time::Instant::now(),
                         initial,
                         mime,
-                        reader: Mutex::new(Some(reader)),
+                        reader: Mutex::new(Some(IncomingReader::Wayland(reader))),
                     }))
                 });
                 state.current = id;
@@ -324,6 +191,7 @@ impl Dispatch<device::ZwlrDataControlDeviceV1, ()> for State {
         }
     }
 }
+
 impl Dispatch<offer::ZwlrDataControlOfferV1, ()> for State {
     fn event(
         state: &mut Self,
@@ -338,6 +206,7 @@ impl Dispatch<offer::ZwlrDataControlOfferV1, ()> for State {
         }
     }
 }
+
 impl Dispatch<source::ZwlrDataControlSourceV1, Arc<[u8]>> for State {
     fn event(
         state: &mut Self,
@@ -411,6 +280,7 @@ impl Dispatch<wl_callback::WlCallback, Reply> for State {
         }
     }
 }
+
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     fn event(
         _: &mut Self,
@@ -422,8 +292,6 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     ) {
     }
 }
+
 delegate_noop!(State: ignore manager::ZwlrDataControlManagerV1);
 delegate_noop!(State: ignore wl_seat::WlSeat);
-
-#[cfg(test)]
-mod tests;
