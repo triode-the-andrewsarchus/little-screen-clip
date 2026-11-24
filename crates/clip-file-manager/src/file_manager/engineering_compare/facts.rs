@@ -48,6 +48,11 @@ impl Facts {
         facts
     }
 
+    pub(super) fn eda(&mut self, document: &little_clip_core::eda::Document) {
+        self.add("Format", document.format().label());
+        self.add("Preview summary", document.summary_line());
+    }
+
     fn scope(&mut self, scope: &super::scope_view::strip::Preview) {
         let overview = scope.overview();
         self.add("Instrument", &overview.model);
@@ -262,7 +267,7 @@ impl Facts {
         );
     }
 
-    fn add(&mut self, key: &str, value: impl Display) {
+    pub(super) fn add(&mut self, key: &str, value: impl Display) {
         if self.0.len() >= 16_384 || self.1 >= 4 * 1024 * 1024 {
             self.0.insert(
                 "Property limit".into(),

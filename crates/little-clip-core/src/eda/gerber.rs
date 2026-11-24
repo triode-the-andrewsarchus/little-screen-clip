@@ -81,6 +81,7 @@ pub struct VectorPolyline {
 pub struct GerberDocument {
     pub is_excellon: bool,
     pub layer_type: String,
+    pub(super) layer_role: LayerType,
     pub layer_color: [u8; 3],
     pub units: String,
     pub coordinate_format: String,
@@ -152,6 +153,10 @@ impl GerberDocument {
         Ok(Self {
             is_excellon: false,
             layer_type,
+            layer_role: meta
+                .x2_function
+                .as_ref()
+                .map_or(gerber.layer_type, LayerType::layer_type),
             layer_color: layer_color_for_type(&gerber.layer_type),
             units: meta.units,
             coordinate_format: meta.coordinate_format,
@@ -229,7 +234,31 @@ impl GerberDocument {
         let bg = Color::from_rgba8(BG_COLOR[0], BG_COLOR[1], BG_COLOR[2], BG_COLOR[3]);
         let (mut image, transform, scale) = allocate_canvas(self.bounds_mm, max_size, bg)
             .ok_or_else(|| "Could not allocate Gerber preview".to_string())?;
-        let mut layer_canvas = Pixmap::new(image.width(), image.height())
+        let layer_canvas = self.render_layer(
+            [image.width(), image.height()],
+            transform,
+            f64::from(0.85 / scale.max(0.01)),
+            cancelled,
+        )?;
+        image.draw_pixmap(
+            0,
+            0,
+            layer_canvas.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+        Ok(pixmap_to_thumbnail(image))
+    }
+
+    pub(super) fn render_layer(
+        &self,
+        [width, height]: [u32; 2],
+        transform: Transform,
+        min_stroke_mm: f64,
+        cancelled: &AtomicBool,
+    ) -> Result<Pixmap, String> {
+        let mut layer_canvas = Pixmap::new(width, height)
             .ok_or_else(|| "Could not allocate Gerber layer buffer".to_string())?;
 
         render_flat_objects(
@@ -238,7 +267,7 @@ impl GerberDocument {
             self.layer_color,
             self.is_excellon,
             transform,
-            scale,
+            min_stroke_mm,
             cancelled,
         )?;
 
@@ -246,7 +275,7 @@ impl GerberDocument {
         // complements the image, after dark and clear objects are composited.
         if self.flat.negative {
             let [r, g, b] = self.layer_color;
-            let mut negative = Pixmap::new(image.width(), image.height())
+            let mut negative = Pixmap::new(width, height)
                 .ok_or_else(|| "Could not allocate negative Gerber layer buffer".to_string())?;
             negative.fill(Color::from_rgba8(r, g, b, 255));
             negative.draw_pixmap(
@@ -263,15 +292,7 @@ impl GerberDocument {
             layer_canvas = negative;
         }
 
-        image.draw_pixmap(
-            0,
-            0,
-            layer_canvas.as_ref(),
-            &PixmapPaint::default(),
-            Transform::identity(),
-            None,
-        );
-        Ok(pixmap_to_thumbnail(image))
+        Ok(layer_canvas)
     }
 }
 
@@ -721,6 +742,7 @@ fn build_excellon_document(
     Ok(GerberDocument {
         is_excellon: true,
         layer_type: "Excellon NC Drill".into(),
+        layer_role: LayerType::Drill,
         layer_color: DRILL_PALETTE[0],
         units,
         coordinate_format: excellon.unit.to_string(),
@@ -1098,15 +1120,13 @@ fn render_flat_objects(
     base_rgb: [u8; 3],
     color_by_tool: bool,
     view: Transform,
-    scale: f32,
+    min_stroke_mm: f64,
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
     let mut clear_paint = Paint::default();
     clear_paint.set_color_rgba8(base_rgb[0], base_rgb[1], base_rgb[2], 235);
     clear_paint.blend_mode = BlendMode::Clear;
     clear_paint.anti_alias = true;
-
-    let min_stroke_mm = f64::from(0.85 / scale.max(0.01));
 
     for (idx, expanded) in flat.iter_expanded().take(MAX_EXPANDED_OPS).enumerate() {
         if idx.is_multiple_of(512) {

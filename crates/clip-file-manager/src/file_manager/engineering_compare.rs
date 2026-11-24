@@ -1,4 +1,5 @@
 //! Read-only comparison of guarded file snapshots and captured waveform summaries.
+mod artwork;
 mod facts;
 mod tag_memory;
 use super::{preview_job::Task, scope_view, shelf::preview, tags_view};
@@ -41,6 +42,7 @@ struct Input {
     waveform: Option<Arc<scope_view::strip::Preview>>,
     tag: Option<Arc<tags_view::strip::Preview>>,
     facts: Facts,
+    eda: Option<little_clip_core::eda::EdaFormat>,
 }
 
 pub(super) struct Viewer {
@@ -58,6 +60,7 @@ pub(super) struct Viewer {
     show_matches: bool,
     keys: Vec<String>,
     tags: Option<tag_memory::View>,
+    artwork: artwork::View,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -65,6 +68,7 @@ enum Mode {
     Sources,
     Fields,
     Memory,
+    Artwork,
 }
 
 enum Action {
@@ -96,6 +100,16 @@ impl Viewer {
             .fold(0.0_f64, f64::max);
         let keys = diff_keys(&sources[0].facts, &sources[1].facts, false);
         let tags = tag_memory::View::compare([sources[0].memory(), sources[1].memory()]);
+        let mode = match (sources[0].eda, sources[1].eda) {
+            (Some(a), Some(b)) if a == b => {
+                if is_artwork(a) {
+                    Mode::Artwork
+                } else {
+                    Mode::Fields
+                }
+            }
+            _ => Mode::Sources,
+        };
         Ok(Self {
             sources: Arc::new(sources),
             other: 1,
@@ -107,10 +121,11 @@ impl Viewer {
             waveform: 0.0..waveform_end,
             waveform_end,
             channel: 0,
-            mode: Mode::Sources,
+            mode,
             show_matches: false,
             keys,
             tags,
+            artwork: artwork::View::new(),
         })
     }
 
@@ -136,6 +151,8 @@ impl Viewer {
             return;
         }
         self.toolbar(ui);
+        let format = self.sources[0].eda;
+        let artwork_pair = format == self.sources[self.other].eda && format.is_some_and(is_artwork);
         if let Some(note) = &self.note {
             ui.label(note);
         }
@@ -143,6 +160,9 @@ impl Viewer {
         ui.horizontal(|ui| {
             clip_ui::buttons::choice(ui, &mut self.mode, Mode::Sources, "Sources");
             clip_ui::buttons::choice(ui, &mut self.mode, Mode::Fields, "Decoded fields");
+            if artwork_pair {
+                clip_ui::buttons::choice(ui, &mut self.mode, Mode::Artwork, "Artwork");
+            }
             if self.tags.is_some() {
                 clip_ui::buttons::choice(ui, &mut self.mode, Mode::Memory, "Memory map");
             }
@@ -154,9 +174,19 @@ impl Viewer {
                 self.refresh_fields();
             }
         });
+        if self.mode != Mode::Artwork {
+            self.artwork.cancel_pending();
+        }
+        let pair = [&self.sources[0], &self.sources[self.other]];
         match self.mode {
             Mode::Sources => self.summaries(ui),
             Mode::Fields => self.fields(ui),
+            Mode::Artwork => self.artwork.ui(
+                ui,
+                self.other,
+                pair.map(|input| &input.file),
+                pair.map(|input| input.title.as_str()),
+            ),
             Mode::Memory => {
                 if let Some(tags) = &mut self.tags {
                     let names = [0, self.other].map(|index| self.sources[index].title.as_str());
@@ -192,7 +222,15 @@ impl Viewer {
                     if self.tags.is_none() && self.mode == Mode::Memory {
                         self.mode = Mode::Sources;
                     }
+                    if self.mode == Mode::Artwork
+                        && self.sources[0].eda != self.sources[self.other].eda
+                    {
+                        self.mode = Mode::Sources;
+                    }
                 }
+            }
+            if self.mode == Mode::Artwork {
+                return;
             }
             let max = self.sources[0].size.max(self.sources[self.other].size);
             ui.label("Byte offset");
@@ -487,9 +525,27 @@ impl Input {
             .as_ref()
             .map(|data| Facts::prepare(data, &path, cancel))
             .unwrap_or_default();
-        facts
-            .0
-            .insert("File size (bytes)".to_owned(), size.to_string());
+        use little_clip_core::eda::{
+            EdaFormat, is_gerber_gbr_path, is_spice_raw_path, read_document_with_source,
+        };
+        let mut eda = None;
+        if format.is_none()
+            && (EdaFormat::extension_hint(&path).is_some()
+                || is_gerber_gbr_path(&path)
+                || is_spice_raw_path(&path))
+        {
+            match read_document_with_source(&path, cancel) {
+                Ok((document, observed)) => {
+                    if observed != file {
+                        return Err("Comparison source changed".into());
+                    }
+                    eda = Some(document.format());
+                    facts.eda(&document);
+                }
+                Err(error) => facts.add("EDA preview unavailable", error),
+            }
+        }
+        facts.add("File size (bytes)", size);
         let (detail, waveform, tag) = data.map_or_else(
             || (String::new(), None, None),
             |data| (data.detail, data.scope, data.tags),
@@ -507,6 +563,7 @@ impl Input {
             waveform,
             tag,
             facts,
+            eda,
         })
     }
 
@@ -530,6 +587,11 @@ impl Input {
         self.file.check_file(handle)?;
         self.file.check()
     }
+}
+
+fn is_artwork(format: little_clip_core::eda::EdaFormat) -> bool {
+    use little_clip_core::eda::EdaFormat::{Excellon, Gerber};
+    matches!(format, Gerber | Excellon)
 }
 
 fn compare(
@@ -613,4 +675,59 @@ fn diff_keys(a: &Facts, b: &Facts, same: bool) -> Vec<String> {
             .collect();
     keys.sort_by(|a, b| little_clip_core::natural_sort::natural_cmp(a, b));
     keys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::{
+        Harness,
+        kittest::{Node, Queryable},
+    };
+
+    #[test]
+    fn artwork_pair_keeps_the_physical_cursor_when_switching_sides() {
+        let folder = tempfile::tempdir().unwrap();
+        let paths = ["before.gbr", "after.gbr"].map(|name| folder.path().join(name));
+        for (path, coordinate) in paths.iter().zip([4_000_000, 8_000_000]) {
+            std::fs::write(
+                path,
+                format!("%FSLAX46Y46*%\n%MOMM*%\n%TF.FileFunction,Copper,L1,Top*%\n%ADD10C,1*%\nD10*\nX{coordinate:010}Y0000000000D03*\nM02*\n"),
+            ).unwrap();
+        }
+        let viewer = Viewer::load(paths.into(), &AtomicBool::new(false)).unwrap();
+        assert!(viewer.mode == Mode::Artwork);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut harness = Harness::builder()
+            .with_size(vec2(880.0, 550.0))
+            .build_ui_state(
+                move |ui, viewer: &mut Viewer| viewer.ui(ui, &mut false, &palette),
+                viewer,
+            );
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        while harness.query_by_label_contains("Added ").is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "artwork worker did not publish"
+            );
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(harness.query_by_label("Added 0 px").is_none());
+        assert!(harness.query_by_label("Removed 0 px").is_none());
+        harness.get_by_label("A").click();
+        harness.hover_at(pos2(420.0, 310.0));
+        harness.run();
+        let coord = harness
+            .get_by_label_contains("X ")
+            .accesskit_node()
+            .label()
+            .unwrap()
+            .to_owned();
+        harness.get_by_label("B").click();
+        harness.hover_at(pos2(420.0, 310.0));
+        harness.run();
+        assert!(harness.query_by_label(&coord).is_some(), "{coord}");
+    }
 }

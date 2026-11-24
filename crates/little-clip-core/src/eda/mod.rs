@@ -1,5 +1,6 @@
 //! Bounded read-only EDA, PCB fabrication, centroid, and plotter parsers and rasterizers.
 
+pub mod comparison;
 pub mod gerber;
 pub mod hpgl;
 pub mod kicad;
