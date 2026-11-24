@@ -92,6 +92,13 @@ impl Math {
             .filter(|expression| !expression.is_predicate())
     }
 
+    pub fn numeric_for(&self, input: &str, channel: usize) -> Option<&Expression> {
+        if self.input != input || self.channel != channel {
+            return None;
+        }
+        self.numeric()
+    }
+
     pub fn poll(&mut self) {
         let Some(result) = self.job.as_ref().and_then(|job| job.task.poll()) else {
             return;

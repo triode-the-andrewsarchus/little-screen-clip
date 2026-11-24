@@ -60,9 +60,9 @@ struct Lane {
     error: Option<String>,
 }
 
-#[derive(Clone, PartialEq)]
-struct Request {
-    channel: usize,
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(super) struct Request {
+    pub channel: usize,
     rows: Range<u64>,
     stages: StageList,
 }
@@ -561,6 +561,18 @@ impl Filters {
             unit.to_owned(),
             output.samples.raw.clone(),
         ))
+    }
+
+    pub(super) fn range_inputs(&self) -> impl Iterator<Item = (&Request, &FilterSamples)> {
+        self.lanes
+            .values()
+            .filter_map(|lane| Some((lane.completed.as_ref()?, &lane.ready()?.samples)))
+    }
+
+    pub(super) fn matches(&self, request: &Request) -> bool {
+        self.lanes
+            .get(&request.channel)
+            .is_some_and(|lane| lane.matches(request))
     }
 
     pub(super) fn channels(&self) -> impl Iterator<Item = FilteredChannel<'_>> {

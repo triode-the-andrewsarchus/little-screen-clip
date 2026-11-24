@@ -65,8 +65,10 @@ struct MarkedRange {
     span: Range<f64>,
     #[serde(default, skip_serializing_if = "Scope::legacy")]
     scope: Scope<ScopeTrace>,
-    #[serde(flatten)]
+    #[serde(default)]
     peaks: RangePeaks,
+    #[serde(default, rename = "channel_peaks", skip_serializing)]
+    legacy_channel_peaks: Vec<Option<reads::RangePeak>>,
     #[serde(
         default,
         rename = "peak_to_peak",
@@ -1190,7 +1192,7 @@ impl Viewer {
                 .filter(|&trace| scope.includes(trace))
                 .enumerate()
             {
-                let Some(peak) = peaks.and_then(|peaks| peaks.get(trace)) else {
+                let Some(peak) = peaks.and_then(|peaks| self.range_peak(peaks, trace)) else {
                     continue;
                 };
                 let (name, unit) = match trace {
@@ -1224,6 +1226,14 @@ impl Viewer {
         }
     }
 
+    fn range_peak(&self, peaks: &RangePeaks, trace: ScopeTrace) -> Option<reads::RangePeak> {
+        let math = self
+            .math_state
+            .numeric_for(&self.math, self.active)
+            .map(|_| (self.math.as_str(), self.active));
+        peaks.get(trace, math, &self.filters)
+    }
+
     fn active_mark(&self) -> Option<MarkedRange> {
         let span = self.selection()?;
         let peaks = self
@@ -1234,6 +1244,7 @@ impl Viewer {
             span,
             scope: self.cursor_scope.clone(),
             peaks,
+            legacy_channel_peaks: Vec::new(),
             legacy_peak: None,
         })
     }
@@ -1806,26 +1817,17 @@ impl Viewer {
         let filtered: Vec<_> = selection
             .as_ref()
             .into_iter()
-            .flat_map(|_| {
-                self.filtered_channels()
-                    .filter_map(|filter| Some((filter.channel, filter.samples?)))
-            })
+            .flat_map(|_| self.filters.range_inputs())
             .collect();
+        let math = self.math_state.numeric_for(&self.math, self.active);
         let key = AnalysisKey {
             span: selection.unwrap_or_else(|| self.span.clone()),
             channel: self.active,
-            math_span: if self.math_state.numeric().is_some() {
-                self.span.clone()
-            } else {
-                0.0..0.0
-            },
-            expression: self
-                .math_state
-                .numeric()
-                .map_or_else(String::new, |_| self.math.clone()),
+            math_span: math.map_or(0.0..0.0, |_| self.span.clone()),
+            expression: math.map_or_else(String::new, |_| self.math.clone()),
             filter_generations: filtered
                 .iter()
-                .map(|(index, samples)| (*index, samples.generation))
+                .map(|(filter, samples)| (filter.channel, samples.generation))
                 .collect(),
         };
         if self.analysis_key.as_ref() == Some(&key) {
@@ -1842,14 +1844,12 @@ impl Viewer {
         let request = AnalysisRequest {
             span: key.span.clone(),
             active: key.channel,
-            math: self
-                .math_state
-                .numeric()
+            math: math
                 .cloned()
-                .map(|expression| (expression, key.math_span.clone())),
+                .map(|expression| (expression, key.math_span.clone(), key.expression.clone())),
             filters: filtered
                 .into_iter()
-                .map(|(index, samples)| (index, samples.raw))
+                .map(|(filter, samples)| (filter.clone(), samples.raw.clone()))
                 .collect(),
         };
         self.analysis_key = Some(key);

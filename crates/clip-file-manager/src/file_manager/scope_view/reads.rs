@@ -114,25 +114,43 @@ pub(super) struct RangePeak {
     pub observed: bool,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct MathRangePeak {
+    equation: String,
+    channel: usize,
+    value: RangePeak,
+}
+
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct RangePeaks {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channel_peaks: Vec<Option<RangePeak>>,
+    // Older recipes cached derived peaks without identifying their inputs.
+    // Read the raw peaks from those recipes and ignore their derived values.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    math_peak: Option<RangePeak>,
+    math_range_peak: Option<MathRangePeak>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    filter_peaks: Vec<(usize, RangePeak)>,
+    filter_range_peaks: Vec<(super::filters::Request, RangePeak)>,
 }
 
 impl RangePeaks {
-    pub fn get(&self, trace: super::ScopeTrace) -> Option<RangePeak> {
+    pub fn get(
+        &self,
+        trace: super::ScopeTrace,
+        math: Option<(&str, usize)>,
+        filters: &super::filters::Filters,
+    ) -> Option<RangePeak> {
         match trace {
             super::ScopeTrace::Recorded(index) => self.channel_peaks.get(index).copied().flatten(),
-            super::ScopeTrace::Math => self.math_peak,
-            super::ScopeTrace::Filtered(index) => self
-                .filter_peaks
-                .iter()
-                .find_map(|&(channel, peak)| (channel == index).then_some(peak)),
+            super::ScopeTrace::Math => {
+                let peak = self.math_range_peak.as_ref()?;
+                (math == Some((peak.equation.as_str(), peak.channel))).then_some(peak.value)
+            }
+            super::ScopeTrace::Filtered(index) => {
+                self.filter_range_peaks.iter().find_map(|(key, peak)| {
+                    (key.channel == index && filters.matches(key)).then_some(*peak)
+                })
+            }
         }
     }
 }
@@ -151,8 +169,8 @@ pub(super) struct Measurements {
 pub(super) struct AnalysisRequest {
     pub span: Range<f64>,
     pub active: usize,
-    pub math: Option<(Expression, Range<f64>)>,
-    pub filters: Vec<(usize, Arc<RawChannel>)>,
+    pub math: Option<(Expression, Range<f64>, String)>,
+    pub filters: Vec<(super::filters::Request, Arc<RawChannel>)>,
 }
 
 pub(super) fn analyze(
@@ -170,7 +188,7 @@ pub(super) fn analyze(
         let math = request
             .math
             .as_ref()
-            .map(|(expression, span)| {
+            .map(|(expression, span, _)| {
                 if *span == request.span && !limited {
                     Ok(math_trace(expression, &data, request.active))
                 } else {
@@ -183,15 +201,19 @@ pub(super) fn analyze(
             range_peaks(capture, &request, &data).ok_or("Missing scope channel")?;
         let peaks = RangePeaks {
             channel_peaks,
-            math_peak: math
-                .as_ref()
-                .and_then(|(samples, _)| derived_peak(samples, &request.span)),
-            filter_peaks: request
+            math_range_peak: request.math.zip(math.as_ref()).and_then(
+                |((_, _, equation), (samples, _))| {
+                    Some(MathRangePeak {
+                        equation,
+                        channel: request.active,
+                        value: derived_peak(samples, &request.span)?,
+                    })
+                },
+            ),
+            filter_range_peaks: request
                 .filters
-                .iter()
-                .filter_map(|(index, samples)| {
-                    Some((*index, derived_peak(samples, &request.span)?))
-                })
+                .into_iter()
+                .filter_map(|(key, samples)| Some((key, derived_peak(&samples, &request.span)?)))
                 .collect(),
         };
         let raw = data

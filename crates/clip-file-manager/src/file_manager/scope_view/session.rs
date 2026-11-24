@@ -91,6 +91,12 @@ impl Viewer {
         self.cursors = state.cursors;
         self.cursor_scope = state.cursor_scope;
         self.marks = state.marks;
+        for mark in &mut self.marks {
+            let legacy = std::mem::take(&mut mark.legacy_channel_peaks);
+            if mark.peaks.channel_peaks.is_empty() {
+                mark.peaks.channel_peaks = legacy;
+            }
+        }
         self.stacked = state.stacked
             || self
                 .overview
@@ -134,17 +140,158 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    fn recording_fixture(path: &std::path::Path) {
+        use std::fmt::Write;
+        let mut data = String::from("X,CH2,CH4,Start,Increment,\nSequence,Volt,Volt,0,1e-3,\n");
+        for row in 0..128 {
+            let value = (row as f32 * 0.1).sin();
+            writeln!(&mut data, "{row},{value},{},,,", 2.0 - value).unwrap();
+        }
+        fs::write(path, data).unwrap();
+    }
+
+    fn settle_filters(view: &mut Viewer, ctx: &egui::Context, expected: &[usize]) {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            let _ = clip_ui::test_support::run_frame(
+                ctx,
+                egui::RawInput {
+                    time: Some(start.elapsed().as_secs_f64()),
+                    ..Default::default()
+                },
+                |ctx| {
+                    ctx.root_ui(|ui| {
+                        egui::CentralPanel::default().show(ui, |ui| {
+                            view.filters.update(ui, &view.recording, view.active);
+                        });
+                    });
+                },
+            );
+            let ready: Vec<_> = view
+                .filtered_channels()
+                .filter(|lane| lane.samples.is_some())
+                .map(|lane| lane.channel)
+                .collect();
+            if ready == expected {
+                return;
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
+        panic!("scope filters did not settle");
+    }
+
+    #[test]
+    fn archived_derived_peaks_follow_their_inputs_after_edit_and_recipe_reopen() {
+        use crate::file_manager::signal_view::session::save_and_reopen_scope_fixture;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rigol.csv");
+        recording_fixture(&path);
+        let cancel = AtomicBool::new(false);
+        let mut view = Viewer::load(&path, &cancel).unwrap();
+        let ctx = egui::Context::default();
+        view.math = "CH2 - CH4".into();
+        view.math_state
+            .compile(&view.math, view.active, &view.overview.channels);
+        view.add_filter(FilterKind::LowPass);
+        settle_filters(&mut view, &ctx, &[0]);
+
+        let scope = vec![
+            ScopeTrace::Recorded(0),
+            ScopeTrace::Math,
+            ScopeTrace::Filtered(0),
+        ];
+        view.cursors = [Some(0.02), Some(0.10)];
+        view.cursor_scope = Scope::new(scope.clone(), Some(2));
+        view.request_analysis(&ctx);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while view.analysis_job.is_some() {
+            view.poll(&ctx);
+            assert!(
+                Instant::now() < deadline,
+                "scope range measurement did not settle"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        view.archive_mark();
+        let mut view = save_and_reopen_scope_fixture(
+            view,
+            &directory.path().join("original.clip-analysis"),
+            &cancel,
+        );
+        view.math_state
+            .compile(&view.math, view.active, &view.overview.channels);
+        let value = |view: &Viewer, trace| {
+            view.range_peak(&view.marks[0].peaks, trace)
+                .map(|peak| (peak.amplitude, peak.observed))
+        };
+        let raw = value(&view, ScopeTrace::Recorded(0)).unwrap();
+        assert!(value(&view, ScopeTrace::Math).is_some());
+        let filtered = value(&view, ScopeTrace::Filtered(0)).unwrap();
+        let original_unit = view.math_unit();
+
+        view.math = "CH2 / CH4".into();
+        // The old compiled expression can still be present during an input edit.
+        assert_eq!(value(&view, ScopeTrace::Math), None);
+        view.math_state
+            .compile(&view.math, view.active, &view.overview.channels);
+        assert!(view.math_state.numeric().is_some());
+        assert_ne!(view.math_unit(), original_unit);
+        assert_eq!(value(&view, ScopeTrace::Math), None);
+        assert_eq!(value(&view, ScopeTrace::Filtered(0)), Some(filtered));
+
+        view.add_filter(FilterKind::HighPass);
+        assert_eq!(value(&view, ScopeTrace::Filtered(0)), None);
+        let mut reopened = save_and_reopen_scope_fixture(
+            view,
+            &directory.path().join("edited.clip-analysis"),
+            &cancel,
+        );
+        reopened
+            .math_state
+            .compile(&reopened.math, reopened.active, &reopened.overview.channels);
+        let mark = &reopened.marks[0];
+        assert_eq!(mark.span, 0.02..0.10);
+        assert_eq!(mark.scope.lanes.as_ref(), Some(&scope));
+        assert_eq!(mark.scope.color, Some(2));
+        assert_eq!(value(&reopened, ScopeTrace::Recorded(0)), Some(raw));
+        assert_eq!(value(&reopened, ScopeTrace::Filtered(0)), None);
+        assert_eq!(value(&reopened, ScopeTrace::Math), None);
+    }
+
+    #[test]
+    fn old_recipe_ranges_keep_raw_peaks_without_unattributed_derived_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rigol.csv");
+        recording_fixture(&path);
+        let cancel = AtomicBool::new(false);
+        let mut view = Viewer::load(&path, &cancel).unwrap();
+        let mut saved = serde_json::to_value(view.session_settings()).unwrap();
+        saved["marks"] = serde_json::json!([{
+            "span": { "start": 0.02, "end": 0.10 },
+            "channel_peaks": [{ "amplitude": 1.5, "observed": false }, null],
+            "math_peak": { "amplitude": 2.5, "observed": false },
+            "filter_peaks": [[0, { "amplitude": 0.75, "observed": true }]]
+        }]);
+        view.restore_session(serde_json::from_value(saved).unwrap())
+            .unwrap();
+        let peaks = &view.marks[0].peaks;
+        assert_eq!(
+            view.range_peak(peaks, ScopeTrace::Recorded(0))
+                .unwrap()
+                .amplitude,
+            1.5
+        );
+        assert!(view.range_peak(peaks, ScopeTrace::Filtered(0)).is_none());
+        assert!(view.range_peak(peaks, ScopeTrace::Math).is_none());
+        assert_eq!(view.marks[0].span, 0.02..0.10);
+    }
+
     #[test]
     fn restores_scope_display_and_recomputes_all_saved_filters() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("rigol.csv");
-        let mut data = String::from("X,CH2,CH4,Start,Increment,\nSequence,Volt,Volt,0,1e-3,\n");
-        for row in 0..128 {
-            use std::fmt::Write;
-            let value = (row as f32 * 0.1).sin();
-            writeln!(&mut data, "{row},{value},{},,,", -value).unwrap();
-        }
-        fs::write(&path, data).unwrap();
+        recording_fixture(&path);
         let cancel = AtomicBool::new(false);
         let mut view = Viewer::load(&path, &cancel).unwrap();
         view.stacked = true;
@@ -156,6 +303,7 @@ mod tests {
             span: 0.0625..0.125,
             scope: Default::default(),
             peaks: Default::default(),
+            legacy_channel_peaks: Vec::new(),
             legacy_peak: Some((0.5, "V".into())),
         });
         view.add_filter(FilterKind::LowPass);
@@ -183,35 +331,6 @@ mod tests {
         );
         assert!(reopened.analysis_edits() == view.analysis_edits());
 
-        let ctx = egui::Context::default();
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(5) {
-            let _ = clip_ui::test_support::run_frame(
-                &ctx,
-                egui::RawInput {
-                    time: Some(start.elapsed().as_secs_f64()),
-                    ..Default::default()
-                },
-                |ctx| {
-                    ctx.root_ui(|ui| {
-                        egui::CentralPanel::default().show(ui, |ui| {
-                            reopened
-                                .filters
-                                .update(ui, &reopened.recording, reopened.active);
-                        });
-                    });
-                },
-            );
-            let ready: Vec<_> = reopened
-                .filtered_channels()
-                .filter(|lane| lane.samples.is_some())
-                .map(|lane| lane.channel)
-                .collect();
-            if ready == [0, 1] {
-                return;
-            }
-            thread::sleep(Duration::from_millis(15));
-        }
-        panic!("filters did not rebuild for both saved channels");
+        settle_filters(&mut reopened, &egui::Context::default(), &[0, 1]);
     }
 }

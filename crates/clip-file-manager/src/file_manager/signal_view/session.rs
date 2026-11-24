@@ -829,6 +829,28 @@ impl Viewer {
 }
 
 #[cfg(test)]
+pub(in crate::file_manager) fn save_and_reopen_scope_fixture(
+    scope: scope_view::Viewer,
+    path: &Path,
+    cancel: &AtomicBool,
+) -> scope_view::Viewer {
+    let viewer = Viewer::new(vec![Source {
+        id: 1,
+        path: scope.recording().source().path().to_owned(),
+        clock: Clock::default(),
+        capture: Capture::Analog(Box::new(scope)),
+    }]);
+    Recipe::take(&viewer)
+        .write(Target::New(path.to_owned()))
+        .unwrap();
+    let mut restored = Viewer::load_session(path, cancel).unwrap();
+    let Capture::Analog(scope) = restored.sources.remove(0).capture else {
+        panic!("scope fixture did not restore its source");
+    };
+    *scope
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::{ffi::OsString, fs, os::unix::ffi::OsStringExt};
