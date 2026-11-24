@@ -26,9 +26,9 @@ fn main() {
             eprintln!(
                 "{} mm tolerance: {} additions, {} removals at {} mm/px in {:?}",
                 tolerance,
-                result.added_pixels,
-                result.removed_pixels,
-                result.pitch_mm,
+                result.raster.added_pixels,
+                result.raster.removed_pixels,
+                result.raster.pitch_mm,
                 start.elapsed()
             );
         }
