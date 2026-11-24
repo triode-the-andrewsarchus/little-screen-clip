@@ -17,7 +17,7 @@ use std::{
 use tokio::sync::{oneshot, watch};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, CURRENT_TIME,
-    connection::Connection as _,
+    connection::{Connection as _, RequestConnection as _},
     protocol::{
         Event, xfixes,
         xfixes::ConnectionExt as _,
@@ -59,7 +59,9 @@ pub(super) fn spawn(
     std::thread::Builder::new()
         .name("clipboard-events-x11".into())
         .spawn(move || {
-            if let Err(error) = run(requests, wakeup_rd, selection, serial) {
+            let result = run(requests, wakeup_rd, selection, serial.clone());
+            serial.fetch_add(1, Ordering::AcqRel);
+            if let Err(error) = result {
                 tracing::warn!(%error, "X11 clipboard event connection stopped");
             }
         })?;
@@ -67,9 +69,11 @@ pub(super) fn spawn(
 }
 
 struct InProgressIncoming {
+    window: Window,
     initial: bool,
+    observed: tokio::time::Instant,
     started: Instant,
-    target: Option<(Atom, String, bool)>,
+    target: Option<Atom>,
     reply: Option<oneshot::Sender<Result<Vec<u8>, String>>>,
     incr: Option<Vec<u8>>,
 }
@@ -85,7 +89,6 @@ struct OutgoingIncr {
 
 struct Publication {
     bytes: Arc<[u8]>,
-    mime: String,
     targets: Vec<Atom>,
     data_targets: Vec<Atom>,
     timestamp: u32,
@@ -94,19 +97,16 @@ struct Publication {
 struct X11State {
     conn: RustConnection,
     atoms: Atoms,
+    root: Window,
     helper_win: Window,
-    marker_atom: Atom,
-    marker_name: String,
     atom_names: HashMap<Atom, String>,
     name_atoms: HashMap<String, Atom>,
     selection: watch::Sender<Option<Arc<Incoming>>>,
     serial: Arc<AtomicU64>,
-    initialized: bool,
-    owning: bool,
-    last_time: u32,
     incoming: Option<InProgressIncoming>,
     publication: Option<Publication>,
     outgoing_incr: Vec<OutgoingIncr>,
+    max_property_bytes: usize,
 }
 
 fn run(
@@ -118,10 +118,51 @@ fn run(
     let (conn, screen_num) = RustConnection::connect(None)?;
     let atoms = Atoms::new(&conn)?.reply()?;
     let root = conn.setup().roots[screen_num].root;
-    let helper_win = conn.generate_id()?;
+    let helper_win = selection_window(&conn, root)?;
+    conn.xfixes_query_version(2, 0)?.reply()?;
+    conn.xfixes_select_selection_input(
+        helper_win,
+        atoms.CLIPBOARD,
+        xfixes::SelectionEventMask::SET_SELECTION_OWNER
+            | xfixes::SelectionEventMask::SELECTION_WINDOW_DESTROY
+            | xfixes::SelectionEventMask::SELECTION_CLIENT_CLOSE,
+    )?
+    .check()?;
+
+    let initial_owner = conn.get_selection_owner(atoms.CLIPBOARD)?.reply()?.owner;
+    conn.flush()?;
+
+    let max_property_bytes = conn.maximum_request_bytes().saturating_sub(28);
+    let mut state = X11State {
+        conn,
+        atoms,
+        root,
+        helper_win,
+        atom_names: HashMap::new(),
+        name_atoms: HashMap::new(),
+        selection,
+        serial,
+        incoming: None,
+        publication: None,
+        outgoing_incr: Vec::new(),
+        max_property_bytes,
+    };
+    state.seed_known_atoms();
+    if initial_owner != x11rb::NONE {
+        state.serial.fetch_add(1, Ordering::AcqRel);
+        state.request_targets(true)?;
+    }
+    state.run_loop(&requests, &wakeup_rd)
+}
+
+fn selection_window(
+    conn: &RustConnection,
+    root: Window,
+) -> Result<Window, Box<dyn std::error::Error>> {
+    let window = conn.generate_id()?;
     conn.create_window(
         COPY_DEPTH_FROM_PARENT,
-        helper_win,
+        window,
         root,
         0,
         0,
@@ -131,42 +172,9 @@ fn run(
         xproto::WindowClass::INPUT_ONLY,
         x11rb::COPY_FROM_PARENT,
         &xproto::CreateWindowAux::new().event_mask(xproto::EventMask::PROPERTY_CHANGE),
-    )?;
-    conn.xfixes_query_version(5, 0)?.reply()?;
-    conn.xfixes_select_selection_input(
-        helper_win,
-        atoms.CLIPBOARD,
-        xfixes::SelectionEventMask::SET_SELECTION_OWNER,
-    )?;
-
-    let marker_name = format!("application/x-little-screen-clip-{}", uuid::Uuid::new_v4());
-    let marker_atom = conn
-        .intern_atom(false, marker_name.as_bytes())?
-        .reply()?
-        .atom;
-    let initial_owner = conn.get_selection_owner(atoms.CLIPBOARD)?.reply()?.owner;
-    conn.flush()?;
-
-    let mut state = X11State {
-        conn,
-        atoms,
-        helper_win,
-        marker_atom,
-        marker_name,
-        atom_names: HashMap::new(),
-        name_atoms: HashMap::new(),
-        selection,
-        serial,
-        initialized: false,
-        owning: false,
-        last_time: CURRENT_TIME,
-        incoming: None,
-        publication: None,
-        outgoing_incr: Vec::new(),
-    };
-    state.seed_known_atoms();
-    state.handle_initial_owner(initial_owner)?;
-    state.run_loop(&requests, &wakeup_rd)
+    )?
+    .check()?;
+    Ok(window)
 }
 
 impl X11State {
@@ -179,23 +187,11 @@ impl X11State {
             (self.atoms.TEXT, "TEXT"),
             (self.atoms.TEXT_PLAIN, "text/plain"),
             (self.atoms.TEXT_PLAIN_UTF8, "text/plain;charset=utf-8"),
-            (self.marker_atom, self.marker_name.as_str()),
         ];
         for (atom, name) in pairs {
             self.atom_names.insert(atom, name.to_owned());
             self.name_atoms.insert(name.to_owned(), atom);
         }
-    }
-
-    fn handle_initial_owner(&mut self, owner: Window) -> Result<(), Box<dyn std::error::Error>> {
-        self.initialized = true;
-        if owner == x11rb::NONE || owner == self.helper_win {
-            self.serial.fetch_add(1, Ordering::AcqRel);
-            self.selection.send_replace(None);
-            return Ok(());
-        }
-        let serial = self.serial.fetch_add(1, Ordering::AcqRel) + 1;
-        self.request_targets(serial, true)
     }
 
     fn pump_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -215,7 +211,7 @@ impl X11State {
             if !self.process_requests(requests)? {
                 return Ok(());
             }
-            self.evict_expired();
+            self.evict_expired()?;
             self.conn.flush()?;
             self.wait_events(&mut wakeup_rd)?;
         }
@@ -247,6 +243,9 @@ impl X11State {
     }
 
     fn dispatch_request(&mut self, request: Request) -> Result<(), Box<dyn std::error::Error>> {
+        if request.reply.is_closed() {
+            return Ok(());
+        }
         match request.command {
             Command::Publish { bytes, mime } => self.publish(bytes, mime)?,
             Command::Barrier => {
@@ -276,7 +275,7 @@ impl X11State {
         bytes: Arc<[u8]>,
         mime: String,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut targets = vec![self.atoms.TARGETS, self.atoms.TIMESTAMP, self.marker_atom];
+        let mut targets = vec![self.atoms.TARGETS, self.atoms.TIMESTAMP];
         let mut data_targets = Vec::new();
         for name in build_offered_target_names(&mime) {
             let atom = self.intern(name)?;
@@ -285,15 +284,22 @@ impl X11State {
         }
         self.publication = Some(Publication {
             bytes,
-            mime,
             targets,
             data_targets,
-            timestamp: self.last_time,
+            timestamp: CURRENT_TIME,
         });
-        self.owning = true;
         self.conn
-            .set_selection_owner(self.helper_win, self.atoms.CLIPBOARD, CURRENT_TIME)?;
-        self.conn.sync()?;
+            .set_selection_owner(self.helper_win, self.atoms.CLIPBOARD, CURRENT_TIME)?
+            .check()?;
+        if self
+            .conn
+            .get_selection_owner(self.atoms.CLIPBOARD)?
+            .reply()?
+            .owner
+            != self.helper_win
+        {
+            return Err("X11 clipboard ownership changed during publication".into());
+        }
         Ok(())
     }
 
@@ -310,30 +316,38 @@ impl X11State {
     }
 
     fn resolve_atom_names(&mut self, atoms: &[Atom]) -> Vec<String> {
-        let mut missing = Vec::new();
-        for &atom in atoms {
-            if atom != x11rb::NONE && !self.atom_names.contains_key(&atom) {
-                missing.push(atom);
-            }
-        }
-        if !missing.is_empty() {
-            let cookies: Vec<_> = missing
-                .into_iter()
-                .filter_map(|atom| Some((atom, self.conn.get_atom_name(atom).ok()?)))
-                .collect();
-            for (atom, cookie) in cookies {
-                if let Ok(reply) = cookie.reply()
-                    && let Ok(name) = String::from_utf8(reply.name)
-                    && self.atom_names.len() < MAX_ATOM_CACHE
-                {
+        let mut names = HashMap::new();
+        let mut missing: Vec<_> = atoms
+            .iter()
+            .copied()
+            .filter(|atom| *atom != x11rb::NONE && !self.atom_names.contains_key(atom))
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        let cookies: Vec<_> = missing
+            .into_iter()
+            .filter_map(|atom| Some((atom, self.conn.get_atom_name(atom).ok()?)))
+            .collect();
+        for (atom, cookie) in cookies {
+            if let Ok(reply) = cookie.reply()
+                && let Ok(name) = String::from_utf8(reply.name)
+            {
+                if self.atom_names.len() < MAX_ATOM_CACHE {
                     self.name_atoms.insert(name.clone(), atom);
                     self.atom_names.insert(atom, name);
+                } else {
+                    names.insert(atom, name);
                 }
             }
         }
         atoms
             .iter()
-            .filter_map(|atom| self.atom_names.get(atom).cloned())
+            .filter_map(|atom| {
+                self.atom_names
+                    .get(atom)
+                    .or_else(|| names.get(atom))
+                    .cloned()
+            })
             .collect()
     }
 
@@ -343,11 +357,6 @@ impl X11State {
             Event::SelectionNotify(ev) => self.on_selection_notify(ev)?,
             Event::PropertyNotify(ev) => self.on_property_notify(ev)?,
             Event::SelectionRequest(req) => self.on_selection_request(req)?,
-            Event::SelectionClear(ev) if ev.selection == self.atoms.CLIPBOARD => {
-                self.last_time = ev.time;
-                self.owning = false;
-                self.publication = None;
-            }
             _ => {}
         }
         Ok(())
@@ -360,38 +369,49 @@ impl X11State {
         if ev.selection != self.atoms.CLIPBOARD {
             return Ok(());
         }
-        self.last_time = ev.timestamp;
-        let serial = self.serial.fetch_add(1, Ordering::AcqRel) + 1;
-        let initial = !std::mem::replace(&mut self.initialized, true);
+        if ev.owner != self.helper_win
+            && self.publication.is_some()
+            && self
+                .conn
+                .get_selection_owner(self.atoms.CLIPBOARD)?
+                .reply()?
+                .owner
+                == self.helper_win
+        {
+            // The server queued this event before it processed our ownership request.
+            return Ok(());
+        }
+        self.serial.fetch_add(1, Ordering::AcqRel);
         self.abort_pending("Selection replaced before transfer completed");
+        self.selection.send_replace(None);
         if ev.owner == self.helper_win {
-            self.owning = true;
-            self.selection.send_replace(None);
-            return Ok(());
+            if let Some(publication) = &mut self.publication {
+                publication.timestamp = ev.selection_timestamp;
+            }
+        } else {
+            self.publication = None;
+            if ev.owner != x11rb::NONE {
+                self.request_targets(false)?;
+            }
         }
-        self.owning = false;
-        self.publication = None;
-        if ev.owner == x11rb::NONE {
-            self.selection.send_replace(None);
-            return Ok(());
-        }
-        self.request_targets(serial, initial)
+        Ok(())
     }
 
-    fn request_targets(
-        &mut self,
-        _serial: u64,
-        initial: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn request_targets(&mut self, initial: bool) -> Result<(), Box<dyn std::error::Error>> {
+        // Each owner change gets its own requestor, so a late reply or INCR chunk
+        // from the old owner cannot be consumed as data from the new owner.
+        let window = selection_window(&self.conn, self.root)?;
         self.incoming = Some(InProgressIncoming {
+            window,
             initial,
+            observed: tokio::time::Instant::now(),
             started: Instant::now(),
             target: None,
             reply: None,
             incr: None,
         });
         self.conn.convert_selection(
-            self.helper_win,
+            window,
             self.atoms.CLIPBOARD,
             self.atoms.TARGETS,
             self.atoms.TARGETS_PROP,
@@ -400,9 +420,17 @@ impl X11State {
         Ok(())
     }
 
+    fn take_pending(&mut self) -> Option<InProgressIncoming> {
+        let pending = self.incoming.take()?;
+        if let Ok(cookie) = self.conn.destroy_window(pending.window) {
+            cookie.ignore_error();
+        }
+        Some(pending)
+    }
+
     fn abort_pending(&mut self, reason: &str) {
-        if let Some(mut old) = self.incoming.take()
-            && let Some(reply) = old.reply.take()
+        if let Some(pending) = self.take_pending()
+            && let Some(reply) = pending.reply
         {
             let _ = reply.send(Err(reason.to_owned()));
         }
@@ -412,14 +440,28 @@ impl X11State {
         &mut self,
         ev: xproto::SelectionNotifyEvent,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if ev.requestor != self.helper_win || ev.selection != self.atoms.CLIPBOARD {
+        let Some(pending) = &self.incoming else {
+            return Ok(());
+        };
+        if ev.requestor != pending.window || ev.selection != self.atoms.CLIPBOARD {
             return Ok(());
         }
-        self.last_time = ev.time;
-        if ev.target == self.atoms.TARGETS {
-            self.on_targets_notify(ev)?;
-        } else {
-            self.on_payload_notify(ev)?;
+        let (expected_target, expected_property) = pending
+            .target
+            .map_or((self.atoms.TARGETS, self.atoms.TARGETS_PROP), |target| {
+                (target, self.atoms.XFER_PROP)
+            });
+        if ev.target != expected_target || pending.incr.is_some() {
+            return Ok(());
+        }
+        if ev.property == x11rb::NONE {
+            self.abort_pending("Clipboard owner rejected conversion");
+        } else if ev.property == expected_property {
+            if pending.target.is_none() {
+                self.on_targets_notify(ev)?;
+            } else {
+                self.on_payload_notify(ev)?;
+            }
         }
         Ok(())
     }
@@ -428,46 +470,37 @@ impl X11State {
         &mut self,
         ev: xproto::SelectionNotifyEvent,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let Some(mut pending) = self.incoming.take() else {
-            return Ok(());
-        };
-        if ev.property == x11rb::NONE {
-            return Ok(());
-        }
         let reply = self
             .conn
-            .get_property(true, self.helper_win, ev.property, self.atoms.ATOM, 0, 4096)?
+            .get_property(true, ev.requestor, ev.property, self.atoms.ATOM, 0, 4096)?
             .reply()?;
-        let Some(atoms_iter) = reply.value32() else {
+        let Some(atoms_iter) = reply.value32().filter(|_| reply.bytes_after == 0) else {
+            self.abort_pending("Invalid clipboard targets");
             return Ok(());
         };
         let target_atoms: Vec<Atom> = atoms_iter.collect();
         let names = self.resolve_atom_names(&target_atoms);
-        if is_echo_targets(self.owning, &self.marker_name, &names) {
-            self.selection.send_replace(None);
-            return Ok(());
-        }
-        let Some((raw_target, mime, latin1)) = select_incoming_target(&names) else {
+        let Some((raw_target, mime)) = select_incoming_target(&names) else {
+            self.abort_pending("No supported clipboard target");
             return Ok(());
         };
         let target_atom = self.intern(&raw_target)?;
         let (tx, rx) = oneshot::channel();
-        let initial = pending.initial;
-        pending.target = Some((target_atom, mime.clone(), latin1));
+        let Some(pending) = &mut self.incoming else {
+            return Ok(());
+        };
+        pending.target = Some(target_atom);
         pending.reply = Some(tx);
-        pending.started = Instant::now();
-        self.incoming = Some(pending);
 
-        let serial = self.serial.load(Ordering::Acquire);
         self.selection.send_replace(Some(Arc::new(Incoming {
-            serial,
-            observed: tokio::time::Instant::now(),
-            initial,
+            serial: self.serial.load(Ordering::Acquire),
+            observed: pending.observed,
+            initial: pending.initial,
             mime,
             reader: Mutex::new(Some(IncomingReader::X11(rx))),
         })));
         self.conn.convert_selection(
-            self.helper_win,
+            pending.window,
             self.atoms.CLIPBOARD,
             target_atom,
             self.atoms.XFER_PROP,
@@ -478,15 +511,15 @@ impl X11State {
 
     fn read_xfer_property(
         &self,
-        property: Atom,
+        requestor: Window,
     ) -> Result<xproto::GetPropertyReply, Box<dyn std::error::Error>> {
         let long_len = u32::try_from(TRANSFER_LIMIT / 4 + 4).unwrap_or(u32::MAX);
         Ok(self
             .conn
             .get_property(
                 true,
-                self.helper_win,
-                property,
+                requestor,
+                self.atoms.XFER_PROP,
                 xproto::GetPropertyType::ANY,
                 0,
                 long_len,
@@ -498,43 +531,48 @@ impl X11State {
         &mut self,
         ev: xproto::SelectionNotifyEvent,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let Some(mut pending) = self.incoming.take() else {
-            return Ok(());
-        };
-        if ev.property == x11rb::NONE {
-            if let Some(reply) = pending.reply.take() {
-                let _ = reply.send(Err("Clipboard owner rejected conversion".into()));
-            }
-            return Ok(());
-        }
-        let reply = self.read_xfer_property(ev.property)?;
+        let reply = self.read_xfer_property(ev.requestor)?;
         if reply.type_ == self.atoms.INCR {
-            pending.incr = Some(Vec::new());
-            pending.started = Instant::now();
-            self.incoming = Some(pending);
-            return Ok(());
+            let declared_size = reply.value32().and_then(|mut values| values.next());
+            if !declared_size.is_some_and(|size| u64::from(size) <= TRANSFER_LIMIT)
+                || reply.value_len != 1
+                || reply.bytes_after != 0
+            {
+                self.abort_pending("Invalid or oversized clipboard INCR transfer");
+            } else if let Some(pending) = &mut self.incoming {
+                pending.incr = Some(Vec::new());
+            }
+        } else if self.valid_payload(&reply) {
+            self.deliver_incoming(reply.value, reply.type_ == self.atoms.STRING);
+        } else {
+            self.abort_pending("Invalid or oversized clipboard payload");
         }
-        let latin1 = pending.target.as_ref().is_some_and(|t| t.2);
-        Self::deliver_incoming(pending.reply, reply.value, latin1);
         Ok(())
     }
 
-    fn deliver_incoming(
-        reply: Option<oneshot::Sender<Result<Vec<u8>, String>>>,
-        mut bytes: Vec<u8>,
-        latin1: bool,
-    ) {
-        let Some(tx) = reply else { return };
-        if bytes.len() as u64 > TRANSFER_LIMIT {
-            let _ = tx.send(Err("Clipboard selection exceeds 256 MiB".into()));
+    fn valid_payload(&self, reply: &xproto::GetPropertyReply) -> bool {
+        let target = self.incoming.as_ref().and_then(|pending| pending.target);
+        reply.format == 8
+            && reply.bytes_after == 0
+            && reply.value.len() as u64 <= TRANSFER_LIMIT
+            && (Some(reply.type_) == target
+                || (target == Some(self.atoms.TEXT)
+                    && [self.atoms.UTF8_STRING, self.atoms.STRING].contains(&reply.type_)))
+    }
+
+    fn deliver_incoming(&mut self, mut bytes: Vec<u8>, latin1: bool) {
+        let Some(tx) = self.take_pending().and_then(|pending| pending.reply) else {
             return;
-        }
-        if latin1 && std::str::from_utf8(&bytes).is_err() {
-            bytes = bytes
-                .into_iter()
-                .map(|b| b as char)
-                .collect::<String>()
-                .into_bytes();
+        };
+        if latin1 {
+            let utf8_len = bytes.len() + bytes.iter().filter(|byte| **byte >= 128).count();
+            if utf8_len as u64 > TRANSFER_LIMIT {
+                let _ = tx.send(Err("Clipboard selection exceeds 256 MiB".into()));
+                return;
+            }
+            let mut text = String::with_capacity(utf8_len);
+            text.extend(bytes.into_iter().map(char::from));
+            bytes = text.into_bytes();
         }
         let _ = tx.send(Ok(bytes));
     }
@@ -543,41 +581,39 @@ impl X11State {
         &mut self,
         ev: xproto::PropertyNotifyEvent,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.last_time = ev.time;
-        if ev.window == self.helper_win
+        if ev.state == xproto::Property::NEW_VALUE
             && ev.atom == self.atoms.XFER_PROP
-            && ev.state == xproto::Property::NEW_VALUE
+            && self
+                .incoming
+                .as_ref()
+                .is_some_and(|pending| ev.window == pending.window && pending.incr.is_some())
         {
-            self.handle_incoming_incr_chunk()?;
+            self.handle_incoming_incr_chunk(ev.window)?;
         } else if ev.state == xproto::Property::DELETE {
             self.advance_outgoing_incr(ev.window, ev.atom)?;
         }
         Ok(())
     }
 
-    fn handle_incoming_incr_chunk(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let Some(mut pending) = self.incoming.take() else {
-            return Ok(());
-        };
-        let Some(mut buf) = pending.incr.take() else {
-            return Ok(());
-        };
-        let reply = self.read_xfer_property(self.atoms.XFER_PROP)?;
-        if reply.value.is_empty() {
-            let latin1 = pending.target.as_ref().is_some_and(|t| t.2);
-            Self::deliver_incoming(pending.reply, buf, latin1);
+    fn handle_incoming_incr_chunk(
+        &mut self,
+        window: Window,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let reply = self.read_xfer_property(window)?;
+        if !self.valid_payload(&reply) {
+            self.abort_pending("Invalid or oversized clipboard INCR chunk");
             return Ok(());
         }
-        match append_incr_chunk(&mut buf, &reply.value, TRANSFER_LIMIT) {
-            Ok(()) => {
-                pending.incr = Some(buf);
-                pending.started = Instant::now();
-                self.incoming = Some(pending);
-            }
-            Err(err) => {
-                if let Some(tx) = pending.reply.take() {
-                    let _ = tx.send(Err(err.to_owned()));
-                }
+        if let Some(buffer) = self
+            .incoming
+            .as_mut()
+            .and_then(|pending| pending.incr.as_mut())
+        {
+            if reply.value.is_empty() {
+                let bytes = std::mem::take(buffer);
+                self.deliver_incoming(bytes, reply.type_ == self.atoms.STRING);
+            } else if let Err(error) = append_incr_chunk(buffer, &reply.value, TRANSFER_LIMIT) {
+                self.abort_pending(error);
             }
         }
         Ok(())
@@ -595,25 +631,46 @@ impl X11State {
         else {
             return Ok(());
         };
-        let mut done = false;
-        if let Some(xfer) = self.outgoing_incr.get_mut(idx) {
-            let chunk = next_incr_chunk(&xfer.bytes, xfer.offset, INCR_CHUNK);
-            self.conn.change_property8(
+        let xfer = &mut self.outgoing_incr[idx];
+        let chunk = next_incr_chunk(
+            &xfer.bytes,
+            xfer.offset,
+            INCR_CHUNK.min(self.max_property_bytes),
+        );
+        let written = self
+            .conn
+            .change_property8(
                 PropMode::REPLACE,
                 xfer.requestor,
                 xfer.property,
                 xfer.target_type,
                 chunk,
-            )?;
-            if chunk.is_empty() {
-                done = true;
-            } else {
-                xfer.offset += chunk.len();
-                xfer.started = Instant::now();
-            }
+            )?
+            .check()
+            .is_ok();
+        if !written || chunk.is_empty() {
+            self.retire_outgoing(idx)?;
+        } else {
+            xfer.offset += chunk.len();
+            xfer.started = Instant::now();
         }
-        if done {
-            self.outgoing_incr.swap_remove(idx);
+        Ok(())
+    }
+
+    fn retire_outgoing(&mut self, index: usize) -> Result<(), Box<dyn std::error::Error>> {
+        let transfer = self.outgoing_incr.swap_remove(index);
+        if !self
+            .outgoing_incr
+            .iter()
+            .any(|xfer| xfer.requestor == transfer.requestor)
+        {
+            self.conn
+                .change_window_attributes(
+                    transfer.requestor,
+                    &xproto::ChangeWindowAttributesAux::new()
+                        .event_mask(xproto::EventMask::NO_EVENT),
+                )?
+                .ignore_error();
         }
         Ok(())
     }
@@ -625,7 +682,7 @@ impl X11State {
         let Some(pub_data) = &self.publication else {
             return self.send_selection_notify(&req, x11rb::NONE);
         };
-        if req.selection != self.atoms.CLIPBOARD {
+        if req.selection != self.atoms.CLIPBOARD || req.owner != self.helper_win {
             return self.send_selection_notify(&req, x11rb::NONE);
         }
         let dest = if req.property == x11rb::NONE {
@@ -634,24 +691,32 @@ impl X11State {
             req.property
         };
         if req.target == self.atoms.TARGETS {
-            self.conn.change_property32(
-                PropMode::REPLACE,
-                req.requestor,
-                dest,
-                self.atoms.ATOM,
-                &pub_data.targets,
-            )?;
-            return self.send_selection_notify(&req, dest);
+            let written = self
+                .conn
+                .change_property32(
+                    PropMode::REPLACE,
+                    req.requestor,
+                    dest,
+                    self.atoms.ATOM,
+                    &pub_data.targets,
+                )?
+                .check()
+                .is_ok();
+            return self.send_selection_notify(&req, if written { dest } else { x11rb::NONE });
         }
         if req.target == self.atoms.TIMESTAMP {
-            self.conn.change_property32(
-                PropMode::REPLACE,
-                req.requestor,
-                dest,
-                self.atoms.INTEGER,
-                &[pub_data.timestamp],
-            )?;
-            return self.send_selection_notify(&req, dest);
+            let written = self
+                .conn
+                .change_property32(
+                    PropMode::REPLACE,
+                    req.requestor,
+                    dest,
+                    self.atoms.INTEGER,
+                    &[pub_data.timestamp],
+                )?
+                .check()
+                .is_ok();
+            return self.send_selection_notify(&req, if written { dest } else { x11rb::NONE });
         }
         self.serve_data_request(&req, dest)
     }
@@ -668,20 +733,14 @@ impl X11State {
             return self.send_selection_notify(req, x11rb::NONE);
         }
         let bytes = pub_data.bytes.clone();
-        let target_type = if pub_data.mime.starts_with("text/") && req.target == self.atoms.STRING {
-            self.atoms.STRING
-        } else {
-            req.target
-        };
-        if bytes.len() <= INCR_THRESHOLD {
-            self.conn.change_property8(
-                PropMode::REPLACE,
-                req.requestor,
-                dest,
-                target_type,
-                &bytes,
-            )?;
-            return self.send_selection_notify(req, dest);
+        let target_type = req.target;
+        if bytes.len() <= INCR_THRESHOLD.min(self.max_property_bytes) {
+            let written = self
+                .conn
+                .change_property8(PropMode::REPLACE, req.requestor, dest, target_type, &bytes)?
+                .check()
+                .is_ok();
+            return self.send_selection_notify(req, if written { dest } else { x11rb::NONE });
         }
         if self.start_outgoing_incr(req, dest, target_type, bytes)? {
             self.send_selection_notify(req, dest)
@@ -697,22 +756,38 @@ impl X11State {
         target_type: Atom,
         bytes: Arc<[u8]>,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        if self.outgoing_incr.len() >= MAX_OUTGOING_INCR {
+        if self.outgoing_incr.len() >= MAX_OUTGOING_INCR
+            || self
+                .outgoing_incr
+                .iter()
+                .any(|transfer| transfer.requestor == req.requestor && transfer.property == dest)
+        {
             return Ok(false);
         }
         let total = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
-        let _ = self.conn.change_window_attributes(
-            req.requestor,
-            &xproto::ChangeWindowAttributesAux::new()
-                .event_mask(xproto::EventMask::PROPERTY_CHANGE),
-        );
-        self.conn.change_property32(
-            PropMode::REPLACE,
-            req.requestor,
-            dest,
-            self.atoms.INCR,
-            &[total],
-        )?;
+        if self
+            .conn
+            .change_window_attributes(
+                req.requestor,
+                &xproto::ChangeWindowAttributesAux::new()
+                    .event_mask(xproto::EventMask::PROPERTY_CHANGE),
+            )?
+            .check()
+            .is_err()
+        {
+            return Ok(false);
+        }
+        let written = self
+            .conn
+            .change_property32(
+                PropMode::REPLACE,
+                req.requestor,
+                dest,
+                self.atoms.INCR,
+                &[total],
+            )?
+            .check()
+            .is_ok();
         self.outgoing_incr.push(OutgoingIncr {
             requestor: req.requestor,
             property: dest,
@@ -721,7 +796,10 @@ impl X11State {
             offset: 0,
             started: Instant::now(),
         });
-        Ok(true)
+        if !written {
+            self.retire_outgoing(self.outgoing_incr.len() - 1)?;
+        }
+        Ok(written)
     }
 
     fn send_selection_notify(
@@ -739,23 +817,37 @@ impl X11State {
             property,
         };
         self.conn
-            .send_event(false, req.requestor, xproto::EventMask::NO_EVENT, notify)?;
+            .send_event(false, req.requestor, xproto::EventMask::NO_EVENT, notify)?
+            .ignore_error();
         Ok(())
     }
 
-    fn evict_expired(&mut self) {
+    fn evict_expired(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(pending) = &self.incoming
             && pending.started.elapsed() > TRANSFER_TIMEOUT
         {
             self.abort_pending("Clipboard source timed out");
         }
-        self.outgoing_incr
-            .retain(|xfer| xfer.started.elapsed() <= TRANSFER_TIMEOUT);
+        for index in (0..self.outgoing_incr.len()).rev() {
+            if self.outgoing_incr[index].started.elapsed() > TRANSFER_TIMEOUT {
+                self.retire_outgoing(index)?;
+            }
+        }
+        Ok(())
     }
 }
 
-pub(super) fn select_incoming_target(names: &[String]) -> Option<(String, String, bool)> {
-    let raw = preferred_mime(names)?;
+fn select_incoming_target(names: &[String]) -> Option<(String, String)> {
+    let supported: Vec<_> = names
+        .iter()
+        .filter(|name| {
+            name.starts_with("text/")
+                || little_clip_core::item::image_extension_for_mime(name).is_some()
+                || matches!(name.as_str(), "STRING" | "TEXT" | "UTF8_STRING")
+        })
+        .cloned()
+        .collect();
+    let raw = preferred_mime(&supported)?;
     let normalized = if raw == "UTF8_STRING" || raw.eq_ignore_ascii_case("text/plain;charset=utf-8")
     {
         "text/plain;charset=utf-8".to_owned()
@@ -764,20 +856,17 @@ pub(super) fn select_incoming_target(names: &[String]) -> Option<(String, String
     } else {
         raw.clone()
     };
-    let latin1 = raw == "STRING";
-    Some((raw, normalized, latin1))
+    Some((raw, normalized))
 }
 
 pub(super) fn build_offered_target_names(mime: &str) -> Vec<&str> {
     let mut names = vec![mime];
     if mime == "text/plain;charset=utf-8" {
-        names.extend(["UTF8_STRING", "text/plain", "STRING"]);
+        names.extend(["UTF8_STRING", "text/plain"]);
+    } else if mime == "text/plain" {
+        names.extend(["UTF8_STRING", "text/plain;charset=utf-8"]);
     }
     names
-}
-
-pub(super) fn is_echo_targets(owning: bool, marker_name: &str, targets: &[String]) -> bool {
-    owning && targets.iter().any(|target| target == marker_name)
 }
 
 pub(super) fn next_incr_chunk(bytes: &[u8], offset: usize, chunk_size: usize) -> &[u8] {
@@ -811,32 +900,32 @@ mod tests {
         ];
         assert_eq!(
             select_incoming_target(&targets),
-            Some(("image/png".into(), "image/png".into(), false))
+            Some(("image/png".into(), "image/png".into()))
         );
 
         let text_targets = vec!["STRING".into(), "UTF8_STRING".into()];
         assert_eq!(
             select_incoming_target(&text_targets),
-            Some((
-                "UTF8_STRING".into(),
-                "text/plain;charset=utf-8".into(),
-                false
-            ))
+            Some(("UTF8_STRING".into(), "text/plain;charset=utf-8".into(),))
         );
 
         let legacy = vec!["STRING".into()];
         assert_eq!(
             select_incoming_target(&legacy),
-            Some(("STRING".into(), "text/plain".into(), true))
+            Some(("STRING".into(), "text/plain".into()))
         );
     }
 
     #[test]
-    fn echo_marker_only_suppresses_while_daemon_owns_clipboard() {
-        let targets = vec!["UTF8_STRING".into(), "application/x-marker-1".into()];
-        assert!(is_echo_targets(true, "application/x-marker-1", &targets));
-        assert!(!is_echo_targets(false, "application/x-marker-1", &targets));
-        assert!(!is_echo_targets(true, "application/x-marker-2", &targets));
+    fn x11_clipboard_targets_exclude_protocol_metadata_and_unconverted_latin1() {
+        assert_eq!(
+            select_incoming_target(&["TARGETS".into(), "TIMESTAMP".into()]),
+            None
+        );
+        assert_eq!(
+            build_offered_target_names("text/plain"),
+            ["text/plain", "UTF8_STRING", "text/plain;charset=utf-8"]
+        );
     }
 
     #[test]
