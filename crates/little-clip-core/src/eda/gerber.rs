@@ -1335,7 +1335,7 @@ mod tests {
     #[test]
     fn gerber_bounds_include_repeated_flashes() {
         let bytes =
-            b"%MOMM*%\n%FSLAX26Y26*%\n%ADD10C,2*%\nD10*\n%SRX3Y1I20J0*%\nX0Y0D03*\n%SR*%\nM02*\n";
+            b"%MOMM*%\n%FSLAX26Y26*%\n%ADD10R,2X2*%\nD10*\n%SRX3Y1I20J0*%\nX0Y0D03*\n%SR*%\nM02*\n";
         let doc =
             GerberDocument::parse_gerber(Path::new("repeated.gbr"), bytes, &AtomicBool::new(false))
                 .unwrap();
