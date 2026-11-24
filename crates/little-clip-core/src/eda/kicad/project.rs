@@ -176,7 +176,7 @@ impl KicadProjectDocument {
                     None,
                 );
             }
-            let via_r = (track_px * 1.35).clamp(2.5, row_h * 0.35);
+            let via_r = (track_px * 1.35).max(2.5).min(row_h * 0.35);
             let mut cpb = PathBuilder::new();
             cpb.push_circle(pad_x, cy, via_r);
             cpb.push_circle(pad_x + usable_w, cy - row_h * 0.22, via_r);
@@ -561,6 +561,19 @@ fn collect_gbrjob_stackup(val: Option<&Value>) -> Vec<GerberJobStackupLayer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_project_thumbnail_renders_five_net_classes() {
+        let bytes = br#"{"net_settings":{"classes":[
+            {"name":"Default"},{"name":"Power"},{"name":"Clock"},{"name":"USB"},{"name":"RF"}
+        ]}}"#;
+        let cancel = AtomicBool::new(false);
+        let doc =
+            KicadProjectDocument::parse(Path::new("board.kicad_pro"), bytes, &cancel).unwrap();
+        assert_eq!(doc.net_classes.len(), 5);
+        let image = doc.render_thumbnail([160, 48], &cancel).unwrap();
+        assert_eq!([image.width, image.height], [160, 48]);
+    }
 
     #[test]
     fn kicad_project_and_gbrjob_extract_rules_stackup_and_render() {
