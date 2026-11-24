@@ -189,7 +189,16 @@ impl Inspector {
     fn bytes(&mut self, ui: &mut Ui, packet: &Packet) {
         ui.separator();
         ui.strong("Captured bytes");
-        let columns = if ui.available_width() > 545.0 { 16 } else { 8 };
+        let mono = egui::TextStyle::Monospace.resolve(ui.style());
+        let digit = ui.fonts_mut(|fonts| fonts.glyph_width(&mono, '0'));
+        let offset_width = format!("{:04x}", packet.bytes.len().saturating_sub(1)).len();
+        let budget = (ui.available_width() - digit * offset_width as f32 - 14.0).max(0.0);
+        let cell = 2.0 * (digit + ui.spacing().button_padding.x + 1.0);
+        let columns = [16, 8, 4, 2]
+            .into_iter()
+            .find(|&count| count as f32 * cell <= budget)
+            .unwrap_or(1);
+        let show_ascii = columns as f32 * (cell + digit) + 10.0 <= budget;
         let row_height = ui.text_style_height(&egui::TextStyle::Monospace) + 4.0;
         ui.spacing_mut().item_spacing = vec2(2.0, 1.0);
         let mut area = ScrollArea::both()
@@ -228,18 +237,20 @@ impl Inspector {
                                 selected = Some(offset..offset + 1);
                             }
                         }
-                        let ascii = packet.bytes[start..end]
-                            .iter()
-                            .map(|&byte| {
-                                if byte.is_ascii_graphic() || byte == b' ' {
-                                    char::from(byte)
-                                } else {
-                                    '·'
-                                }
-                            })
-                            .collect::<String>();
-                        ui.add_space(7.0);
-                        ui.monospace(ascii);
+                        if show_ascii {
+                            let ascii = packet.bytes[start..end]
+                                .iter()
+                                .map(|&byte| {
+                                    if byte.is_ascii_graphic() || byte == b' ' {
+                                        char::from(byte)
+                                    } else {
+                                        '·'
+                                    }
+                                })
+                                .collect::<String>();
+                            ui.add_space(7.0);
+                            ui.monospace(ascii);
+                        }
                     });
                 }
             },
