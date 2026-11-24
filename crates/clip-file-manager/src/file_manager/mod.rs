@@ -15,6 +15,7 @@ mod database;
 mod diagram_strip;
 use little_clip_core::file_format as document_format;
 mod ebook;
+mod eda;
 mod edit_ui;
 mod edits;
 mod embroidery;

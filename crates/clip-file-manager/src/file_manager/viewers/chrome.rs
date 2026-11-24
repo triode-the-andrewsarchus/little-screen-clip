@@ -269,6 +269,7 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         | ViewerSession::Flowgraph(_)
         | ViewerSession::IqCapture(_)
         | ViewerSession::Embroidery(_)
+        | ViewerSession::Eda(_)
         | ViewerSession::VcvPatch(_)
         | ViewerSession::Database(_)
         | ViewerSession::Calendar(_)

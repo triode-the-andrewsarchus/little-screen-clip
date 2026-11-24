@@ -565,13 +565,13 @@ Select two to eight ordinary files and choose **File → Compare selected files*
     - [ ] `.cir`, `.sp`, `.spice` — SPICE circuit simulation netlist
       - [ ] Subcircuit definitions, node count, component count, analysis directives
     - [ ] `.raw`, `.plt` — SPICE / LTspice simulation output waveforms (transient timing, AC frequency sweep, and DC operating point response curves)
-    - [ ] `.gbr`, `.ger` — Gerber PCB fabrication layer
-      - [ ] RS-274X header attributes (layer type, copper thickness, polarity, units)
+    - [x] `.gbr`, `.ger` — Gerber PCB fabrication layer
+      - [x] RS-274X header attributes (layer type, copper thickness, polarity, units)
     - [ ] `.gbrjob` — KiCad Gerber Job specification (JSON board outline dimensions, multi-layer stackup [copper, dielectric, solder mask colors, silkscreen thicknesses], finish type, and layer-to-file mapping)
-    - [ ] `.pos` — Pick and place / component centroid file for automated surface-mount assembly (RefDes, package, layer [Top/Bottom], X/Y coordinates, and rotation angle)
-    - [ ] `.drl`, `.xln` — Excellon drill file
-      - [ ] Tool count, hole count, coordinates format
-    - [ ] `.plt`, `.hpgl` — plotter / HPGL
+    - [x] `.pos` — Pick and place / component centroid file for automated surface-mount assembly (RefDes, package, layer [Top/Bottom], X/Y coordinates, and rotation angle)
+    - [x] `.drl`, `.xln` — Excellon drill file
+      - [x] Tool count, hole count, coordinates format
+    - [x] `.plt`, `.hpgl` — plotter / HPGL
 - [ ] 3D printing and fabrication
   - [ ] `.3mf` — 3D Manufacturing Format (and slicer project packages: PrusaSlicer, OrcaSlicer, Bambu Studio)
     - [ ] Core model metadata (designer, license, title)

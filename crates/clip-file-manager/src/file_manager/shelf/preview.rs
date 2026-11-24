@@ -64,6 +64,7 @@ pub(in crate::file_manager) enum Source {
     Toolpath(PathBuf),
     Engineering(super::super::document_format::Format, PathBuf),
     Embroidery(PathBuf),
+    Eda(PathBuf),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
     Multisample(PathBuf),
@@ -170,6 +171,7 @@ impl Source {
             Format::VcvPatch => Source::VcvPatch(path),
             Format::Multisample => Source::Multisample(path),
             Format::Subtitle => Source::Subtitle(path),
+            Format::Eda => Source::Eda(path),
             format => Source::Engineering(format, path),
         }
     }
@@ -206,6 +208,7 @@ impl Source {
             | Self::Toolpath(_)
             | Self::Engineering(..)
             | Self::Embroidery(_)
+            | Self::Eda(_)
             | Self::Multisample(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
@@ -330,6 +333,7 @@ impl Source {
             Source::Multisample(path) => super::super::multisample::load(&path, token),
             Source::Toolpath(path) => super::super::gcode::load(&path, token),
             Source::Embroidery(path) => super::super::embroidery::load_strip(&path, token),
+            Source::Eda(path) => super::super::eda::load(&path, token),
             Source::VcvPatch(path) => super::super::vcv_strip::load(&path, token),
             Source::VcvRaster(request) => request.load(token),
             Source::Minecraft(path, revision) => {
@@ -987,7 +991,14 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
     data.icon = Icon::Text;
     if little_clip_core::brushes::is_brush_file(path) {
         let loaded = super::super::brush_strip::load(path, &AtomicBool::new(false));
-        data.icon = Icon::Brush;
+        data.icon = loaded.icon;
+        data.detail = loaded.detail;
+        data.image = loaded.image;
+    } else if super::super::document_format::Format::for_path(path)
+        == Some(super::super::document_format::Format::Eda)
+    {
+        let loaded = super::super::eda::load(path, &AtomicBool::new(false));
+        data.icon = loaded.icon;
         data.detail = loaded.detail;
         data.image = loaded.image;
     } else if little_clip_core::item::is_image_path(path) {

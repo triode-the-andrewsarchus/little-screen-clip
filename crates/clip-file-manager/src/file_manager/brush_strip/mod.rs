@@ -52,6 +52,9 @@ pub(super) fn load_listing(path: &Path, revision: u64, token: &AtomicBool) -> Pr
 }
 
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
+    if super::eda::is_gerber_gbr_file(path) {
+        return super::eda::load(path, token);
+    }
     let mut data = PreviewData::new(String::new(), "Brush".into(), Icon::Brush);
     match little_clip_core::brushes::load_brush_library(path, 64, token) {
         Ok(library) => {

@@ -98,6 +98,7 @@ pub(super) enum Category {
     Scene,
     Font,
     Geography,
+    Eda,
     Document,
     Text,
     Archive,
@@ -161,6 +162,9 @@ fn extension_category(entry: &Entry) -> Category {
         Some(Format::IqCapture) => return Category::IqCapture,
         _ => {}
     }
+    if entry.is_eda() {
+        return Category::Eda;
+    }
     if entry.is_geography() {
         return Category::Geography;
     }
@@ -217,6 +221,7 @@ impl Category {
             Self::Scene => "3D & materials",
             Self::Font => "Fonts",
             Self::Geography => "Geography",
+            Self::Eda => "Electronics & PCB",
             Self::Document => "Documents",
             Self::Text => "Text & code",
             Self::Archive => "Archives",
@@ -423,5 +428,22 @@ mod tests {
                 Category::Document,
             ]
         );
+    }
+
+    #[test]
+    fn eda_files_sort_as_dedicated_electronics_and_pcb_category() {
+        for name in [
+            "copper.ger",
+            "COPPER.GER",
+            "drill.drl",
+            "drill.xln",
+            "parts.pos",
+            "plot.plt",
+            "plot.hpgl",
+        ] {
+            let entry = file_entry(name);
+            assert_eq!(family(&entry), Category::Eda, "expected Eda for {name}");
+        }
+        assert_eq!(Category::Eda.label(), "Electronics & PCB");
     }
 }
