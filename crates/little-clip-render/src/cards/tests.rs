@@ -705,3 +705,40 @@ fn eda_cards_render_stage2_kicad_files() {
         assert!(image.pixels().iter().any(|p| p.alpha() > 0));
     }
 }
+
+#[test]
+fn eda_cards_render_stage3_spice_and_ltspice_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let cir = dir.path().join("rc.cir");
+    std::fs::write(
+        &cir,
+        "* RC\nV1 in 0 5\nR1 in out 1k\nC1 out 0 1u\n.tran 1u 1m\n.end\n",
+    )
+    .unwrap();
+    let raw = dir.path().join("wave.raw");
+    std::fs::write(
+        &raw,
+        "Title: RC\nPlotname: Transient Analysis\nFlags: real\nNo. Variables: 2\nNo. Points: 2\nVariables:\n\t0\ttime\ttime\n\t1\tV(out)\tvoltage\nValues:\n 0\t0.0\n\t0.0\n 1\t1.0e-3\n\t5.0\n",
+    )
+    .unwrap();
+    let lt_plt = dir.path().join("wave.plt");
+    std::fs::write(
+        &lt_plt,
+        "[Transient Analysis]\n{\n   Npanes: 1\n   {\n      traces: 1 { (524290,0,\"V(out)\") }\n   }\n}\n",
+    )
+    .unwrap();
+    let hpgl_plt = dir.path().join("plot.plt");
+    std::fs::write(&hpgl_plt, "IN;SP1;PU0,0;PD1000,1000;SP0;").unwrap();
+
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    for path in [&cir, &raw, &lt_plt, &hpgl_plt] {
+        let item = ClipItem::from_single_file(path);
+        let preview = renderer
+            .file_preview(&item)
+            .unwrap_or_else(|| panic!("missing card preview for {}", path.display()));
+        assert!(matches!(
+            preview.as_ref(),
+            Preview::Page(page) if page.width == 0 && page.height == 0
+        ));
+    }
+}

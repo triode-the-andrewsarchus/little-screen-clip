@@ -281,7 +281,9 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Geography
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
-    } else if Format::for_path(path) == Some(Format::Eda) {
+    } else if Format::for_path(path) == Some(Format::Eda)
+        || little_clip_core::eda::is_spice_raw_path(path)
+    {
         Kind::Eda
     } else if spreadsheet::is_spreadsheet_file(path) {
         Kind::Spreadsheet

@@ -963,6 +963,7 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
         data.image = loaded.image;
     } else if super::super::document_format::Format::for_path(path)
         == Some(super::super::document_format::Format::Eda)
+        || super::super::eda::is_spice_raw_file(path)
     {
         let loaded = super::super::eda::load(path, &AtomicBool::new(false));
         data.icon = loaded.icon;

@@ -1,6 +1,7 @@
 //! EDA / PCB fabrication, Excellon drill, centroid, HPGL, and KiCad strips and viewers.
 
 mod kicad;
+mod spice;
 
 use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
 use crate::{
@@ -28,6 +29,10 @@ pub(super) fn is_gerber_gbr_file(path: &Path) -> bool {
     little_clip_core::eda::is_gerber_gbr_path(path)
 }
 
+pub(super) fn is_spice_raw_file(path: &Path) -> bool {
+    little_clip_core::eda::is_spice_raw_path(path)
+}
+
 pub(super) fn icon_for_format(format: EdaFormat) -> Icon {
     match format {
         EdaFormat::Gerber
@@ -38,7 +43,9 @@ pub(super) fn icon_for_format(format: EdaFormat) -> Icon {
         EdaFormat::PickAndPlace => Icon::Grid,
         EdaFormat::Hpgl => Icon::Pencil,
         EdaFormat::KicadSchematic | EdaFormat::KicadSymbolLib => Icon::NodeTree,
-        EdaFormat::KicadProject => Icon::Code,
+        EdaFormat::KicadProject | EdaFormat::SpiceNetlist => Icon::Code,
+        EdaFormat::SpiceRaw => Icon::Waves,
+        EdaFormat::LtspicePlot => Icon::Zap,
     }
 }
 
@@ -169,6 +176,9 @@ struct ViewerState {
     filter_query: String,
     selected_symbol: usize,
     selected_unit: i64,
+    selected_plot: usize,
+    hidden_traces: BTreeSet<usize>,
+    show_phase: bool,
     zoom: f32,
     pan: Vec2,
 }
@@ -260,6 +270,9 @@ fn render_left_panel(
             Document::KicadSymbolLib(lib) => kicad::render_symbol_lib_details(ui, lib, state),
             Document::GerberJob(job) => kicad::render_gbrjob_details(ui, job),
             Document::KicadProject(proj) => kicad::render_project_details(ui, proj),
+            Document::SpiceNetlist(net) => spice::render_netlist_details(ui, net, state),
+            Document::SpiceRaw(raw) => spice::render_raw_details(ui, raw, state),
+            Document::LtspicePlot(plt) => spice::render_plt_details(ui, plt),
         });
 }
 
@@ -275,8 +288,15 @@ fn render_center_panel(
         render_source_rows(ui, source_text_for(doc), state);
         return;
     }
+    if matches!(doc, Document::SpiceNetlist(_)) {
+        ui.strong("SPICE Netlist Deck");
+        ui.separator();
+        render_source_rows(ui, source_text_for(doc), state);
+        return;
+    }
 
-    let has_source = matches!(doc, Document::Hpgl(_)) && !state.source_lines.is_empty();
+    let has_source = matches!(doc, Document::Hpgl(_) | Document::LtspicePlot(_))
+        && !state.source_lines.is_empty();
     let canvas_h = if has_source {
         (ui.available_height() - 160.0).max(120.0)
     } else {
@@ -288,6 +308,7 @@ fn render_center_panel(
     );
     crate::ui_ext::pan_zoom_canvas(ui, rect, &response, &mut state.zoom, &mut state.pan, 32.0);
 
+    let mut raw_readout = None;
     let cursor_mm = match doc {
         Document::Gerber(gerber) => {
             if state.raster.is_none() {
@@ -317,16 +338,26 @@ fn render_center_panel(
             kicad::paint_gbrjob_center(ui, rect, job, state, colors);
             None
         }
-        Document::KicadProject(_) => None,
+        Document::SpiceRaw(raw) => {
+            raw_readout = Some(spice::paint_raw_center(ui, rect, raw, state, colors));
+            None
+        }
+        Document::LtspicePlot(plt) => {
+            spice::paint_plt_center(ui, rect, plt, state, colors);
+            None
+        }
+        Document::KicadProject(_) | Document::SpiceNetlist(_) => None,
     };
 
-    let coord_text = cursor_mm
-        .map(|[x, y]| format!("Cursor {x:.3}, {y:.3} mm · drag to pan · scroll to zoom"))
-        .unwrap_or_else(|| "Drag to pan · scroll to zoom".into());
+    let coord_text = raw_readout.unwrap_or_else(|| {
+        cursor_mm
+            .map(|[x, y]| format!("Cursor {x:.3}, {y:.3} mm · drag to pan · scroll to zoom"))
+            .unwrap_or_else(|| "Drag to pan · scroll to zoom".into())
+    });
     ui.label(coord_text);
 
-    if has_source && let Document::Hpgl(hpgl) = doc {
-        render_source_rows(ui, &hpgl.source_excerpt, state);
+    if has_source {
+        render_source_rows(ui, source_text_for(doc), state);
     }
 }
 
@@ -900,6 +931,9 @@ fn source_text_for(doc: &Document) -> &str {
         Document::KicadFootprint(f) => &f.source_excerpt,
         Document::KicadSymbolLib(l) => &l.source_excerpt,
         Document::GerberJob(j) => &j.source_excerpt,
+        Document::SpiceNetlist(n) => &n.source_excerpt,
+        Document::SpiceRaw(_) => "",
+        Document::LtspicePlot(p) => &p.source_excerpt,
     }
 }
 
@@ -1075,6 +1109,61 @@ mod tests {
                 "missing summary for {}",
                 path.display()
             );
+            let mut viewer = Viewer::load(path, &cancel).unwrap();
+            render_single_frame(&mut viewer, &palette);
+        }
+    }
+
+    #[test]
+    fn spice_ltspice_viewers_and_raw_plt_disambiguation() {
+        let dir = tempfile::tempdir().unwrap();
+        let cir = dir.path().join("filter.cir");
+        std::fs::write(
+            &cir,
+            "* LP\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1u 2m\n.end\n",
+        )
+        .unwrap();
+        let raw = dir.path().join("sim.raw");
+        std::fs::write(
+            &raw,
+            "Title: Demo\nPlotname: Transient Analysis\nFlags: real\nNo. Variables: 2\nNo. Points: 2\nVariables:\n\t0\ttime\ttime\n\t1\tV(out)\tvoltage\nValues:\n 0\t0.0\n\t0.0\n 1\t1.0e-3\n\t3.3\n",
+        )
+        .unwrap();
+        let lt_plt = dir.path().join("sim.plt");
+        std::fs::write(
+            &lt_plt,
+            "[Transient Analysis]\n{\n   Npanes: 1\n   {\n      traces: 1 { (524290,0,\"V(out)\") }\n   }\n}\n",
+        )
+        .unwrap();
+        let hpgl_plt = dir.path().join("plotter.plt");
+        std::fs::write(&hpgl_plt, "IN;SP1;PU0,0;PD500,500;SP0;").unwrap();
+
+        let camera_raw = dir.path().join("photo.raw");
+        std::fs::write(&camera_raw, b"II*\0\x08\0\0\0fake tiff").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let listing = super::super::filesystem::read_directory(dir.path(), &cancel).unwrap();
+        let revision_for = |target: &Path| {
+            let canon = target.canonicalize().unwrap();
+            listing
+                .entries
+                .iter()
+                .find(|e| e.path == canon)
+                .unwrap()
+                .revision
+        };
+        let raw_strip = super::super::image_strip::load(&raw, revision_for(&raw), &cancel);
+        assert!(raw_strip.eda.is_some());
+        let cam_strip =
+            super::super::image_strip::load(&camera_raw, revision_for(&camera_raw), &cancel);
+        assert!(cam_strip.eda.is_none());
+        assert!(is_spice_raw_file(&raw));
+        assert!(!is_spice_raw_file(&camera_raw));
+
+        let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
+        for path in [&cir, &raw, &lt_plt, &hpgl_plt] {
+            let strip = load(path, &cancel);
+            assert!(strip.eda.is_some());
             let mut viewer = Viewer::load(path, &cancel).unwrap();
             render_single_frame(&mut viewer, &palette);
         }

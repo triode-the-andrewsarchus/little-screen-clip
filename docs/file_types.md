@@ -560,9 +560,9 @@
       - [ ] Layer setup, component count, net count
     - [ ] `.PcbDoc`, `.SchDoc` — Altium Designer PCB layout and schematic (OLE compound binary)
       - [ ] Embedded document summary, sheet parameters, layer definitions
-    - [ ] `.cir`, `.sp`, `.spice` — SPICE circuit simulation netlist
-      - [ ] Subcircuit definitions, node count, component count, analysis directives
-    - [ ] `.raw`, `.plt` — SPICE / LTspice simulation output waveforms (transient timing, AC frequency sweep, and DC operating point response curves)
+    - [x] `.cir`, `.sp`, `.spice` — SPICE circuit simulation netlist
+      - [x] Subcircuit definitions, node count, component count, analysis directives
+    - [x] `.raw`, `.plt` — SPICE / LTspice simulation output waveforms (transient timing, AC frequency sweep, and DC operating point response curves)
     - [x] `.gbr`, `.ger` — Gerber PCB fabrication layer
       - [x] RS-274X header attributes (layer type, copper thickness, polarity, units)
     - [x] `.gbrjob` — KiCad Gerber Job specification (JSON board outline dimensions, multi-layer stackup [copper, dielectric, solder mask colors, silkscreen thicknesses], finish type, and layer-to-file mapping)
