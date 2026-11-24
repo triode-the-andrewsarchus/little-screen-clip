@@ -22,6 +22,9 @@ impl super::Viewer {
         {
             self.show_rate_checks = !self.show_rate_checks;
             self.show_rates |= self.show_rate_checks;
+            if !self.show_rate_checks {
+                self.rate_check = None;
+            }
         }
     }
 
@@ -163,7 +166,19 @@ impl Overlay {
         };
         let wire = &graph.connections[edge];
         let source = wire.source.block;
+        let warning = self.wire(edge).and_then(|wire| wire.warning);
+        if let Some(warning) = warning {
+            ui.colored_label(ui.visuals().warn_fg_color, warning);
+        }
         clock_row(ui, graph, source, "Nominal rate", rate, select);
+        if warning.is_some()
+            && let Some(setting) = self
+                .rates
+                .block(wire.sink.block)
+                .and_then(|block| block.setting)
+        {
+            rate_setting_row(ui, setting);
+        }
         if let Some(ratio) = self.rates.block(source).and_then(|block| block.ratio)
             && ratio != 1.0
         {
@@ -182,16 +197,6 @@ impl Overlay {
                     }
                     ratio_label(ui, ratio);
                 });
-            }
-        }
-        if let Some(warning) = self.wire(edge).and_then(|wire| wire.warning) {
-            ui.colored_label(ui.visuals().warn_fg_color, warning);
-            if let Some(setting) = self
-                .rates
-                .block(wire.sink.block)
-                .and_then(|block| block.setting)
-            {
-                rate_setting_row(ui, setting);
             }
         }
     }

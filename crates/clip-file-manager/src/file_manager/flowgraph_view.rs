@@ -37,6 +37,7 @@ pub(super) struct Viewer {
     rates: rate_overlay::Overlay,
     show_rates: bool,
     show_rate_checks: bool,
+    rate_check: Option<(Selection, Camera)>,
 }
 
 impl Viewer {
@@ -68,6 +69,7 @@ impl Viewer {
             rates,
             show_rates: false,
             show_rate_checks: false,
+            rate_check: None,
         })
     }
 
@@ -201,6 +203,11 @@ impl Viewer {
                 response.drag_delta(),
             );
         }
+        if let Some((check, camera)) = &mut self.rate_check
+            && self.selected == Some(*check)
+        {
+            *camera = self.camera;
+        }
         let projection = self.camera.projection(rect, &self.layout);
         let scene = Scene {
             graph: &self.graph,
@@ -282,9 +289,23 @@ impl Viewer {
         let mut select = None;
         let top = ui.cursor().top();
         if self.show_rate_checks {
-            select = self
+            if let Some((check, camera)) = self.rate_check
+                && self.selected != Some(check)
+                && ui.button("Back to rate check").clicked()
+            {
+                self.select(Some(check), false);
+                self.camera = camera;
+                self.show_rates = true;
+                ui.ctx().request_repaint();
+            }
+            if let Some(check) = self
                 .rates
-                .issue_list(ui, &self.graph, self.selected, height);
+                .issue_list(ui, &self.graph, self.selected, height)
+            {
+                self.rate_check = Some((check, self.camera));
+                self.show_rates = true;
+                select = Some(check);
+            }
             ui.separator();
         }
         self.search_results(ui, height, &mut select);
