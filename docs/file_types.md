@@ -551,13 +551,13 @@ Select two to eight ordinary files and choose **File → Compare selected files*
     - [x] `.splat`
     - [x] `.spz`
   - [ ] Electronic Design Automation (EDA), PCB design, and circuit simulation
-    - [ ] `.kicad_pcb` — KiCad PCB layout (S-expression)
-      - [ ] Board outline dimensions, layer stackup count, footprint/component count, net count, track segment length
-    - [ ] `.kicad_sch` — KiCad schematic (S-expression)
-      - [ ] Sheet title, symbol count, wire/bus count, net labels
-    - [ ] `.kicad_pro` — KiCad project configuration (JSON)
-    - [ ] `.kicad_mod` — KiCad footprint module (S-expression)
-    - [ ] `.kicad_sym` — KiCad symbol library (S-expression)
+    - [x] `.kicad_pcb` — KiCad PCB layout (S-expression)
+      - [x] Board outline dimensions, layer stackup count, footprint/component count, net count, track segment length
+    - [x] `.kicad_sch` — KiCad schematic (S-expression)
+      - [x] Sheet title, symbol count, wire/bus count, net labels
+    - [x] `.kicad_pro` — KiCad project configuration (JSON)
+    - [x] `.kicad_mod` — KiCad footprint module (S-expression)
+    - [x] `.kicad_sym` — KiCad symbol library (S-expression)
     - [ ] `.brd`, `.sch` — Autodesk EAGLE board layout and schematic (XML/binary) (May need disambiguation with generic board and schematic files)
       - [ ] Layer setup, component count, net count
     - [ ] `.PcbDoc`, `.SchDoc` — Altium Designer PCB layout and schematic (OLE compound binary)
@@ -567,7 +567,7 @@ Select two to eight ordinary files and choose **File → Compare selected files*
     - [ ] `.raw`, `.plt` — SPICE / LTspice simulation output waveforms (transient timing, AC frequency sweep, and DC operating point response curves)
     - [x] `.gbr`, `.ger` — Gerber PCB fabrication layer
       - [x] RS-274X header attributes (layer type, copper thickness, polarity, units)
-    - [ ] `.gbrjob` — KiCad Gerber Job specification (JSON board outline dimensions, multi-layer stackup [copper, dielectric, solder mask colors, silkscreen thicknesses], finish type, and layer-to-file mapping)
+    - [x] `.gbrjob` — KiCad Gerber Job specification (JSON board outline dimensions, multi-layer stackup [copper, dielectric, solder mask colors, silkscreen thicknesses], finish type, and layer-to-file mapping)
     - [x] `.pos` — Pick and place / component centroid file for automated surface-mount assembly (RefDes, package, layer [Top/Bottom], X/Y coordinates, and rotation angle)
     - [x] `.drl`, `.xln` — Excellon drill file
       - [x] Tool count, hole count, coordinates format

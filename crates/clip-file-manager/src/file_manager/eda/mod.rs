@@ -1,4 +1,6 @@
-//! EDA / PCB fabrication, Excellon drill, centroid, and HPGL strips and interactive viewers.
+//! EDA / PCB fabrication, Excellon drill, centroid, HPGL, and KiCad strips and viewers.
+
+mod kicad;
 
 use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
 use crate::{
@@ -8,10 +10,12 @@ use crate::{
 };
 use clip_ui::buttons::ButtonRole;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, TextureHandle, Vec2, pos2, vec2};
+use little_clip_core::ImageThumbnail;
 use little_clip_core::eda::{
     Document, EdaFormat, StripSummary,
     gerber::GerberDocument,
     hpgl::{HpglDocument, pen_rgb},
+    kicad::PcbLayerBucket,
     pick_place::{PickAndPlaceDocument, PlacementSide},
     read_document,
 };
@@ -26,9 +30,15 @@ pub(super) fn is_gerber_gbr_file(path: &Path) -> bool {
 
 pub(super) fn icon_for_format(format: EdaFormat) -> Icon {
     match format {
-        EdaFormat::Gerber | EdaFormat::Excellon => Icon::Layers,
+        EdaFormat::Gerber
+        | EdaFormat::Excellon
+        | EdaFormat::KicadPcb
+        | EdaFormat::KicadFootprint
+        | EdaFormat::GerberJob => Icon::Layers,
         EdaFormat::PickAndPlace => Icon::Grid,
         EdaFormat::Hpgl => Icon::Pencil,
+        EdaFormat::KicadSchematic | EdaFormat::KicadSymbolLib => Icon::NodeTree,
+        EdaFormat::KicadProject => Icon::Code,
     }
 }
 
@@ -155,6 +165,10 @@ struct ViewerState {
     hidden_pens: BTreeSet<u16>,
     show_rapid_moves: bool,
     show_vector_overlay: bool,
+    pcb_layers: BTreeSet<PcbLayerBucket>,
+    filter_query: String,
+    selected_symbol: usize,
+    selected_unit: i64,
     zoom: f32,
     pan: Vec2,
 }
@@ -164,6 +178,8 @@ impl ViewerState {
         Self {
             source_lines,
             show_rapid_moves: true,
+            pcb_layers: PcbLayerBucket::ALL.into_iter().collect(),
+            selected_unit: 1,
             zoom: 1.0,
             ..Self::default()
         }
@@ -238,6 +254,12 @@ fn render_left_panel(
             Document::Gerber(gerber) => render_gerber_details(ui, gerber, state),
             Document::PickAndPlace(pos_doc) => render_pick_place_details(ui, pos_doc, state),
             Document::Hpgl(hpgl) => render_hpgl_details(ui, hpgl, state, palette),
+            Document::KicadPcb(pcb) => kicad::render_pcb_details(ui, pcb, state),
+            Document::KicadSchematic(sch) => kicad::render_schematic_details(ui, sch, state),
+            Document::KicadFootprint(fp) => kicad::render_footprint_details(ui, fp),
+            Document::KicadSymbolLib(lib) => kicad::render_symbol_lib_details(ui, lib, state),
+            Document::GerberJob(job) => kicad::render_gbrjob_details(ui, job),
+            Document::KicadProject(proj) => kicad::render_project_details(ui, proj),
         });
 }
 
@@ -247,6 +269,13 @@ fn render_center_panel(
     state: &mut ViewerState,
     colors: WorkbenchColors,
 ) {
+    if matches!(doc, Document::KicadProject(_)) {
+        ui.strong("Configuration JSON");
+        ui.separator();
+        render_source_rows(ui, source_text_for(doc), state);
+        return;
+    }
+
     let has_source = matches!(doc, Document::Hpgl(_)) && !state.source_lines.is_empty();
     let canvas_h = if has_source {
         (ui.available_height() - 160.0).max(120.0)
@@ -261,13 +290,34 @@ fn render_center_panel(
 
     let cursor_mm = match doc {
         Document::Gerber(gerber) => {
-            ensure_gerber_texture(ui.ctx(), gerber, state);
+            if state.raster.is_none() {
+                ensure_texture_from_result(
+                    ui.ctx(),
+                    "eda-gerber",
+                    gerber.render_thumbnail([1024, 1024], &AtomicBool::new(false)),
+                    state,
+                );
+            }
             paint_gerber_canvas(ui, rect, gerber, state, colors)
         }
         Document::PickAndPlace(pos_doc) => {
             paint_pick_place_canvas(ui, rect, &response, pos_doc, state, colors)
         }
         Document::Hpgl(hpgl) => paint_hpgl_canvas(ui, rect, &response, hpgl, state, colors),
+        Document::KicadPcb(pcb) => kicad::paint_pcb_center(ui, rect, pcb, state, colors),
+        Document::KicadSchematic(sch) => {
+            kicad::paint_schematic_center(ui, rect, sch, state, colors)
+        }
+        Document::KicadFootprint(fp) => kicad::paint_footprint_center(ui, rect, fp, state, colors),
+        Document::KicadSymbolLib(lib) => {
+            kicad::paint_symbol_lib_center(ui, rect, lib, state, colors);
+            None
+        }
+        Document::GerberJob(job) => {
+            kicad::paint_gbrjob_center(ui, rect, job, state, colors);
+            None
+        }
+        Document::KicadProject(_) => None,
     };
 
     let coord_text = cursor_mm
@@ -280,21 +330,47 @@ fn render_center_panel(
     }
 }
 
-fn ensure_gerber_texture(ctx: &egui::Context, gerber: &GerberDocument, state: &mut ViewerState) {
-    if state.raster.is_some() {
-        return;
-    }
-    if let Ok(image) = gerber.render_thumbnail([1024, 1024], &AtomicBool::new(false)) {
+fn ensure_texture_from_result(
+    ctx: &egui::Context,
+    name: &str,
+    rendered: Result<ImageThumbnail, String>,
+    state: &mut ViewerState,
+) {
+    if let Ok(image) = rendered {
         let color_image = egui::ColorImage::from_rgba_premultiplied(
             [image.width as usize, image.height as usize],
             &image.premultiplied_rgba,
         );
-        state.raster = Some(ctx.load_texture(
-            "eda-gerber-detail",
-            color_image,
-            egui::TextureOptions::NEAREST,
-        ));
+        state.raster = Some(ctx.load_texture(name, color_image, egui::TextureOptions::LINEAR));
     }
+}
+
+fn paint_raster_canvas(
+    ui: &egui::Ui,
+    rect: Rect,
+    bounds: [f64; 4],
+    y_down: bool,
+    state: &ViewerState,
+    _colors: WorkbenchColors,
+) -> Option<[f64; 2]> {
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 22, 26));
+    if let Some(tex) = &state.raster {
+        let tex_size = tex.size_vec2();
+        if tex_size.x > 0.0 && tex_size.y > 0.0 {
+            let scale = ((rect.width() - 24.0).max(1.0) / tex_size.x)
+                .min((rect.height() - 24.0).max(1.0) / tex_size.y)
+                * state.zoom;
+            let drawn = Rect::from_center_size(rect.center() + state.pan, tex_size * scale);
+            painter.image(
+                tex.id(),
+                drawn,
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+    }
+    cursor_coords(ui, rect, bounds, state.zoom, state.pan, y_down)
 }
 
 fn paint_gerber_canvas(
@@ -352,7 +428,7 @@ fn paint_gerber_canvas(
     }
 
     paint_origin_crosshair(&painter, rect, bounds, state.zoom, state.pan);
-    cursor_cartesian(ui, rect, bounds, state.zoom, state.pan)
+    cursor_coords(ui, rect, bounds, state.zoom, state.pan, false)
 }
 
 fn is_poly_selected(
@@ -478,7 +554,7 @@ fn paint_pick_place_canvas(
     {
         state.selected_placement = Some(idx);
     }
-    cursor_cartesian(ui, rect, bounds, state.zoom, state.pan)
+    cursor_coords(ui, rect, bounds, state.zoom, state.pan, false)
 }
 
 fn paint_hpgl_canvas(
@@ -506,7 +582,7 @@ fn paint_hpgl_canvas(
     {
         state.select_line(line);
     }
-    cursor_cartesian(ui, rect, bounds, state.zoom, state.pan)
+    cursor_coords(ui, rect, bounds, state.zoom, state.pan, false)
 }
 
 fn paint_hpgl_segments(
@@ -625,7 +701,7 @@ fn render_gerber_details(ui: &mut egui::Ui, gerber: &GerberDocument, state: &mut
         }
     } else {
         ui.label(format!(
-            "Flashes: {} · Strokes: {} · Regions: {}",
+            "Flashes: {} · Draws: {} · Regions: {}",
             gerber.flash_count, gerber.stroke_count, gerber.region_count
         ));
         if !gerber.attributes.is_empty() {
@@ -818,6 +894,12 @@ fn source_text_for(doc: &Document) -> &str {
         Document::Gerber(g) => &g.source_excerpt,
         Document::PickAndPlace(p) => &p.source_excerpt,
         Document::Hpgl(h) => &h.source_excerpt,
+        Document::KicadPcb(p) => &p.source_excerpt,
+        Document::KicadSchematic(s) => &s.source_excerpt,
+        Document::KicadProject(p) => &p.source_excerpt,
+        Document::KicadFootprint(f) => &f.source_excerpt,
+        Document::KicadSymbolLib(l) => &l.source_excerpt,
+        Document::GerberJob(j) => &j.source_excerpt,
     }
 }
 
@@ -848,12 +930,13 @@ fn paint_origin_crosshair(
     }
 }
 
-fn cursor_cartesian(
+fn cursor_coords(
     ui: &egui::Ui,
     rect: Rect,
     bounds: [f64; 4],
     zoom: f32,
     pan: Vec2,
+    y_down: bool,
 ) -> Option<[f64; 2]> {
     let pos = super::ui::preview_hovered(ui, rect)
         .then(|| ui.input(|i| i.pointer.hover_pos()))
@@ -865,7 +948,8 @@ fn cursor_cartesian(
         * f64::from(zoom);
     let delta = pos - rect.center() - pan;
     let x = (bounds[0] + bounds[2]) * 0.5 + f64::from(delta.x) / scale;
-    let y = (bounds[1] + bounds[3]) * 0.5 - f64::from(delta.y) / scale;
+    let y_sign = if y_down { 1.0 } else { -1.0 };
+    let y = (bounds[1] + bounds[3]) * 0.5 + y_sign * f64::from(delta.y) / scale;
     Some([x, y])
 }
 
@@ -873,6 +957,17 @@ fn cursor_cartesian(
 mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
+
+    fn render_single_frame(viewer: &mut Viewer, palette: &AppPalette) {
+        let ctx = egui::Context::default();
+        let mut close = false;
+        let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default().show(ui, |ui| viewer.ui(ui, &mut close, palette));
+            });
+        });
+        assert!(!close);
+    }
 
     #[test]
     fn eda_formats_load_strips_viewers_and_disambiguate_gbr_from_brushes() {
@@ -920,22 +1015,68 @@ mod tests {
         assert!(brush_strip.eda.is_none());
 
         let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
-        let ctx = egui::Context::default();
         for path in [&gbr_path, &drl_path, &pos_path, &hpgl_path] {
             let mut viewer = Viewer::load(path, &cancel).unwrap();
-            let mut close = false;
-            let _ = clip_ui::test_support::run_frame(&ctx, egui::RawInput::default(), |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default()
-                        .show(ui, |ui| viewer.ui(ui, &mut close, &palette));
-                });
-            });
-            assert!(!close);
+            render_single_frame(&mut viewer, &palette);
         }
 
         let proc_link = dir.path().join("bad.drl");
         std::os::unix::fs::symlink("/proc/uptime", &proc_link).unwrap();
         assert!(Viewer::load(&proc_link, &cancel).is_err());
         assert!(Viewer::load(&gbr_path, &AtomicBool::new(true)).is_err());
+    }
+
+    #[test]
+    fn kicad_formats_load_strips_and_render_interactive_viewers() {
+        let dir = tempfile::tempdir().unwrap();
+        let pcb = dir.path().join("board.kicad_pcb");
+        std::fs::write(
+            &pcb,
+            "(kicad_pcb (version 20240108) (layers (0 \"F.Cu\" signal) (44 \"Edge.Cuts\" user)) (net 1 \"VCC\") (gr_rect (start 0 0) (end 20 10) (layer \"Edge.Cuts\")) (segment (start 2 2) (end 12 2) (width 0.3) (layer \"F.Cu\") (net 1)))",
+        )
+        .unwrap();
+        let sch = dir.path().join("sheet.kicad_sch");
+        std::fs::write(
+            &sch,
+            "(kicad_sch (version 20231120) (paper \"A4\") (title_block (title \"Demo\")) (wire (pts (xy 10 10) (xy 30 10))) (label \"NET1\" (at 20 10 0)))",
+        )
+        .unwrap();
+        let pro = dir.path().join("proj.kicad_pro");
+        std::fs::write(
+            &pro,
+            r#"{"meta":{"filename":"proj.kicad_pro","version":1},"board":{"design_settings":{"rules":{"min_track_width":0.2}}},"net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.25}]}}"#,
+        )
+        .unwrap();
+        let fp = dir.path().join("part.kicad_mod");
+        std::fs::write(
+            &fp,
+            "(footprint \"Test:Pad\" (layer \"F.Cu\") (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\")))",
+        )
+        .unwrap();
+        let sym = dir.path().join("lib.kicad_sym");
+        std::fs::write(
+            &sym,
+            "(kicad_symbol_lib (version 20231120) (symbol \"Res\" (property \"Reference\" \"R\") (symbol \"Res_0_1\" (rectangle (start -1 -2) (end 1 2)))))",
+        )
+        .unwrap();
+        let gbrjob = dir.path().join("fab.gbrjob");
+        std::fs::write(
+            &gbrjob,
+            r#"{"GeneralSpecs":{"Size":{"X":50,"Y":30},"LayerNumber":2,"Finish":"ENIG"},"MaterialStackup":[{"Type":"Copper","Name":"F.Cu","Thickness":0.035},{"Type":"Dielectric","Name":"Core","Material":"FR4","Thickness":1.5}]}"#,
+        )
+        .unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
+        for path in [&pcb, &sch, &pro, &fp, &sym, &gbrjob] {
+            let strip = load(path, &cancel);
+            assert!(
+                strip.eda.is_some(),
+                "missing summary for {}",
+                path.display()
+            );
+            let mut viewer = Viewer::load(path, &cancel).unwrap();
+            render_single_frame(&mut viewer, &palette);
+        }
     }
 }
