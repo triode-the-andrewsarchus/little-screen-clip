@@ -545,15 +545,24 @@ pub fn is_spice_raw_path(path: &Path) -> bool {
 /// Returns whether a `.plt` buffer uses LTspice plot settings syntax instead of HPGL.
 pub fn looks_like_ltspice_plt(bytes: &[u8]) -> bool {
     let prefix = &bytes[..bytes.len().min(8192)];
-    let lower = decode_spice_text(prefix).to_ascii_lowercase();
-    lower.contains("[transient analysis]")
-        || lower.contains("[ac analysis]")
-        || lower.contains("[dc sweep]")
-        || lower.contains("[dc transfer characteristic]")
-        || lower.contains("[noise analysis]")
-        || lower.contains("[dc operating point]")
-        || lower.contains("[fft]")
-        || (lower.contains("npanes:") && lower.contains("traces:"))
+    let text = decode_spice_text(prefix);
+    let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+    let Some(section) = lines.next().and_then(|line| line.strip_prefix('[')) else {
+        return false;
+    };
+    let Some(analysis) = section.strip_suffix(']') else {
+        return false;
+    };
+    matches!(
+        analysis.to_ascii_lowercase().as_str(),
+        "transient analysis"
+            | "ac analysis"
+            | "dc sweep"
+            | "dc transfer characteristic"
+            | "noise analysis"
+            | "dc operating point"
+            | "fft"
+    ) || lines.any(|line| strip_key_eq_or_colon(line, "npanes").is_some())
 }
 
 fn looks_like_camera_raw_magic(bytes: &[u8]) -> bool {
@@ -1924,7 +1933,7 @@ Binary:
         assert_eq!(doc.panes.len(), 2);
         assert_eq!(doc.trace_count, 3);
 
-        let hpgl = "IN;SP1;PU0,0;PD1000,0,1000,1000;SP0;";
+        let hpgl = "IN;SP1;PU0,0;PD1000,0,1000,1000;LB[AC Analysis]\x03;SP0;";
         assert!(!looks_like_ltspice_plt(hpgl.as_bytes()));
     }
 }
