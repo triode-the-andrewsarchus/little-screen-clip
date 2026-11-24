@@ -15,7 +15,7 @@ use super::{
         Job, PAGE_ROWS, keyed_poll, poll,
         rows::{RowWindows, needed_window},
         start,
-        table::Page,
+        table::{Page, RowOrder, TableOptions},
     },
     preview_copy::{self, Copies},
 };
@@ -23,7 +23,7 @@ use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
 use capture::{Capture, ConversationScope, Filter, Filtered, TimeRestriction};
 use conversations::{Action as ConversationAction, Selection as ConversationSelection};
 use egui::{Context, Id, Layout, PointerButton, Sense, Ui, vec2};
-use filter_ui::{AppliedFilter, FilterCheckpoint, FilterRequest};
+use filter_ui::{AppliedFilter, ConversationVisit, FilterCheckpoint, FilterRequest};
 use little_clip_core::{
     BackgroundJobs,
     engineering::packets::{
@@ -48,6 +48,9 @@ pub(super) struct Viewer {
     index_failed: bool,
     page: u64,
     scroll_to: Option<usize>,
+    scroll_offset: f32,
+    restore_scroll: Option<f32>,
+    order: RowOrder,
     generation: u64,
     packet_number: u64,
     windows: RowWindows<PacketRow>,
@@ -65,6 +68,7 @@ pub(super) struct Viewer {
     filtered: Option<AppliedFilter>,
     filter_job: Option<(FilterRequest, Job<Filtered>)>,
     previous_filter: Option<FilterCheckpoint>,
+    conversation_visit: Option<ConversationVisit>,
     filter_error: Option<String>,
     conversation_panel: conversations::Panel,
     conversation: Option<ConversationSelection>,
@@ -87,6 +91,9 @@ impl Viewer {
             page: 0,
             generation: 0,
             scroll_to: None,
+            scroll_offset: 0.0,
+            restore_scroll: None,
+            order: RowOrder::default(),
             packet_number: 1,
             windows: RowWindows::new(3),
             selected,
@@ -103,6 +110,7 @@ impl Viewer {
             filtered: None,
             filter_job: None,
             previous_filter: None,
+            conversation_visit: None,
             filter_error: None,
             conversation_panel: conversations::Panel::default(),
             conversation: None,
@@ -138,8 +146,10 @@ impl Viewer {
             self.controls(ui, copies);
         });
         self.timeline(ui, colors);
-        self.conversations(ui, colors, copies);
-        self.draw_tcp_flow(ui, colors, copies);
+        ui.push_id(self.conversation_visit.is_some(), |ui| {
+            self.conversations(ui, colors, copies);
+            self.draw_tcp_flow(ui, colors, copies);
+        });
         self.navigation(ui);
         self.browser(ui, colors);
         self.request_index(ui.ctx());
@@ -208,11 +218,10 @@ impl Viewer {
     }
 
     fn copy_action(&self, ui: &mut Ui, copies: &mut Copies) {
-        let label = if self.range.is_some() {
-            "Copy source range"
-        } else {
-            "Copy packet"
-        };
+        let label = self.range.as_ref().map_or_else(
+            || "Copy packet".to_owned(),
+            |rows| format!("Copy {} source packets", rows.end - rows.start),
+        );
         let rows = self
             .range
             .clone()
@@ -232,33 +241,6 @@ impl Viewer {
     }
 
     fn conversations(&mut self, ui: &mut Ui, colors: WorkbenchColors, copies: &mut Copies) {
-        if let Some(selection) = &self.conversation {
-            let key = selection.key;
-            let clear = ui
-                .horizontal_wrapped(|ui| {
-                    ui.strong(key.protocol().label());
-                    ui.monospace(format!("{} ↔ {}", key.peers[0], key.peers[1]));
-                    if let Some(vlan) = key.vlan {
-                        ui.weak(format!("VLAN {vlan}"));
-                    }
-                    if selection.scope.time.is_some() {
-                        ui.weak("Selected time range");
-                    }
-                    if key.protocol() == Protocol::Tcp
-                        && ui
-                            .toggle_value(&mut self.tcp_flow.open, "TCP graph")
-                            .changed()
-                        && self.tcp_flow.open
-                    {
-                        self.conversation_panel.close();
-                    }
-                    ui.small_button("Remove conversation filter").clicked()
-                })
-                .inner;
-            if clear {
-                self.use_conversation(ui.ctx(), None);
-            }
-        }
         if !self.conversation_panel.open {
             return;
         }
@@ -407,6 +389,14 @@ impl Viewer {
                     count.div_ceil(PAGE_ROWS)
                 ));
             }
+            if self.order.sort.is_some() && ui.small_button("Restore capture order").clicked() {
+                self.order.sort = None;
+                self.reorder_packets();
+            }
+            if self.sortable_packet_rows().is_none() && count > 0 {
+                ui.weak("Capture order")
+                    .on_hover_text("Apply a filter to sort its matches across all result pages");
+            }
             let max = self.source_rows();
             ui.add_enabled(
                 max > 0,
@@ -447,22 +437,37 @@ impl Viewer {
     fn packet_table(&mut self, ui: &mut Ui, height: f32, colors: WorkbenchColors) {
         let count = self.visible_rows().saturating_sub(self.page).min(PAGE_ROWS) as usize;
         let scroll = self.scroll_to.take();
+        let options = TableOptions {
+            sortable_columns: if self.sortable_packet_rows().is_some() {
+                6
+            } else {
+                0
+            },
+            sort: self.order.sort,
+            scroll_offset: self.restore_scroll.take(),
+        };
+        let page = Page {
+            count,
+            offset: self.page,
+            selected: self.selected,
+            selection: self.range.as_ref(),
+            scroll_to: scroll,
+            generation: self.generation,
+            height,
+        };
         let output = table::show(
             ui,
-            Page {
-                count,
-                offset: self.page,
-                selected: self.selected,
-                selection: self.range.as_ref(),
-                scroll_to: scroll,
-                generation: self.generation,
-                height,
-            },
+            (page, options),
             self.origin(),
             colors,
             self.protocol_colors,
             |index| self.row_at(index),
         );
+        self.scroll_offset = output.scroll_offset;
+        if let Some(sort) = output.sort {
+            self.order.sort = Some(sort);
+            self.reorder_packets();
+        }
         if let Some((ordinal, extend)) = output.clicked {
             self.select(ordinal, extend);
         }
@@ -481,23 +486,40 @@ impl Viewer {
         let Some((key, _)) = ConversationKey::identify(packet.protocol()) else {
             return;
         };
-        if ui.small_button("Show conversation").clicked() {
-            let scope = ConversationScope::around(index.points(), row);
-            self.conversation_panel.open = true;
-            self.conversation_panel
-                .request(ui.ctx(), &self.capture, index, scope.clone());
-            self.use_conversation(
+        if self
+            .conversation
+            .as_ref()
+            .is_some_and(|active| active.key == key)
+        {
+            return;
+        }
+        if ui
+            .add_enabled(
+                self.filter_job.is_none(),
+                egui::Button::new("Filter to this conversation").small(),
+            )
+            .on_hover_text("Keep the current filters and restrict matches to this endpoint pair")
+            .clicked()
+        {
+            self.visit_conversation(
                 ui.ctx(),
-                Some(ConversationSelection {
-                    key,
-                    scope,
-                    bounds: None,
-                }),
+                key,
+                ConversationScope::around(index.points(), row),
             );
         }
     }
 
     fn inspector(&mut self, ui: &mut Ui) {
+        if self.conversation_visit.is_some() && ui.small_button("Back to packet results").clicked()
+        {
+            self.return_from_conversation();
+        }
+        ui.push_id(self.conversation_visit.is_some(), |ui| {
+            self.inspect_packet(ui)
+        });
+    }
+
+    fn inspect_packet(&mut self, ui: &mut Ui) {
         ui.spacing_mut().interact_size.y = 21.0;
         ui.spacing_mut().button_padding.y = 2.0;
         let Some(row) = self.selected else {
@@ -548,10 +570,43 @@ impl Viewer {
     }
 
     fn row_at(&self, view_row: u64) -> Option<&PacketRow> {
-        if let Some(filtered) = &self.filtered {
-            return filtered.result.rows.get(view_row as usize);
+        if let Some(rows) = self.sortable_packet_rows() {
+            return rows.get(self.order.source_index(usize::try_from(view_row).ok()?));
         }
         self.source_row(view_row)
+    }
+
+    fn sortable_packet_rows(&self) -> Option<&[PacketRow]> {
+        if let Some(applied) = &self.filtered {
+            Some(&applied.result.rows)
+        } else {
+            let prefix = &self.summary.packets;
+            (self.summary.complete
+                || self
+                    .index
+                    .as_ref()
+                    .is_some_and(|index| index.points() == prefix.len() as u64))
+            .then_some(prefix)
+        }
+    }
+
+    fn rebuild_packet_order(&mut self) {
+        if let Some(applied) = &self.filtered {
+            self.order.rebuild(&applied.result.rows, table::compare);
+        } else if self.sortable_packet_rows().is_some() {
+            self.order.rebuild(&self.summary.packets, table::compare);
+        } else {
+            self.order = RowOrder::default();
+        }
+    }
+
+    fn reorder_packets(&mut self) {
+        self.rebuild_packet_order();
+        self.generation += 1;
+        self.set_page(0);
+        if let Some(ordinal) = self.selected {
+            self.reveal(ordinal);
+        }
     }
 
     fn source_row(&self, ordinal: u64) -> Option<&PacketRow> {
@@ -625,7 +680,10 @@ impl Viewer {
         } else {
             Some(ordinal)
         };
-        if let Some(row) = view_row {
+        if let Some(mut row) = view_row {
+            if self.order.sort.is_some() {
+                row = self.order.display_index(row as usize) as u64;
+            }
             self.page = row / PAGE_ROWS * PAGE_ROWS;
             self.scroll_to = Some((row - self.page).saturating_sub(4) as usize);
         }
@@ -633,6 +691,7 @@ impl Viewer {
 
     fn set_page(&mut self, start: u64) {
         self.page = start;
+        self.restore_scroll = None;
         self.scroll_to = Some(0);
     }
 

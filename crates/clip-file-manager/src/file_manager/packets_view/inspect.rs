@@ -10,7 +10,7 @@ pub(super) enum FieldFilter {
     Replace(String),
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Inspector {
     row: Option<u64>,
     layers: Vec<Layer>,

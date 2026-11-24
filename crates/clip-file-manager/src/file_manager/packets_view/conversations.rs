@@ -6,15 +6,15 @@ use crate::{
     file_manager::{
         capture_browse::{
             Job, keyed_poll, start,
-            table::{Columns, Page},
+            table::{Columns, Page, RowOrder, Sort, TableOptions},
         },
         preview_copy::Copies,
     },
     ui_appearance::WorkbenchColors,
 };
 use egui::{Context, Rect, Ui, vec2};
-use little_clip_core::engineering::packets::{Conversation, ConversationKey, Index};
-use std::{fmt::Write, sync::Arc, time::Duration};
+use little_clip_core::engineering::packets::{Conversation, ConversationKey, Direction, Index};
+use std::{cmp::Ordering, fmt::Write, sync::Arc, time::Duration};
 
 const COLUMNS: Columns<6> = Columns {
     id: "packet conversations",
@@ -39,6 +39,7 @@ pub(super) struct Panel {
     job: Option<(ConversationScope, Job<ConversationSummary>)>,
     error: Option<String>,
     show_bytes: bool,
+    order: RowOrder,
     generation: u64,
     highlighted: Option<usize>,
 }
@@ -103,7 +104,7 @@ impl Panel {
             match result {
                 Ok(summary) => {
                     self.summary = Some(Arc::new(summary));
-                    self.generation += 1;
+                    self.reorder();
                     self.highlight(active.as_ref().map(|active| active.key));
                     if let Some(active) = active {
                         active.bounds = self.bounds(active).or(active.bounds);
@@ -119,7 +120,11 @@ impl Panel {
             .summary
             .as_ref()
             .filter(|ready| ready.scope == active.scope)?;
-        ready.groups.get(self.highlighted?)?.time_ns
+        ready
+            .groups
+            .iter()
+            .find(|group| group.key == active.key)?
+            .time_ns
     }
 
     pub fn highlight(&mut self, key: Option<ConversationKey>) {
@@ -161,15 +166,21 @@ impl Panel {
             generation: self.generation,
             height: (ui.available_height() * 0.28).clamp(86.0, 162.0),
         };
-        let output = COLUMNS.show(
+        let options = TableOptions {
+            sortable_columns: COLUMNS.headings.len(),
+            sort: self.order.sort,
+            ..Default::default()
+        };
+        let output = COLUMNS.show_with_options(
             ui,
-            page,
+            (page, options),
             colors,
             |index| {
+                let source = self.order.source_index(index as usize);
                 summary
                     .groups
-                    .get(index as usize)
-                    .map(|group| (index, group))
+                    .get(source)
+                    .map(|group| (source as u64, group))
             },
             |(index, _)| index,
             |ui, rect, (_, group)| row(ui, rect, group, colors, self.show_bytes),
@@ -182,7 +193,20 @@ impl Panel {
                 bounds: group.time_ns,
             }));
         }
+        if let Some(sort) = output.sort {
+            self.order.sort = Some(sort);
+            self.reorder();
+        }
         action
+    }
+
+    fn reorder(&mut self) {
+        if let Some(summary) = &self.summary {
+            self.order.rebuild(&summary.groups, |sort, left, right| {
+                compare(sort, left, right, self.show_bytes)
+            });
+        }
+        self.generation += 1;
     }
 
     fn controls(
@@ -213,8 +237,16 @@ impl Panel {
             {
                 action = Some(Action::SelectedRange);
             }
+            let previously_bytes = self.show_bytes;
             ui.selectable_value(&mut self.show_bytes, false, "Packet counts");
             ui.selectable_value(&mut self.show_bytes, true, "Captured bytes");
+            if previously_bytes != self.show_bytes && self.order.sort.is_some() {
+                self.reorder();
+            }
+            if self.order.sort.is_some() && ui.small_button("Rank by packet count").clicked() {
+                self.order.sort = None;
+                self.reorder();
+            }
             if let Some(summary) = &self.summary {
                 if ui
                     .add_enabled(!copies.busy(), egui::Button::new("Copy summary CSV"))
@@ -259,6 +291,34 @@ fn coverage(ui: &mut Ui, summary: &ConversationSummary) {
     }
 }
 
+fn compare(sort: Sort, left: &Conversation, right: &Conversation, show_bytes: bool) -> Ordering {
+    let duration = |group: &Conversation| group.time_ns.map(|[start, end]| end - start);
+    match sort.column {
+        0 | 1 => sort.compare(left.key.peers[sort.column], right.key.peers[sort.column]),
+        2 => sort.compare(
+            (left.key.protocol().label(), left.key.vlan),
+            (right.key.protocol().label(), right.key.vlan),
+        ),
+        3 | 4 => {
+            let direction = sort.column - 3;
+            sort.compare(
+                amount(left.directions[direction], show_bytes),
+                amount(right.directions[direction], show_bytes),
+            )
+        }
+        5 => sort.known_first(duration(left), duration(right)),
+        _ => Ordering::Equal,
+    }
+}
+
+fn amount(direction: Direction, show_bytes: bool) -> u64 {
+    if show_bytes {
+        direction.captured_bytes
+    } else {
+        direction.packets
+    }
+}
+
 fn row(ui: &Ui, rect: Rect, group: &Conversation, colors: WorkbenchColors, show_bytes: bool) {
     let protocol = group.key.protocol();
     let tint = super::table::protocol_color(protocol);
@@ -271,14 +331,9 @@ fn row(ui: &Ui, rect: Rect, group: &Conversation, colors: WorkbenchColors, show_
         || "—".to_owned(),
         |[start, end]| activity::relative(end - start),
     );
-    let counts = group.directions.map(|direction| {
-        if show_bytes {
-            direction.captured_bytes
-        } else {
-            direction.packets
-        }
-        .to_string()
-    });
+    let counts = group
+        .directions
+        .map(|direction| amount(direction, show_bytes).to_string());
     let protocol = group.key.vlan.map_or_else(
         || protocol.label().to_owned(),
         |vlan| format!("{} · VLAN {vlan}", protocol.label()),

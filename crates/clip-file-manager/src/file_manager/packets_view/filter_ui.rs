@@ -1,9 +1,10 @@
 //! Draft criteria, bounded filter requests, and the query that produced the table.
 
 use super::{
-    ConversationSelection, Filter, Filtered, JOBS, Protocol, TimeRestriction, Viewer, activity,
-    inspect::FieldFilter, keyed_poll, start,
+    ConversationKey, ConversationScope, ConversationSelection, Filter, Filtered, JOBS, Protocol,
+    TimeRestriction, Viewer, activity, conversations, inspect, keyed_poll, start, tcp_flow,
 };
+use crate::file_manager::capture_browse::table::Sort;
 use egui::{Button, Context, Ui};
 use std::{ops::Range, time::Duration};
 
@@ -46,6 +47,43 @@ pub(super) struct FilterCheckpoint {
 pub(super) struct FilterRequest {
     query: Filter,
     location: FilterLocation,
+    visit: Option<Box<VisitOrigin>>,
+}
+
+struct VisitOrigin {
+    page: u64,
+    scroll_offset: f32,
+    sort: Option<Sort>,
+    inspector: inspect::Inspector,
+    endpoint: String,
+    display: String,
+    error: Option<String>,
+    panel_open: bool,
+    graph_open: bool,
+}
+
+impl VisitOrigin {
+    fn capture(viewer: &Viewer) -> Self {
+        Self {
+            page: viewer.page,
+            scroll_offset: viewer.scroll_offset,
+            sort: viewer.order.sort,
+            inspector: viewer.inspector.clone(),
+            endpoint: viewer.endpoint.clone(),
+            display: viewer.display_filter.clone(),
+            error: viewer.filter_error.clone(),
+            panel_open: viewer.conversation_panel.open,
+            graph_open: viewer.tcp_flow.open,
+        }
+    }
+}
+
+pub(super) struct ConversationVisit {
+    origin: Box<VisitOrigin>,
+    checkpoint: FilterCheckpoint,
+    previous_filter: Option<FilterCheckpoint>,
+    panel: conversations::Panel,
+    graph: tcp_flow::View,
 }
 
 pub(super) struct AppliedFilter {
@@ -79,9 +117,20 @@ impl AppliedFilter {
             ui.label(endpoint);
         }
         if let Some((key, _)) = self.query.conversation() {
+            if self.query.protocol != Some(key.protocol()) {
+                ui.label(key.protocol().label());
+            }
             ui.monospace(format!("{} ↔ {}", key.peers[0], key.peers[1]));
+            if let Some(vlan) = key.vlan {
+                ui.weak(format!("VLAN {vlan}"));
+            }
         }
-        let scope = match (self.query.time(), origin, self.query.conversation()) {
+        let conversation = self.query.conversation();
+        let time = self
+            .query
+            .time()
+            .or_else(|| conversation.and_then(|(_, scope)| scope.time));
+        let scope = match (time, origin, conversation) {
             (Some([start, end]), Some(origin), _) => format!(
                 "Scope  {} – {}",
                 activity::relative(start - origin),
@@ -108,6 +157,9 @@ impl Viewer {
     pub(super) fn filter_controls(&mut self, ui: &mut Ui) {
         self.protocol_buttons(ui);
         self.query_editor(ui);
+        if let Some(error) = self.filter_error.as_deref() {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
         self.filter_result(ui);
     }
 
@@ -210,13 +262,30 @@ impl Viewer {
                     ui.weak("Filtering…");
                 }
                 self.time_buttons(ui);
+                self.conversation_actions(ui);
                 self.recovery_actions(ui);
             });
         }
-        if let Some(error) = self.filter_error.as_deref() {
-            ui.colored_label(ui.visuals().error_fg_color, error);
-        }
         self.selection_outside_results(ui);
+    }
+
+    fn conversation_actions(&mut self, ui: &mut Ui) {
+        let Some(conversation) = &self.conversation else {
+            return;
+        };
+        if conversation.key.protocol() == Protocol::Tcp
+            && ui
+                .toggle_value(&mut self.tcp_flow.open, "TCP graph")
+                .changed()
+            && self.tcp_flow.open
+        {
+            self.conversation_panel.close();
+        }
+        if self.conversation_visit.is_none()
+            && ui.small_button("Remove conversation filter").clicked()
+        {
+            self.use_conversation(ui.ctx(), None);
+        }
     }
 
     fn recovery_actions(&mut self, ui: &mut Ui) {
@@ -265,7 +334,7 @@ impl Viewer {
         if applied.ordinal_index(selected).is_some() {
             return;
         }
-        let first = applied.result.rows.first().map(|row| row.header.row);
+        let first = self.row_at(0).map(|row| row.header.row);
         ui.horizontal_wrapped(|ui| {
             ui.weak(format!("Packet {} is outside the match set", selected + 1));
             if let Some(first) = first
@@ -300,10 +369,10 @@ impl Viewer {
         )
     }
 
-    pub(super) fn use_field_filter(&mut self, ctx: &Context, action: FieldFilter) {
+    pub(super) fn use_field_filter(&mut self, ctx: &Context, action: inspect::FieldFilter) {
         let expression = match action {
-            FieldFilter::Add(expression) => expression,
-            FieldFilter::Replace(expression) => {
+            inspect::FieldFilter::Add(expression) => expression,
+            inspect::FieldFilter::Replace(expression) => {
                 let query = self.filter_basis().replace_criteria(expression);
                 self.endpoint.clear();
                 self.display_filter = query.display().to_owned();
@@ -382,11 +451,7 @@ impl Viewer {
         });
         self.conversation_panel
             .highlight(self.conversation.as_ref().map(|active| active.key));
-        self.generation += 1;
-        self.set_page(0);
-        if let Some(ordinal) = self.selected {
-            self.reveal(ordinal);
-        }
+        self.reorder_packets();
     }
 
     fn restore_filter_editor(&mut self) {
@@ -407,7 +472,69 @@ impl Viewer {
         self.refresh_results();
     }
 
+    pub(super) fn visit_conversation(
+        &mut self,
+        ctx: &Context,
+        key: ConversationKey,
+        scope: ConversationScope,
+    ) {
+        let query = self.filter_basis().with_conversation(Some((key, scope)));
+        let origin = self
+            .conversation_visit
+            .is_none()
+            .then(|| Box::new(VisitOrigin::capture(self)));
+        self.start_filter(ctx, query, origin);
+    }
+
+    pub(super) fn return_from_conversation(&mut self) {
+        let Some(visit) = self.conversation_visit.take() else {
+            return;
+        };
+        self.filter_job = None;
+        self.filtered = visit.checkpoint.applied;
+        self.previous_filter = visit.previous_filter;
+        self.conversation_panel = visit.panel;
+        self.tcp_flow = visit.graph;
+        self.conversation_panel.open = visit.origin.panel_open;
+        self.tcp_flow.open = visit.origin.graph_open;
+        self.endpoint = visit.origin.endpoint;
+        self.display_filter = visit.origin.display;
+        self.filter_error = visit.origin.error;
+        self.inspector = visit.origin.inspector;
+        self.order.sort = visit.origin.sort;
+        visit.checkpoint.location.restore(self);
+        self.refresh_results();
+        self.set_page(visit.origin.page);
+        self.restore_scroll = Some(visit.origin.scroll_offset);
+    }
+
+    fn accept_visit(
+        &mut self,
+        origin: Box<VisitOrigin>,
+        next: AppliedFilter,
+        location: FilterLocation,
+    ) {
+        let previous_filter = self.previous_filter.take();
+        let checkpoint = FilterCheckpoint {
+            applied: self.filtered.take(),
+            location,
+        };
+        self.filtered = Some(next);
+        self.conversation_visit = Some(ConversationVisit {
+            origin,
+            checkpoint,
+            previous_filter,
+            panel: std::mem::take(&mut self.conversation_panel),
+            graph: std::mem::take(&mut self.tcp_flow),
+        });
+        self.refresh_results();
+    }
+
     pub(super) fn request_filter(&mut self, ctx: &Context, query: Filter) {
+        self.start_filter(ctx, query, None);
+    }
+
+    fn start_filter(&mut self, ctx: &Context, query: Filter, visit: Option<Box<VisitOrigin>>) {
         let Some(index) = self.index.clone() else {
             return;
         };
@@ -437,6 +564,7 @@ impl Viewer {
             FilterRequest {
                 query,
                 location: FilterLocation::capture(self),
+                visit,
             },
             start(&JOBS, ctx, Duration::from_secs(90), move |cancel| {
                 capture.filter(&index, &requested, cancel)
@@ -455,13 +583,15 @@ impl Viewer {
                 return;
             }
         };
-        self.accept_filter(
-            Some(AppliedFilter {
-                query: request.query,
-                result,
-            }),
-            request.location,
-        );
+        let next = AppliedFilter {
+            query: request.query,
+            result,
+        };
+        if let Some(origin) = request.visit {
+            self.accept_visit(origin, next, request.location);
+        } else {
+            self.accept_filter(Some(next), request.location);
+        }
     }
 }
 
@@ -470,8 +600,7 @@ mod tests {
     use super::*;
     use std::{io::Write, sync::atomic::AtomicBool};
 
-    #[test]
-    fn undo_restores_applied_query_coverage_and_source_selection() {
+    fn empty_capture() -> Viewer {
         let mut source = tempfile::Builder::new().suffix(".pcap").tempfile().unwrap();
         source
             .write_all(&[
@@ -479,7 +608,12 @@ mod tests {
                 0, 0,
             ])
             .unwrap();
-        let mut view = Viewer::load(source.path(), &AtomicBool::new(false)).unwrap();
+        Viewer::load(source.path(), &AtomicBool::new(false)).unwrap()
+    }
+
+    #[test]
+    fn undo_restores_applied_query_coverage_and_source_selection() {
+        let mut view = empty_capture();
         view.select(1, false);
         view.range = Some(1..7);
         view.brushed = Some([500_000_000, 6_100_000_000]);
@@ -526,5 +660,83 @@ mod tests {
             ("443", "tcp")
         );
         assert!(view.filter_error.is_none() && view.previous_filter.is_none());
+    }
+
+    #[test]
+    fn returning_from_conversation_restores_the_results_and_prior_undo() {
+        use little_clip_core::engineering::packets::{Endpoint, ProtocolFields};
+
+        let mut view = empty_capture();
+        let query = Filter::default().with_text("443", "tcp");
+        let result = || Filtered {
+            rows: Vec::new(),
+            scanned: 64,
+            scope_size: 100,
+        };
+        view.accept_filter(
+            Some(AppliedFilter {
+                query: query.clone(),
+                result: result(),
+            }),
+            FilterLocation::capture(&view),
+        );
+        view.select(1, false);
+        view.range = Some(1..7);
+        view.brushed = Some([500_000_000, 6_100_000_000]);
+        view.page = 8192;
+        view.scroll_offset = 140.5;
+        view.order.sort = Some(Sort {
+            column: 5,
+            descending: true,
+        });
+        view.endpoint = "443".to_owned();
+        view.display_filter = "tcp".to_owned();
+        view.conversation_panel.open = true;
+        let origin = Box::new(VisitOrigin::capture(&view));
+        let location = FilterLocation::capture(&view);
+        let (key, _) = ConversationKey::identify(ProtocolFields {
+            protocol: Protocol::Tcp,
+            source: Some(Endpoint::V4("192.0.2.2".parse().unwrap())),
+            destination: Some(Endpoint::V4("192.0.2.10".parse().unwrap())),
+            source_port: Some(2000),
+            destination_port: Some(443),
+            ..Default::default()
+        })
+        .unwrap();
+        let visit_query = query
+            .clone()
+            .with_conversation(Some((key, ConversationScope::new(0..100, None))));
+        view.accept_visit(
+            origin,
+            AppliedFilter {
+                query: visit_query,
+                result: result(),
+            },
+            location,
+        );
+        assert!(!view.conversation_panel.open);
+        view.select(5, false);
+        view.clear_filter();
+        view.tcp_flow.open = true;
+
+        view.return_from_conversation();
+
+        assert!(view.filtered.as_ref().is_some_and(|applied| {
+            applied.query == query
+                && applied.result.scanned == 64
+                && applied.result.scope_size == 100
+        }));
+        assert_eq!(
+            (view.selected, view.range.clone(), view.brushed),
+            (Some(1), Some(1..7), Some([500_000_000, 6_100_000_000]))
+        );
+        assert_eq!((view.page, view.restore_scroll), (8192, Some(140.5)));
+        assert_eq!(
+            view.order.sort.map(|sort| (sort.column, sort.descending)),
+            Some((5, true))
+        );
+        assert!(view.conversation_panel.open && !view.tcp_flow.open);
+        view.undo_filter();
+        assert!(view.filtered.is_none());
     }
 }
