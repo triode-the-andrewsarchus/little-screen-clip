@@ -210,10 +210,15 @@ pub(super) fn paint_raw_center(
     paint_trace_curves(
         &painter, plot_rect, plot, &x_mapped, xmin, xmax, ymin, ymax, state,
     );
-    paint_axis_labels(&painter, plot_rect, xmin, xmax, ymin, ymax, log_x, colors);
-    hover_readout(
-        ui, &painter, plot_rect, plot, &x_mapped, xmin, xmax, log_x, state, colors,
-    )
+    let range = |a, b, offset, size| {
+        let middle = (a + b) * 0.5 - f64::from(offset / (size * state.zoom)) * (b - a);
+        let half = (b - a) * 0.5 / f64::from(state.zoom);
+        (middle - half, middle + half)
+    };
+    let (left, right) = range(xmin, xmax, state.pan.x, plot_rect.width());
+    let (bottom, top) = range(ymin, ymax, -state.pan.y, plot_rect.height());
+    paint_axis_labels(&painter, plot_rect, left, right, bottom, top, log_x, colors);
+    hover_readout(ui, &painter, plot_rect, plot, &x_mapped, xmin, xmax, state)
 }
 
 fn compute_x_mapping(plot: &SpiceRawPlot) -> (Vec<f64>, f64, f64, bool) {
@@ -422,9 +427,7 @@ fn hover_readout(
     x_mapped: &[f64],
     xmin: f64,
     xmax: f64,
-    log_x: bool,
     state: &ViewerState,
-    _colors: WorkbenchColors,
 ) -> String {
     let default_hint = "Drag to pan · scroll to zoom · hover waveforms for readout".to_string();
     let Some(pos) = super::super::ui::preview_hovered(ui, plot_rect)
@@ -433,20 +436,16 @@ fn hover_readout(
     else {
         return default_hint;
     };
-    if x_mapped.is_empty() {
+    let center = plot_rect.center() + state.pan;
+    let u = (pos.x - center.x) / (plot_rect.width() * state.zoom) + 0.5;
+    if !(0.0..=1.0).contains(&u) {
         return default_hint;
     }
-    let center = plot_rect.center() + state.pan;
-    let u = ((pos.x - center.x) / (plot_rect.width() * state.zoom) + 0.5).clamp(0.0, 1.0);
-    let target_x = xmin + f64::from(u) * (xmax - xmin);
-    let idx = x_mapped
-        .partition_point(|&v| v < target_x)
-        .min(x_mapped.len() - 1);
-    let x_actual = if log_x {
-        10_f64.powf(x_mapped[idx])
-    } else {
-        x_mapped[idx]
+    let target_x = xmin + f64::from(u) * (xmax - xmin).max(1e-12);
+    let Some(idx) = nearest_sample(x_mapped, target_x) else {
+        return default_hint;
     };
+    let x_actual = plot.x_values[idx];
 
     let sx = map_point(
         plot_rect,
@@ -485,5 +484,27 @@ fn hover_readout(
         format!("{}={x_actual:.4e}", plot.x_name)
     } else {
         format!("{}={x_actual:.4e} · {}", plot.x_name, samples.join("  "))
+    }
+}
+
+fn nearest_sample(values: &[f64], target: f64) -> Option<usize> {
+    values
+        .iter()
+        .enumerate()
+        .filter(|(_, value)| value.is_finite())
+        .min_by(|(_, a), (_, b)| (*a - target).abs().total_cmp(&(*b - target).abs()))
+        .map(|(index, _)| index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hover_selects_nearest_sample_across_descending_and_restarted_sweeps() {
+        let values = [3.0, 1.0, f64::NAN, -4.0, 4.0, 0.0];
+        assert_eq!(nearest_sample(&values, 2.5), Some(0));
+        assert_eq!(nearest_sample(&values, 0.4), Some(5));
+        assert_eq!(nearest_sample(&[f64::NAN], 1.0), None);
     }
 }
