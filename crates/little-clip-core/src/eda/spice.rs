@@ -2153,6 +2153,24 @@ Binary:
     }
 
     #[test]
+    fn ngspice_binary_operating_point_preserves_signed_current_and_both_voltages() {
+        // Header and row from ngspice 47 for a 4 V two-resistor divider.
+        let mut raw = b"Title: * inspection fixture: two-resistor divider\nCommand: ngspice-47\nPlotname: Operating Point\nFlags: real\nNo. Variables: 3\nNo. Points: 1       \nVariables:\n\t0\tv(in)\tvoltage\n\t1\tv(out)\tvoltage\n\t2\ti(v1)\tcurrent\nBinary:\n".to_vec();
+        for value in [4.0_f64, 2.0, -0.002] {
+            raw.extend_from_slice(&value.to_ne_bytes());
+        }
+        let doc = SpiceRawDocument::parse(&raw, &AtomicBool::new(false)).unwrap();
+        let plot = doc.primary().unwrap();
+        let values: Vec<_> = plot
+            .traces
+            .iter()
+            .map(|trace| (trace.name.as_str(), trace.samples()[0].value))
+            .collect();
+        assert_eq!(values, [("v(in)", 4.0), ("v(out)", 2.0), ("i(v1)", -0.002)]);
+        assert!(plot.x_range.is_none());
+    }
+
+    #[test]
     fn dc_sweep_preserves_negative_axis_values() {
         let header = "Title: Sweep\nPlotname: DC transfer characteristic\nFlags: real\nNo. Variables: 2\nNo. Points: 3\nVariables:\n0 v-sweep voltage\n1 V(out) voltage\n";
         let cancel = AtomicBool::new(false);
