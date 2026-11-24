@@ -1,15 +1,13 @@
 //! KiCad interactive viewer panels for `.kicad_pcb`, `.kicad_sch`, `.kicad_mod`,
 //! `.kicad_sym`, `.gbrjob`, and `.kicad_pro`.
 
-use super::{ViewerState, ensure_texture_from_result, paint_raster_canvas};
-use crate::ui_appearance::WorkbenchColors;
+use super::ViewerState;
 use egui::{Color32, Ui, vec2};
 use little_clip_core::eda::kicad::{
     GerberJobDocument, KicadFootprintDocument, KicadPcbDocument, KicadProjectDocument,
     KicadSchematicDocument, KicadSymbolEntry, KicadSymbolLibDocument, PcbLayerBucket,
     project::stackup_layer_rgba,
 };
-use std::sync::atomic::AtomicBool;
 
 pub(super) fn render_pcb_details(ui: &mut Ui, pcb: &KicadPcbDocument, state: &mut ViewerState) {
     let dims = pcb.outline_mm.unwrap_or([
@@ -49,7 +47,6 @@ pub(super) fn render_pcb_details(ui: &mut Ui, pcb: &KicadPcbDocument, state: &mu
                 } else {
                     state.pcb_layers.remove(&bucket);
                 }
-                state.raster = None;
             }
         });
     }
@@ -228,7 +225,6 @@ fn render_symbol_list(
         if ui.selectable_label(selected, label).clicked() && !selected {
             state.selected_symbol = idx;
             state.selected_unit = sym.units[0];
-            state.raster = None;
         }
     }
 }
@@ -246,7 +242,6 @@ fn render_selected_symbol_info(ui: &mut Ui, entry: &KicadSymbolEntry, state: &mu
                     && state.selected_unit != unit
                 {
                     state.selected_unit = unit;
-                    state.raster = None;
                 }
             }
         });
@@ -368,99 +363,4 @@ pub(super) fn render_project_details(ui: &mut Ui, proj: &KicadProjectDocument) {
             ui.label(format!("{k} = {v}"));
         }
     }
-}
-
-pub(super) fn paint_pcb_center(
-    ui: &mut Ui,
-    rect: egui::Rect,
-    pcb: &KicadPcbDocument,
-    state: &mut ViewerState,
-    colors: WorkbenchColors,
-) -> Option<[f64; 2]> {
-    if state.raster.is_none() {
-        ensure_texture_from_result(
-            ui.ctx(),
-            "kicad-pcb",
-            pcb.render_layers([1400, 1000], &state.pcb_layers, &AtomicBool::new(false)),
-            state,
-        );
-    }
-    paint_raster_canvas(ui, rect, pcb.bounds_mm, true, state, colors)
-}
-
-pub(super) fn paint_schematic_center(
-    ui: &mut Ui,
-    rect: egui::Rect,
-    sch: &KicadSchematicDocument,
-    state: &mut ViewerState,
-    colors: WorkbenchColors,
-) -> Option<[f64; 2]> {
-    if state.raster.is_none() {
-        ensure_texture_from_result(
-            ui.ctx(),
-            "kicad-sch",
-            sch.render_thumbnail([1400, 1000], &AtomicBool::new(false)),
-            state,
-        );
-    }
-    paint_raster_canvas(ui, rect, sch.bounds_mm, true, state, colors)
-}
-
-pub(super) fn paint_footprint_center(
-    ui: &mut Ui,
-    rect: egui::Rect,
-    fp: &KicadFootprintDocument,
-    state: &mut ViewerState,
-    colors: WorkbenchColors,
-) -> Option<[f64; 2]> {
-    if state.raster.is_none() {
-        ensure_texture_from_result(
-            ui.ctx(),
-            "kicad-mod",
-            fp.render_thumbnail([1024, 1024], &AtomicBool::new(false)),
-            state,
-        );
-    }
-    paint_raster_canvas(ui, rect, fp.bounds_mm, true, state, colors)
-}
-
-pub(super) fn paint_symbol_lib_center(
-    ui: &mut Ui,
-    rect: egui::Rect,
-    lib: &KicadSymbolLibDocument,
-    state: &mut ViewerState,
-    colors: WorkbenchColors,
-) {
-    if state.raster.is_none() {
-        ensure_texture_from_result(
-            ui.ctx(),
-            "kicad-sym",
-            lib.render_symbol_thumbnail(
-                state.selected_symbol,
-                state.selected_unit,
-                [1024, 1024],
-                &AtomicBool::new(false),
-            ),
-            state,
-        );
-    }
-    paint_raster_canvas(ui, rect, [-10.0, -10.0, 10.0, 10.0], true, state, colors);
-}
-
-pub(super) fn paint_gbrjob_center(
-    ui: &mut Ui,
-    rect: egui::Rect,
-    job: &GerberJobDocument,
-    state: &mut ViewerState,
-    colors: WorkbenchColors,
-) {
-    if state.raster.is_none() {
-        ensure_texture_from_result(
-            ui.ctx(),
-            "kicad-gbrjob",
-            job.render_thumbnail([1024, 700], &AtomicBool::new(false)),
-            state,
-        );
-    }
-    paint_raster_canvas(ui, rect, [0.0, 0.0, 100.0, 60.0], true, state, colors);
 }

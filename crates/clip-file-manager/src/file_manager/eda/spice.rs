@@ -1,14 +1,13 @@
 //! Interactive viewer panels for SPICE netlists (`.cir`, `.sp`, `.spice`),
 //! SPICE/LTspice simulation waveforms (`.raw`), and LTspice plot settings (`.plt`).
 
-use super::{ViewerState, ensure_texture_from_result, paint_raster_canvas};
+use super::ViewerState;
 use crate::ui_appearance::WorkbenchColors;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Ui, pos2, vec2};
 use little_clip_core::eda::spice::{
     LtspicePlotDocument, RawAnalysisKind, SpiceNetlistDocument, SpiceRawDocument, SpiceRawPlot,
     TRACE_PALETTE,
 };
-use std::sync::atomic::AtomicBool;
 
 pub(super) fn render_netlist_details(
     ui: &mut Ui,
@@ -178,24 +177,6 @@ pub(super) fn render_plt_details(ui: &mut Ui, plt: &LtspicePlotDocument) {
             ui.label(tr);
         }
     }
-}
-
-pub(super) fn paint_plt_center(
-    ui: &mut Ui,
-    rect: Rect,
-    plt: &LtspicePlotDocument,
-    state: &mut ViewerState,
-    colors: WorkbenchColors,
-) {
-    if state.raster.is_none() {
-        ensure_texture_from_result(
-            ui.ctx(),
-            "eda-ltspice-plt",
-            plt.render_thumbnail([1024, 520], &AtomicBool::new(false)),
-            state,
-        );
-    }
-    paint_raster_canvas(ui, rect, [0.0, 0.0, 100.0, 50.0], true, state, colors);
 }
 
 pub(super) fn paint_raw_center(
