@@ -46,8 +46,9 @@ pub(super) fn controls(
     available: bool,
 ) -> bool {
     ui.selectable_value(projection, Projection::Vswr, "VSWR");
+    ui.separator();
     let open = *enabled && available && primary(*projection);
-    if !ui.selectable_label(open, "Antenna").clicked() {
+    if !ui.selectable_label(open, "Antenna analysis").clicked() {
         return false;
     }
     *enabled = !open;
@@ -201,6 +202,7 @@ fn smith_chart(
             marker.label,
             marker.color,
             marker.exact,
+            marker.label == "A",
         );
     }
     let pointer = hit.hover_pos()?;

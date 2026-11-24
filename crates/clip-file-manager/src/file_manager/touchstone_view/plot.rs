@@ -546,7 +546,7 @@ impl Smith {
     }
 
     pub fn mark(&self, painter: &Painter, value: Complex64, label: &str, color: Color32) {
-        self.mark_sample(painter, value, label, color, true);
+        self.mark_sample(painter, value, label, color, true, false);
     }
 
     pub fn mark_sample(
@@ -556,16 +556,22 @@ impl Smith {
         label: &str,
         color: Color32,
         exact: bool,
+        left: bool,
     ) {
         let point = self.screen(value);
         if exact {
-            painter.circle_filled(point, 3.2, color);
+            painter.circle_filled(point, if left { 5.0 } else { 3.2 }, color);
         } else {
-            painter.circle_stroke(point, 3.6, Stroke::new(1.4, color));
+            painter.circle_stroke(point, if left { 5.2 } else { 3.6 }, Stroke::new(1.4, color));
         }
+        let (offset, alignment) = if left {
+            (vec2(-8.0, -4.0), Align2::RIGHT_BOTTOM)
+        } else {
+            (vec2(6.0, -2.0), Align2::LEFT_BOTTOM)
+        };
         painter.text(
-            point + vec2(5.0, -2.0),
-            Align2::LEFT_BOTTOM,
+            point + offset,
+            alignment,
             label,
             FontId::monospace(11.0),
             color,

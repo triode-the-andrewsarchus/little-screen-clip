@@ -288,12 +288,12 @@ fn marker_readout(
                 });
         }
         if let Some(reference) = reference {
+            ui.weak(format!("{reference} Ω ref"));
             ui.monospace(antenna::readout(
                 sample.frequency_hz,
                 sample.value,
                 reference,
-            ))
-            .on_hover_text(format!("Reference impedance {reference} Ω"));
+            ));
             return;
         }
         let value = projection.marker_value(sample);
