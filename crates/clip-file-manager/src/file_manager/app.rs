@@ -52,6 +52,7 @@ impl DropDestination {
 struct FileManagerApp {
     vector_runtime: Option<clip_ui::vectors::Runtime>,
     map_runtime: Option<super::geography::gpu::Runtime>,
+    embroidery_runtime: Option<super::embroidery::gpu::Runtime>,
     browser: FileManager,
     viewers: super::viewers::Viewers,
     external: super::external::Launcher,
@@ -83,6 +84,10 @@ impl FileManagerApp {
             .gl
             .as_ref()
             .map(|gl| super::geography::gpu::Runtime::install(ctx, gl));
+        let embroidery_runtime = cc
+            .gl
+            .as_ref()
+            .map(|gl| super::embroidery::gpu::Runtime::install(ctx, gl));
         let config = AppConfig::load();
         ctx.data_mut(|data| {
             data.insert_temp(
@@ -146,6 +151,7 @@ impl FileManagerApp {
         Self {
             vector_runtime,
             map_runtime,
+            embroidery_runtime,
             browser,
             viewers,
             pad_studio: None,
@@ -709,6 +715,10 @@ impl FileManagerApp {
 
 impl eframe::App for FileManagerApp {
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let (Some(runtime), Some(gl)) = (&mut self.embroidery_runtime, gl) {
+            // SAFETY: eframe retains this host's owning current context through on_exit.
+            unsafe { runtime.destroy(gl) };
+        }
         if let (Some(runtime), Some(gl)) = (&mut self.map_runtime, gl) {
             // SAFETY: eframe retains this host's owning current context through on_exit.
             unsafe {
@@ -946,6 +956,7 @@ mod media_view_removal_tests {
         let mut app = FileManagerApp {
             vector_runtime: None,
             map_runtime: None,
+            embroidery_runtime: None,
             browser: FileManager::default(),
             viewers: super::super::viewers::Viewers::default(),
             external: Default::default(),
