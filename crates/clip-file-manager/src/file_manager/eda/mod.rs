@@ -238,14 +238,12 @@ impl Viewer {
 
         let layout = StudioPanelLayout::default().with_left().allocate(ui);
         if let Some(left) = layout.left {
-            ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
-                ui.set_clip_rect(left.intersect(ui.clip_rect()));
+            StudioPanelLayout::show_region(ui, left, |ui| {
                 render_left_panel(ui, &self.doc, &mut self.state, palette);
             });
         }
 
-        ui.scope_builder(egui::UiBuilder::new().max_rect(layout.center), |ui| {
-            ui.set_clip_rect(layout.center.intersect(ui.clip_rect()));
+        StudioPanelLayout::show_region(ui, layout.center, |ui| {
             render_center_panel(ui, &self.doc, &mut self.state, colors);
         });
     }
@@ -333,11 +331,73 @@ fn paint_canvas_document(
         Document::KicadProject(_) | Document::SpiceNetlist(_) => None,
     };
 
+    let zoom_pct = (state.zoom * 100.0).round() as i32;
     raw_readout.unwrap_or_else(|| {
         cursor_mm
-            .map(|[x, y]| format!("Cursor {x:.3}, {y:.3} mm · drag to pan · scroll to zoom"))
-            .unwrap_or_else(|| "Drag to pan · scroll to zoom".into())
+            .map(|[x, y]| {
+                format!(
+                    "Cursor {x:.3}, {y:.3} mm · {zoom_pct}% · drag to pan · scroll to zoom · double-click to fit"
+                )
+            })
+            .unwrap_or_else(|| {
+                format!("{zoom_pct}% · drag to pan · scroll to zoom · double-click to fit")
+            })
     })
+}
+
+const EDA_MIN_ZOOM: f32 = 0.1;
+const EDA_MAX_ZOOM: f32 = 64.0;
+
+fn eda_pan_zoom_canvas(
+    ui: &egui::Ui,
+    rect: Rect,
+    response: &egui::Response,
+    zoom: &mut f32,
+    pan: &mut Vec2,
+) {
+    let max_pan = rect.size() * (*zoom).max(1.0) * 8.0;
+    if response.dragged() {
+        *pan = (*pan + ui.input(|i| i.pointer.delta())).clamp(-max_pan, max_pan);
+    }
+    if response.double_clicked() {
+        *zoom = 1.0;
+        *pan = Vec2::ZERO;
+        return;
+    }
+    if !response.hovered() {
+        return;
+    }
+
+    let wheel_y = crate::ui_ext::wheel_delta_including_start(ui.ctx()).y;
+    let pinch = ui.input(|i| i.zoom_delta());
+    let scroll_y = if wheel_y != 0.0 || (pinch - 1.0).abs() > f32::EPSILON {
+        wheel_y
+    } else {
+        ui.input(|i| i.smooth_scroll_delta.y)
+    };
+    let factor = (scroll_y * 0.004).exp() * pinch;
+    if (factor - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+
+    let prev_zoom = *zoom;
+    let next_zoom = (prev_zoom * factor).clamp(EDA_MIN_ZOOM, EDA_MAX_ZOOM);
+    let ratio = next_zoom / prev_zoom.max(f32::EPSILON);
+    let anchor = ui
+        .input(|i| i.pointer.hover_pos())
+        .unwrap_or_else(|| rect.center())
+        - rect.center();
+    let clamped_pan = rect.size() * next_zoom.max(1.0) * 8.0;
+    *pan = (anchor + (*pan - anchor) * ratio).clamp(-clamped_pan, clamped_pan);
+    *zoom = next_zoom;
+}
+
+fn eda_fit_rect(rect: Rect) -> Rect {
+    if rect.width() > 48.0 && rect.height() > 48.0 {
+        rect.shrink(12.0)
+    } else {
+        rect
+    }
 }
 
 fn render_center_panel(
@@ -364,7 +424,7 @@ fn render_center_panel(
         vec2(ui.available_width(), canvas_h),
         egui::Sense::click_and_drag(),
     );
-    crate::ui_ext::pan_zoom_canvas(ui, rect, &response, &mut state.zoom, &mut state.pan, 32.0);
+    eda_pan_zoom_canvas(ui, rect, &response, &mut state.zoom, &mut state.pan);
 
     let coord_text = paint_canvas_document(ui, rect, &response, doc, state, colors);
     ui.label(coord_text);
@@ -402,8 +462,8 @@ fn paint_raster_canvas(
     if let Some(tex) = &state.raster {
         let tex_size = tex.size_vec2();
         if tex_size.x > 0.0 && tex_size.y > 0.0 {
-            let scale = ((rect.width() - 24.0).max(1.0) / tex_size.x)
-                .min((rect.height() - 24.0).max(1.0) / tex_size.y)
+            let scale = ((rect.width() - 32.0).max(1.0) / tex_size.x)
+                .min((rect.height() - 32.0).max(1.0) / tex_size.y)
                 * state.zoom;
             let drawn = Rect::from_center_size(rect.center() + state.pan, tex_size * scale);
             painter.image(
@@ -414,7 +474,31 @@ fn paint_raster_canvas(
             );
         }
     }
-    cursor_coords(ui, rect, bounds, state.zoom, state.pan, y_down)
+    let cursor_rect = if rect.width() > 40.0 && rect.height() > 40.0 {
+        rect.shrink(4.0)
+    } else {
+        rect
+    };
+    cursor_coords(ui, cursor_rect, bounds, state.zoom, state.pan, y_down)
+}
+
+fn gerber_texture_draw_rect(board_rect: Rect, bounds: [f64; 4], tex_size: Vec2) -> Rect {
+    let span_x = (bounds[2] - bounds[0]).abs();
+    let span_y = (bounds[3] - bounds[1]).abs();
+    let (span_x, span_y) = if span_x < 1e-6 && span_y < 1e-6 {
+        (10.0, 10.0)
+    } else {
+        (span_x.max(0.01), span_y.max(0.01))
+    };
+    let pw = f64::from(tex_size.x).max(1.0);
+    let ph = f64::from(tex_size.y).max(1.0);
+    let pad = (pw.min(ph) * 0.08).clamp(3.0, 18.0);
+    let tex_scale = ((pw - 2.0 * pad).max(1.0) / span_x).min((ph - 2.0 * pad).max(1.0) / span_y);
+    let board_tex_w = (span_x * tex_scale).max(1.0);
+    let board_tex_h = (span_y * tex_scale).max(1.0);
+    let draw_w = board_rect.width().max(1.0) * (pw / board_tex_w) as f32;
+    let draw_h = board_rect.height().max(1.0) * (ph / board_tex_h) as f32;
+    Rect::from_center_size(board_rect.center(), vec2(draw_w, draw_h))
 }
 
 fn paint_gerber_canvas(
@@ -427,16 +511,17 @@ fn paint_gerber_canvas(
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 22, 26));
 
+    let fit_rect = eda_fit_rect(rect);
     let bounds = gerber.bounds_mm;
     let lo = crate::ui_ext::fit_cartesian_point(
-        rect,
+        fit_rect,
         bounds,
         [bounds[0], bounds[3]],
         state.zoom,
         state.pan,
     );
     let hi = crate::ui_ext::fit_cartesian_point(
-        rect,
+        fit_rect,
         bounds,
         [bounds[2], bounds[1]],
         state.zoom,
@@ -444,18 +529,8 @@ fn paint_gerber_canvas(
     );
 
     if let Some(tex) = &state.raster {
-        let scale = ((rect.width() - 24.0).max(1.0) as f64 / (bounds[2] - bounds[0]).max(1e-5))
-            .min((rect.height() - 24.0).max(1.0) as f64 / (bounds[3] - bounds[1]).max(1e-5))
-            * f64::from(state.zoom);
-        let span_w = ((bounds[2] - bounds[0]).max(0.01) * scale) as f32;
-        let span_h = ((bounds[3] - bounds[1]).max(0.01) * scale) as f32;
         let board_rect = Rect::from_min_max(lo, hi);
-        let pad_expand = board_rect
-            .width()
-            .max(span_w)
-            .max(board_rect.height().max(span_h))
-            * 0.088;
-        let draw_rect = board_rect.expand(pad_expand);
+        let draw_rect = gerber_texture_draw_rect(board_rect, bounds, tex.size_vec2());
         painter.image(
             tex.id(),
             draw_rect,
@@ -468,11 +543,11 @@ fn paint_gerber_canvas(
         || state.selected_aperture.is_some()
         || state.selected_tool.is_some()
     {
-        paint_gerber_overlays(&painter, rect, gerber, state, colors);
+        paint_gerber_overlays(&painter, fit_rect, gerber, state, colors);
     }
 
-    paint_origin_crosshair(&painter, rect, bounds, state.zoom, state.pan);
-    cursor_coords(ui, rect, bounds, state.zoom, state.pan, false)
+    paint_origin_crosshair(&painter, fit_rect, rect, bounds, state.zoom, state.pan);
+    cursor_coords(ui, fit_rect, bounds, state.zoom, state.pan, false)
 }
 
 fn is_poly_selected(
@@ -531,8 +606,9 @@ fn paint_pick_place_canvas(
 ) -> Option<[f64; 2]> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 22, 26));
+    let fit_rect = eda_fit_rect(rect);
     let bounds = pos_doc.bounds_mm;
-    paint_origin_crosshair(&painter, rect, bounds, state.zoom, state.pan);
+    paint_origin_crosshair(&painter, fit_rect, rect, bounds, state.zoom, state.pan);
 
     let hover = super::ui::preview_hovered(ui, rect)
         .then(|| ui.input(|i| i.pointer.hover_pos()))
@@ -545,7 +621,7 @@ fn paint_pick_place_canvas(
             continue;
         }
         let center = crate::ui_ext::fit_cartesian_point(
-            rect,
+            fit_rect,
             bounds,
             [item.x_mm, item.y_mm],
             state.zoom,
@@ -598,7 +674,7 @@ fn paint_pick_place_canvas(
     {
         state.selected_placement = Some(idx);
     }
-    cursor_coords(ui, rect, bounds, state.zoom, state.pan, false)
+    cursor_coords(ui, fit_rect, bounds, state.zoom, state.pan, false)
 }
 
 fn paint_hpgl_canvas(
@@ -611,22 +687,23 @@ fn paint_hpgl_canvas(
 ) -> Option<[f64; 2]> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 3.0, Color32::from_rgb(20, 23, 28));
+    let fit_rect = eda_fit_rect(rect);
     let bounds = hpgl.bounds_mm;
-    paint_origin_crosshair(&painter, rect, bounds, state.zoom, state.pan);
+    paint_origin_crosshair(&painter, fit_rect, rect, bounds, state.zoom, state.pan);
 
     let pointer = super::ui::preview_hovered(ui, rect)
         .then(|| ui.input(|i| i.pointer.hover_pos()))
         .flatten();
-    let hit_line = paint_hpgl_segments(&painter, rect, hpgl, state, pointer, colors);
+    let hit_line = paint_hpgl_segments(&painter, fit_rect, hpgl, state, pointer, colors);
     if state.zoom >= 1.4 {
-        paint_hpgl_labels(&painter, rect, hpgl, state);
+        paint_hpgl_labels(&painter, fit_rect, hpgl, state);
     }
     if response.clicked()
         && let Some(line) = hit_line
     {
         state.select_line(line);
     }
-    cursor_coords(ui, rect, bounds, state.zoom, state.pan, false)
+    cursor_coords(ui, fit_rect, bounds, state.zoom, state.pan, false)
 }
 
 fn paint_hpgl_segments(
@@ -964,13 +1041,14 @@ fn index_source_lines(source: &str) -> Vec<std::ops::Range<usize>> {
 
 fn paint_origin_crosshair(
     painter: &egui::Painter,
-    rect: Rect,
+    fit_rect: Rect,
+    clip_rect: Rect,
     bounds: [f64; 4],
     zoom: f32,
     pan: Vec2,
 ) {
-    let origin = crate::ui_ext::fit_cartesian_point(rect, bounds, [0.0, 0.0], zoom, pan);
-    if rect.contains(origin) {
+    let origin = crate::ui_ext::fit_cartesian_point(fit_rect, bounds, [0.0, 0.0], zoom, pan);
+    if clip_rect.contains(origin) {
         let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 145, 175, 110));
         painter.line_segment([origin - vec2(8.0, 0.0), origin + vec2(8.0, 0.0)], stroke);
         painter.line_segment([origin - vec2(0.0, 8.0), origin + vec2(0.0, 8.0)], stroke);
@@ -1180,5 +1258,88 @@ mod tests {
             let mut viewer = Viewer::load(path, &cancel).unwrap();
             render_single_frame(&mut viewer, &palette);
         }
+    }
+
+    #[test]
+    fn narrow_canvas_fits_gerber_and_wheel_zooms_below_100_percent() {
+        // Reproduce mobo-Edge_Cuts.gbr (149x95 mm) in a narrow half-screen canvas.
+        let canvas = Rect::from_min_size(pos2(260.0, 60.0), vec2(480.0, 920.0));
+        let fit = eda_fit_rect(canvas);
+        let bounds = [66.6, -145.0, 215.6, -50.0];
+        let lo = crate::ui_ext::fit_cartesian_point(
+            fit,
+            bounds,
+            [bounds[0], bounds[3]],
+            1.0,
+            Vec2::ZERO,
+        );
+        let hi = crate::ui_ext::fit_cartesian_point(
+            fit,
+            bounds,
+            [bounds[2], bounds[1]],
+            1.0,
+            Vec2::ZERO,
+        );
+        let board_rect = Rect::from_min_max(lo, hi);
+        let draw_rect = gerber_texture_draw_rect(board_rect, bounds, vec2(1024.0, 653.0));
+        assert!(canvas.contains_rect(board_rect));
+        assert!(canvas.contains_rect(draw_rect));
+
+        // Scroll out below 100% and back in above 100% in an interactive viewer frame.
+        let dir = tempfile::tempdir().unwrap();
+        let gbr = dir.path().join("wide-Edge_Cuts.gbr");
+        std::fs::write(
+            &gbr,
+            "%MOMM*%\n%FSLAX46Y46*%\n%ADD10C,0.050000*%\nD10*\nX66600000Y-145000000D02*\nX215600000Y-50000000D01*\nM02*\n",
+        )
+        .unwrap();
+        let mut viewer = Viewer::load(&gbr, &AtomicBool::new(false)).unwrap();
+        let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
+        let ctx = egui::Context::default();
+        let pointer = pos2(520.0, 480.0);
+        let run_events = |viewer: &mut Viewer, events: Vec<egui::Event>| {
+            let mut close = false;
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 1000.0))),
+                events,
+                ..Default::default()
+            };
+            let _ = clip_ui::test_support::run_frame(&ctx, raw, |ctx| {
+                ctx.root_ui(|ui| {
+                    egui::CentralPanel::default()
+                        .show(ui, |ui| viewer.ui(ui, &mut close, &palette));
+                });
+            });
+            assert!(!close);
+        };
+
+        run_events(&mut viewer, vec![egui::Event::PointerMoved(pointer)]);
+        run_events(
+            &mut viewer,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                clip_ui::test_support::scroll(vec2(0.0, -180.0)),
+            ],
+        );
+        assert!(
+            viewer.state.zoom < 1.0 && viewer.state.zoom >= EDA_MIN_ZOOM,
+            "expected zoom < 1.0 after zoom-out scroll, got {}",
+            viewer.state.zoom
+        );
+
+        for _ in 0..3 {
+            run_events(
+                &mut viewer,
+                vec![
+                    egui::Event::PointerMoved(pointer),
+                    clip_ui::test_support::scroll(vec2(0.0, 200.0)),
+                ],
+            );
+        }
+        assert!(
+            viewer.state.zoom > 1.0 && viewer.state.zoom <= EDA_MAX_ZOOM,
+            "expected zoom > 1.0 after zoom-in scroll, got {}",
+            viewer.state.zoom
+        );
     }
 }
