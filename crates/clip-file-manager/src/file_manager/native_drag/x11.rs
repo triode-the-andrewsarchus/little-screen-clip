@@ -190,7 +190,7 @@ impl X11Drag {
 
         if self.release_pointer {
             self.release_pointer = false;
-            clear_egui_drag(ctx, input);
+            super::release_egui_pointer(ctx, input);
         }
     }
 
@@ -390,7 +390,7 @@ impl X11Drag {
             let cancelled = Arc::clone(&outgoing.cancelled);
             let deadline = Instant::now() + DROP_FINISH_TIMEOUT;
             let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
-                verify_and_snapshot(&roots, &guards, deadline, &cancelled)
+                io::verify_and_snapshot(&roots, &guards, deadline, &cancelled)
             });
             outgoing.snapshot_job = Some(receiver);
         }
@@ -532,9 +532,13 @@ impl X11Drag {
         outgoing.last_desired_action = desired_action;
 
         if !ptr.mask.contains(KeyButMask::BUTTON1) {
-            if outgoing.target.is_some() && outgoing.accepted {
-                let target = outgoing.target.expect("checked target");
-                send_xdnd_drop(&self.conn, &self.atoms, target, self.source_window);
+            if let (Some(target), true) = (outgoing.target, outgoing.accepted) {
+                send_xdnd_msg(
+                    &self.conn,
+                    target,
+                    self.atoms.XdndDrop,
+                    [self.source_window, 0, CURRENT_TIME, 0, 0],
+                );
                 outgoing.dropped_at = Some(Instant::now());
             } else {
                 self.cancel_outgoing();
@@ -547,13 +551,17 @@ impl X11Drag {
             if outgoing.last_sent_pos != Some(pos)
                 || outgoing.last_sent_action != Some(desired_action)
             {
-                send_xdnd_position(
+                send_xdnd_msg(
                     &self.conn,
-                    &self.atoms,
                     target,
-                    self.source_window,
-                    pos,
-                    desired_action,
+                    self.atoms.XdndPosition,
+                    [
+                        self.source_window,
+                        0,
+                        pack_xdnd_coords(pos.0, pos.1),
+                        CURRENT_TIME,
+                        desired_action,
+                    ],
                 );
                 outgoing.last_sent_pos = Some(pos);
                 outgoing.last_sent_action = Some(desired_action);
@@ -567,7 +575,12 @@ impl X11Drag {
             return;
         }
         if let Some(old) = prev {
-            send_xdnd_leave(&self.conn, &self.atoms, old, self.source_window);
+            send_xdnd_msg(
+                &self.conn,
+                old,
+                self.atoms.XdndLeave,
+                [self.source_window, 0, 0, 0, 0],
+            );
         }
         if let Some(outgoing) = &mut self.outgoing {
             outgoing.target = next;
@@ -577,7 +590,18 @@ impl X11Drag {
             outgoing.last_sent_action = None;
         }
         if let Some(target) = next {
-            send_xdnd_enter(&self.conn, &self.atoms, target, self.source_window);
+            send_xdnd_msg(
+                &self.conn,
+                target,
+                self.atoms.XdndEnter,
+                [
+                    self.source_window,
+                    xdnd_enter_flags(target.version),
+                    self.atoms.TEXT_URI_LIST,
+                    0,
+                    0,
+                ],
+            );
         }
     }
 
@@ -588,7 +612,12 @@ impl X11Drag {
                 self.send_selection_notify(&req, x11rb::NONE);
             }
             if let Some(target) = outgoing.target {
-                send_xdnd_leave(&self.conn, &self.atoms, target, self.source_window);
+                send_xdnd_msg(
+                    &self.conn,
+                    target,
+                    self.atoms.XdndLeave,
+                    [self.source_window, 0, 0, 0, 0],
+                );
             }
             self.events.push(Event::Refresh);
         }
@@ -640,23 +669,24 @@ impl X11Drag {
         None
     }
 
+    fn read_u32_prop(&self, win: Window, prop: Atom, kind: impl Into<Atom>) -> Option<u32> {
+        self.conn
+            .get_property(false, win, prop, kind, 0, 1)
+            .ok()?
+            .reply()
+            .ok()?
+            .value32()?
+            .next()
+    }
+
     fn inspect_xdnd_target(&self, win: Window) -> Option<XdndTarget> {
         let proxy = self.valid_xdnd_proxy(win);
         let destination = proxy.unwrap_or(win);
-        let reply = self
-            .conn
-            .get_property(
-                false,
-                destination,
-                self.atoms.XdndAware,
-                xproto::GetPropertyType::ANY,
-                0,
-                1,
-            )
-            .ok()?
-            .reply()
-            .ok()?;
-        let raw_version = reply.value32()?.next()?;
+        let raw_version = self.read_u32_prop(
+            destination,
+            self.atoms.XdndAware,
+            xproto::GetPropertyType::ANY,
+        )?;
         let version = u8::try_from(raw_version.min(5)).ok()?;
         (version >= 3).then_some(XdndTarget {
             window: win,
@@ -666,25 +696,11 @@ impl X11Drag {
     }
 
     fn valid_xdnd_proxy(&self, win: Window) -> Option<Window> {
-        let proxy = self
-            .conn
-            .get_property(false, win, self.atoms.XdndProxy, AtomEnum::WINDOW, 0, 1)
-            .ok()?
-            .reply()
-            .ok()?
-            .value32()?
-            .next()?;
+        let proxy = self.read_u32_prop(win, self.atoms.XdndProxy, AtomEnum::WINDOW)?;
         if proxy == x11rb::NONE {
             return None;
         }
-        let back = self
-            .conn
-            .get_property(false, proxy, self.atoms.XdndProxy, AtomEnum::WINDOW, 0, 1)
-            .ok()?
-            .reply()
-            .ok()?
-            .value32()?
-            .next()?;
+        let back = self.read_u32_prop(proxy, self.atoms.XdndProxy, AtomEnum::WINDOW)?;
         (back == proxy).then_some(proxy)
     }
 }
@@ -699,84 +715,8 @@ impl Drop for X11Drag {
     }
 }
 
-fn verify_and_snapshot(
-    roots: &BTreeMap<PathBuf, Option<Identity>>,
-    guards: &HashMap<PathBuf, SourceGuard>,
-    deadline: Instant,
-    cancelled: &AtomicBool,
-) -> SnapshotResult {
-    for guard in guards.values() {
-        if Instant::now() >= deadline {
-            return Err("Desktop source verification timed out".into());
-        }
-        guard.check(cancelled)?;
-    }
-    let entries = io::snapshot(roots, deadline, cancelled)?;
-    for guard in guards.values() {
-        if Instant::now() >= deadline {
-            return Err("Desktop source verification timed out".into());
-        }
-        guard.check(cancelled)?;
-    }
-    Ok(entries)
-}
-
-fn send_xdnd_enter(conn: &RustConnection, atoms: &Atoms, target: XdndTarget, source: Window) {
-    let msg = ClientMessageEvent::new(
-        32,
-        target.window,
-        atoms.XdndEnter,
-        ClientMessageData::from([
-            source,
-            xdnd_enter_flags(target.version),
-            atoms.TEXT_URI_LIST,
-            0,
-            0,
-        ]),
-    );
-    let _ = conn.send_event(false, target.destination, xproto::EventMask::NO_EVENT, msg);
-}
-
-fn send_xdnd_position(
-    conn: &RustConnection,
-    atoms: &Atoms,
-    target: XdndTarget,
-    source: Window,
-    pos: (i16, i16),
-    action: Atom,
-) {
-    let msg = ClientMessageEvent::new(
-        32,
-        target.window,
-        atoms.XdndPosition,
-        ClientMessageData::from([
-            source,
-            0,
-            pack_xdnd_coords(pos.0, pos.1),
-            CURRENT_TIME,
-            action,
-        ]),
-    );
-    let _ = conn.send_event(false, target.destination, xproto::EventMask::NO_EVENT, msg);
-}
-
-fn send_xdnd_leave(conn: &RustConnection, atoms: &Atoms, target: XdndTarget, source: Window) {
-    let msg = ClientMessageEvent::new(
-        32,
-        target.window,
-        atoms.XdndLeave,
-        ClientMessageData::from([source, 0, 0, 0, 0]),
-    );
-    let _ = conn.send_event(false, target.destination, xproto::EventMask::NO_EVENT, msg);
-}
-
-fn send_xdnd_drop(conn: &RustConnection, atoms: &Atoms, target: XdndTarget, source: Window) {
-    let msg = ClientMessageEvent::new(
-        32,
-        target.window,
-        atoms.XdndDrop,
-        ClientMessageData::from([source, 0, CURRENT_TIME, 0, 0]),
-    );
+fn send_xdnd_msg(conn: &RustConnection, target: XdndTarget, msg_type: Atom, data: [u32; 5]) {
+    let msg = ClientMessageEvent::new(32, target.window, msg_type, ClientMessageData::from(data));
     let _ = conn.send_event(false, target.destination, xproto::EventMask::NO_EVENT, msg);
 }
 
@@ -790,27 +730,6 @@ fn dest_property(req: &SelectionRequestEvent) -> Atom {
 
 fn target_matches(target: Option<XdndTarget>, window: Window) -> bool {
     target.is_some_and(|t| t.window == window || t.destination == window)
-}
-
-pub(super) fn clear_egui_drag(ctx: &egui::Context, input: &mut egui::RawInput) {
-    egui::DragAndDrop::clear_payload(ctx);
-    ctx.stop_dragging();
-    let pos = ctx.pointer_latest_pos().unwrap_or_default();
-    let modifiers = input
-        .events
-        .iter()
-        .rev()
-        .find_map(|event| match event {
-            egui::Event::ModifiersChanged(modifiers) => Some(*modifiers),
-            _ => None,
-        })
-        .unwrap_or_else(|| ctx.input(|input| input.modifiers));
-    input.events.push(egui::Event::PointerButton {
-        pos,
-        button: egui::PointerButton::Primary,
-        pressed: false,
-        modifiers,
-    });
 }
 
 pub(super) fn is_outside_host(

@@ -272,19 +272,8 @@ impl Dispatch<wl_data_source::WlDataSource, ()> for State {
                 let deadline = Instant::now() + Duration::from_secs(10);
                 let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
                     if movable {
-                        for guard in guards.values() {
-                            if Instant::now() >= deadline {
-                                return Err("Desktop source verification timed out".into());
-                            }
-                            guard.check(&cancelled)?;
-                        }
-                        let entries = io::snapshot(&roots, deadline, &cancelled)?;
-                        for guard in guards.values() {
-                            if Instant::now() >= deadline {
-                                return Err("Desktop source verification timed out".into());
-                            }
-                            guard.check(&cancelled)?;
-                        }
+                        let entries =
+                            io::verify_and_snapshot(&roots, &guards, deadline, &cancelled)?;
                         *snapshot.lock().unwrap_or_else(|e| e.into_inner()) = entries;
                     }
                     io::write(fd, bytes, deadline, cancelled, written)

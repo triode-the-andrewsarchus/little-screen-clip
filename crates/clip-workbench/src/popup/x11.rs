@@ -52,12 +52,17 @@ impl MonitorRect {
     }
 }
 
-pub(super) fn discover_placement() -> Result<Placement, String> {
+fn connect_with_atoms() -> Result<(RustConnection, usize, Atoms), String> {
     let (conn, screen_num) = RustConnection::connect(None).map_err(|e| e.to_string())?;
     let atoms = Atoms::new(&conn)
         .map_err(|e| e.to_string())?
         .reply()
         .map_err(|e| e.to_string())?;
+    Ok((conn, screen_num, atoms))
+}
+
+pub(super) fn discover_placement() -> Result<Placement, String> {
+    let (conn, screen_num, atoms) = connect_with_atoms()?;
     let screen = &conn.setup().roots[screen_num];
     let root = screen.root;
 
@@ -70,13 +75,7 @@ pub(super) fn discover_placement() -> Result<Placement, String> {
 }
 
 pub(super) fn focus_existing() {
-    let Ok((conn, screen_num)) = RustConnection::connect(None) else {
-        return;
-    };
-    let Ok(atoms_cookie) = Atoms::new(&conn) else {
-        return;
-    };
-    let Ok(atoms) = atoms_cookie.reply() else {
+    let Ok((conn, screen_num, atoms)) = connect_with_atoms() else {
         return;
     };
     let root = conn.setup().roots[screen_num].root;
@@ -95,13 +94,7 @@ pub(super) fn focus_existing() {
 
 pub(super) fn center_when_mapped(physical_pos: (i32, i32)) {
     std::thread::spawn(move || {
-        let Ok((conn, screen_num)) = RustConnection::connect(None) else {
-            return;
-        };
-        let Ok(atoms_cookie) = Atoms::new(&conn) else {
-            return;
-        };
-        let Ok(atoms) = atoms_cookie.reply() else {
+        let Ok((conn, screen_num, atoms)) = connect_with_atoms() else {
             return;
         };
         let root = conn.setup().roots[screen_num].root;
@@ -242,12 +235,9 @@ fn find_workbench_window(
     {
         candidates = tree.children;
     }
-    for win in candidates {
-        if matches_workbench_window(conn, win, atoms, expected_pid, require_viewable) {
-            return Some(win);
-        }
-    }
-    None
+    candidates
+        .into_iter()
+        .find(|&win| matches_workbench_window(conn, win, atoms, expected_pid, require_viewable))
 }
 
 fn matches_workbench_window(
