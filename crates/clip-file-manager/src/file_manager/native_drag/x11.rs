@@ -457,39 +457,41 @@ impl X11Drag {
         if msg.type_ == self.atoms.XdndStatus && outgoing.waiting_status {
             outgoing.waiting_status = false;
             let action = data[4];
-            outgoing.accepted_action = if (data[1] & 1) != 0
-                && (action == self.atoms.XdndActionCopy
-                    || outgoing.last_sent_action == Some(action))
-            {
+            let supported = [self.atoms.XdndActionCopy, self.atoms.XdndActionPrivate]
+                .contains(&action)
+                || outgoing.last_sent_action == Some(action);
+            outgoing.accepted_action = if (data[1] & 1) != 0 && supported {
                 action
             } else {
                 x11rb::NONE
             };
-        } else if msg.type_ == self.atoms.XdndFinished
-            && outgoing.dropped_at.is_some()
-            && let Some(mut outgoing) = self.outgoing.take()
+        } else if msg.type_ == self.atoms.XdndFinished && outgoing.dropped_at.is_some() {
+            self.finish_outgoing((data[1] & 1) != 0, data[2]);
+        }
+    }
+
+    fn finish_outgoing(&mut self, success: bool, action: Atom) {
+        let Some(mut outgoing) = self.outgoing.take() else {
+            return;
+        };
+        self.retire_source(&outgoing);
+        let move_action = self.atoms.XdndActionMove;
+        if should_remove_after_finished(
+            outgoing.movable && outgoing.target.is_some_and(|target| target.version >= 5),
+            success,
+            outgoing.written,
+            action == move_action && outgoing.accepted_action == move_action,
+            outgoing
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.is_empty()),
+        ) && let Some(snapshot) = outgoing.snapshot.take()
         {
-            outgoing.cancelled.store(true, Ordering::Relaxed);
-            let _ = self.conn.destroy_window(outgoing.source);
-            let move_action = self.atoms.XdndActionMove;
-            if should_remove_after_finished(
-                outgoing.movable && outgoing.target.is_some_and(|target| target.version >= 5),
-                (data[1] & 1) != 0,
-                outgoing.written,
-                data[2] == move_action && outgoing.accepted_action == move_action,
-                outgoing
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| !snapshot.is_empty()),
-            ) && let Some(snapshot) = outgoing.snapshot.take()
-            {
-                self.events.push(Event::Remove(
-                    outgoing.identities,
-                    snapshot,
-                    outgoing.search_guards,
-                ));
-            }
-            self.events.push(Event::Refresh);
+            self.events.push(Event::Remove(
+                outgoing.identities,
+                snapshot,
+                outgoing.search_guards,
+            ));
         }
     }
 
@@ -639,7 +641,6 @@ impl X11Drag {
 
     fn cancel_outgoing(&mut self) {
         if let Some(mut outgoing) = self.outgoing.take() {
-            outgoing.cancelled.store(true, Ordering::Relaxed);
             for req in outgoing.pending_requests.drain(..) {
                 self.send_selection_notify(&req, x11rb::NONE);
             }
@@ -651,9 +652,14 @@ impl X11Drag {
                     [outgoing.source, 0, 0, 0, 0],
                 );
             }
-            let _ = self.conn.destroy_window(outgoing.source);
-            self.events.push(Event::Refresh);
+            self.retire_source(&outgoing);
         }
+    }
+
+    fn retire_source(&mut self, outgoing: &OutgoingDrag) {
+        outgoing.cancelled.store(true, Ordering::Relaxed);
+        let _ = self.conn.destroy_window(outgoing.source);
+        self.events.push(Event::Refresh);
     }
 
     fn find_xdnd_target(&self, root_x: i16, root_y: i16) -> Option<XdndTarget> {
