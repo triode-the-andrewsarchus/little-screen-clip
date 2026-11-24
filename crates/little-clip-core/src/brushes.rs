@@ -82,6 +82,11 @@ pub fn is_brush_file(path: &Path) -> bool {
     BrushFormat::from_path(path).is_some()
 }
 
+/// Returns whether a leading byte prefix matches a GIMP binary `.gbr` brush header.
+pub fn is_gimp_gbr_header(bytes: &[u8]) -> bool {
+    gimp::is_gimp_header(bytes)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParametricShape {
     Circle,
