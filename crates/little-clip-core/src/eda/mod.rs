@@ -7,6 +7,7 @@ pub mod kicad;
 pub mod ltspice;
 pub mod pick_place;
 mod region;
+pub mod source_compare;
 pub use region::RasterRegion;
 pub mod spice;
 

@@ -146,7 +146,7 @@ impl PcbPrim {
         }
     }
 
-    fn visible_in(&self, region: RasterRegion) -> bool {
+    pub(in crate::eda) fn visible_in(&self, region: RasterRegion) -> bool {
         let mut bounds = None;
         self.extend_bounds(&mut bounds);
         let width = match self {
@@ -161,7 +161,7 @@ impl PcbPrim {
         })
     }
 
-    fn extend_bounds(&self, bounds: &mut Option<[f64; 4]>) {
+    pub(in crate::eda) fn extend_bounds(&self, bounds: &mut Option<[f64; 4]>) {
         match self {
             Self::Segment { a, b, .. } => {
                 update_bounds(bounds, a[0], a[1]);
@@ -1119,7 +1119,7 @@ fn draw_pcb(
     Ok(pixmap_to_thumbnail(pixmap))
 }
 
-fn draw_pcb_prim(
+pub(in crate::eda) fn draw_pcb_prim(
     pixmap: &mut Pixmap,
     prim: &PcbPrim,
     rgba: [u8; 4],
@@ -1522,4 +1522,240 @@ mod tests {
                 .any(|px| px[..3] != [PCB_BG[0], PCB_BG[1], PCB_BG[2]])
         );
     }
+}
+
+pub(in crate::eda) fn comparison_drawing(
+    bytes: &[u8],
+    cancel: &AtomicBool,
+) -> Result<crate::eda::source_compare::Drawing, String> {
+    use crate::eda::source_compare::{Drawing, Geometry, Record};
+
+    let text = std::str::from_utf8(bytes).map_err(|_| "KiCad board is not valid UTF-8")?;
+    let root = parse_sexp(text).map_err(|error| format!("Invalid board: {error}"))?;
+    if !root.has_tag("kicad_pcb") {
+        return Err("Expected a KiCad board".into());
+    }
+    let mut net_names = BoardNetNames::new(&root);
+    let has_inner_copper = collect_pcb_layers(&root)
+        .iter()
+        .filter(|layer| layer.name.ends_with(".Cu"))
+        .count()
+        > 2;
+    let mut drawing = Drawing::default();
+    drawing.warnings.push("Board view covers tracks, vias, pads, footprints and board edges with assigned nets · zone fills, custom pad stacks, silkscreen and copper contacts are outside coverage".into());
+    let mut incomplete = false;
+
+    for (index, node) in root.children.iter().enumerate() {
+        if index.is_multiple_of(128) {
+            check_cancelled(cancel, "Board comparison cancelled")?;
+        }
+        let tag = node.tag().unwrap_or("");
+        match tag {
+            "segment" | "arc" | "via" => {
+                if let Some(record) =
+                    compare_copper(node, tag, net_names.resolve(node), has_inner_copper)
+                {
+                    drawing.push(record)?;
+                } else {
+                    incomplete = true;
+                }
+            }
+            "footprint" | "module" => {
+                incomplete |= compare_footprint(
+                    node,
+                    has_inner_copper,
+                    &mut net_names,
+                    &mut drawing,
+                    cancel,
+                )?;
+            }
+            _ if tag.starts_with("gr_") && node.child_str("layer") == Some("Edge.Cuts") => {
+                let mut prims = Vec::new();
+                collect_graphic_node(node, tag, [0.0; 3], &mut prims);
+                if !prims.is_empty() {
+                    drawing.push(Record::new(
+                        "Board outline".into(),
+                        "outline",
+                        prims.into_iter().map(Geometry::Board).collect(),
+                    ))?;
+                }
+            }
+            _ => {}
+        }
+    }
+    if net_names.unresolved {
+        drawing
+            .warnings
+            .push("Some board net IDs have no decoded name".into());
+    }
+    if incomplete {
+        drawing
+            .warnings
+            .push("Some board objects have incomplete geometry".into());
+    }
+    Ok(drawing)
+}
+
+struct BoardNetNames<'a> {
+    declared: BTreeMap<i64, &'a str>,
+    unresolved: bool,
+}
+
+impl<'a> BoardNetNames<'a> {
+    fn new(root: &'a SExp) -> Self {
+        let declared = root
+            .children_named("net")
+            .filter_map(|entry| Some((entry.int_at(0)?, entry.string_at(1)?)))
+            .collect();
+        Self {
+            declared,
+            unresolved: false,
+        }
+    }
+
+    fn resolve(&mut self, node: &SExp) -> String {
+        let Some(net) = node.get("net") else {
+            return String::new();
+        };
+        match net.atoms().next() {
+            Some(Value::Str(name)) => name.clone(),
+            _ => match net.int_at(0) {
+                Some(0) | None => String::new(),
+                Some(id) => match net.string_at(1).or_else(|| self.declared.get(&id).copied()) {
+                    Some(name) => name.to_owned(),
+                    None => {
+                        self.unresolved = true;
+                        format!("unresolved net {id}")
+                    }
+                },
+            },
+        }
+    }
+}
+
+fn object_layers(node: &SExp) -> Vec<&str> {
+    let mut layers: Vec<_> = node
+        .get("layers")
+        .map(|layers| layers.atoms().filter_map(Value::as_str).collect())
+        .unwrap_or_else(|| node.child_str("layer").into_iter().collect());
+    layers.sort_unstable();
+    layers.dedup();
+    layers
+}
+
+fn net_label(net: &str) -> &str {
+    if net.is_empty() {
+        "No assigned net"
+    } else {
+        net
+    }
+}
+
+fn compare_copper(
+    node: &SExp,
+    tag: &str,
+    net: String,
+    has_inner_copper: bool,
+) -> Option<crate::eda::source_compare::Record> {
+    use crate::eda::source_compare::{Geometry, Record};
+    let mut acc = PcbAccum {
+        has_inner_copper,
+        ..Default::default()
+    };
+    match tag {
+        "segment" => record_track_segment(node, &mut acc),
+        "arc" => record_track_arc(node, &mut acc),
+        _ => record_via(node, &mut acc),
+    }
+    if acc.primitives.is_empty() {
+        return None;
+    }
+    let layers = object_layers(node);
+    let label = if tag == "via" { "Via" } else { "Track" };
+    Some(Record::new(
+        format!("{label} · {} · {}", layers.join(", "), net_label(&net)),
+        (
+            tag,
+            &layers,
+            &net,
+            node.child_f64("width"),
+            node.child_f64("size"),
+            node.child_f64("drill"),
+        ),
+        acc.primitives.into_iter().map(Geometry::Board).collect(),
+    ))
+}
+
+fn compare_footprint(
+    node: &SExp,
+    has_inner_copper: bool,
+    net_names: &mut BoardNetNames<'_>,
+    drawing: &mut crate::eda::source_compare::Drawing,
+    cancel: &AtomicBool,
+) -> Result<bool, String> {
+    use crate::eda::source_compare::{Geometry, Record};
+    let mut incomplete = node.at().is_none();
+    let (reference, value) = footprint_ref_and_value(node);
+    let (x, y, angle) = node.at().unwrap_or_default();
+    let layer = node.child_str("layer").unwrap_or("");
+    let lib = node.string_at(0).unwrap_or("");
+    let mark = eda_view::vector::Prim::Circle {
+        center: [x, y],
+        radius: 0.45,
+        fill: false,
+        stroke: 0.15,
+    };
+    drawing.push(Record::new(
+        format!("Footprint {reference} · {value}"),
+        (
+            "footprint",
+            &reference,
+            &value,
+            lib,
+            layer,
+            angle.rem_euclid(360.0),
+        ),
+        vec![Geometry::Scene(mark)],
+    ))?;
+    for (pad_index, pad) in node.children_named("pad").enumerate() {
+        if pad_index.is_multiple_of(128) {
+            check_cancelled(cancel, "Board comparison cancelled")?;
+        }
+        let mut prims = Vec::new();
+        let Some(info) = collect_pad(pad, [x, y, angle], has_inner_copper, &mut prims) else {
+            incomplete = true;
+            continue;
+        };
+        let layers = object_layers(pad);
+        let net = net_names.resolve(pad);
+        let rotation = pad.at().map(|(_, _, a)| a.rem_euclid(360.0));
+        let label = format!("Pad {reference}.{} · {}", info.number, net_label(&net));
+        let geometry = if prims.is_empty() {
+            vec![Geometry::Scene(eda_view::vector::Prim::Circle {
+                center: info.pos_mm,
+                radius: 0.22,
+                fill: true,
+                stroke: 0.0,
+            })]
+        } else {
+            prims.into_iter().map(Geometry::Board).collect()
+        };
+        drawing.push(Record::new(
+            label,
+            (
+                "pad",
+                &reference,
+                info.number,
+                info.pad_type,
+                info.shape,
+                layers,
+                net,
+                rotation,
+                info.size_mm,
+                pad.child_f64("roundrect_rratio"),
+            ),
+            geometry,
+        ))?;
+    }
+    Ok(incomplete)
 }

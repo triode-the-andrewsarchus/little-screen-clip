@@ -10,8 +10,9 @@ use egui::{Color32, Rect, TextureHandle, Ui, Vec2, pos2, vec2};
 use little_clip_core::{
     BackgroundJobs, ImageThumbnail,
     eda::{
-        RasterRegion,
+        EdaFormat, RasterRegion,
         comparison::{ArtworkComparison, ArtworkRaster, compare_artwork, read_artwork},
+        source_compare::{SourceComparison, compare_sources},
     },
 };
 use std::{
@@ -45,15 +46,47 @@ pub(super) struct View {
 
 type OverviewKey = ([usize; 2], u16);
 
+enum Comparison {
+    Fabrication(ArtworkComparison),
+    Source(SourceComparison),
+}
+
+impl Comparison {
+    fn frame(&self) -> ([f64; 4], bool) {
+        match self {
+            Self::Fabrication(result) => (result.bounds_mm, false),
+            Self::Source(result) => (result.bounds, true),
+        }
+    }
+
+    fn overview(&self, cancel: &std::sync::atomic::AtomicBool) -> Result<ArtworkRaster, String> {
+        match self {
+            Self::Fabrication(result) => result.render_overview(cancel),
+            Self::Source(result) => result.render_overview(cancel),
+        }
+    }
+
+    fn detail(
+        &self,
+        region: RasterRegion,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<ArtworkRaster, String> {
+        match self {
+            Self::Fabrication(result) => result.render_region(region, cancel),
+            Self::Source(result) => result.render_region(region, cancel),
+        }
+    }
+}
+
 struct Prepared {
     overview: ArtworkRaster,
-    comparison: ArtworkComparison,
+    comparison: Comparison,
     roles: [String; 2],
 }
 
 struct Display {
     overview: Textures,
-    comparison: Arc<ArtworkComparison>,
+    comparison: Arc<Comparison>,
     roles: [String; 2],
 }
 
@@ -89,48 +122,10 @@ impl View {
         pair: [usize; 2],
         files: [&FileSource; 2],
         names: [&str; 2],
+        format: EdaFormat,
     ) {
-        ui.horizontal_wrapped(|ui| {
-            for (mode, label) in [
-                (Mode::Changes, "Changes"),
-                (Mode::Overlay, "Overlay"),
-                (Mode::A, "A"),
-                (Mode::B, "B"),
-            ] {
-                clip_ui::buttons::choice(ui, &mut self.mode, mode, label);
-            }
-            match self.mode {
-                Mode::Overlay => {
-                    ui.add(egui::Slider::new(&mut self.opacity, 0.0..=1.0).text("B opacity"));
-                }
-                Mode::Changes => {
-                    ui.checkbox(&mut self.only_changes, "Changes only");
-                }
-                _ => {}
-            }
-            egui::ComboBox::from_label("Edge tolerance")
-                .selected_text(if self.tolerance_um == 0 {
-                    "0 µm".to_owned()
-                } else {
-                    format!("{} µm", self.tolerance_um)
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.tolerance_um, 0, "0 µm");
-                    for microns in [10, 25, 50, 100] {
-                        ui.selectable_value(
-                            &mut self.tolerance_um,
-                            microns,
-                            format!("{microns} µm"),
-                        );
-                    }
-                })
-                .response
-                .on_hover_text("Physical edge tolerance. Geometry snaps to a fixed 0.1 µm grid.");
-            if ui.button("Fit").clicked() {
-                self.zoom = 1.0;
-                self.pan = Vec2::ZERO;
-            }
-        });
+        let fabrication = matches!(format, EdaFormat::Gerber | EdaFormat::Excellon);
+        self.controls(ui, fabrication);
         let show_b = ui
             .horizontal_wrapped(|ui| {
                 ui.label(format!("A  {}    B  {}", names[0], names[1]));
@@ -140,9 +135,9 @@ impl View {
             })
             .inner;
         let wanted = (pair, self.tolerance_um);
-        self.update(ui.ctx(), wanted, files);
+        self.update(ui.ctx(), wanted, files, format);
         let Some((_, display)) = self.display.as_ref().filter(|(key, _)| *key == wanted) else {
-            ui.label("Comparing fabrication artwork…");
+            ui.label("Comparing registered artwork…");
             return;
         };
         let display = match display {
@@ -152,20 +147,8 @@ impl View {
                 return;
             }
         };
-        ui.horizontal_wrapped(|ui| {
-            let [a, b] = &display.roles;
-            ui.label(format!("{a} / {b}"));
-            ui.label("Geometry");
-            ui.colored_label(
-                Color32::from_rgb(92, 220, 247),
-                format!("Added {}", area(display.comparison.added_mm2)),
-            );
-            ui.colored_label(
-                Color32::from_rgb(248, 140, 78),
-                format!("Removed {}", area(display.comparison.removed_mm2)),
-            );
-            ui.label(format!("Overview {:.4} mm/px", display.overview.pitch));
-        });
+        let focus = display.describe(ui);
+        let (bounds, y_down) = display.comparison.frame();
         let (rect, response) = ui.allocate_exact_size(
             vec2(
                 ui.available_width(),
@@ -185,7 +168,15 @@ impl View {
         let size = display.overview.images[0].size_vec2();
         let fit = eda::eda_fit_rect(rect).size() / size;
         let scale = fit.x.min(fit.y) * self.zoom;
-        let drawn = Rect::from_center_size(rect.center() + self.pan, size * scale);
+        let texture_size = display.overview.images[0].size().map(|n| n as u32);
+        let mut drawn = Rect::from_center_size(rect.center() + self.pan, size * scale);
+        if let Some(point) = focus
+            && let Some(mapping) = eda::RasterMapping::new(drawn, texture_size, bounds, y_down)
+        {
+            let delta = rect.center() - mapping.screen(point);
+            self.pan += delta;
+            drawn = drawn.translate(delta);
+        }
         let canvas = Canvas {
             mode: if show_b { Mode::B } else { self.mode },
             opacity: self.opacity,
@@ -193,12 +184,7 @@ impl View {
         };
         painter.rect_filled(rect, 0.0, background());
         canvas.paint(&painter, drawn, &display.overview);
-        let Some(mapping) = eda::RasterMapping::new(
-            drawn,
-            display.overview.images[0].size().map(|n| n as u32),
-            display.comparison.bounds_mm,
-            false,
-        ) else {
+        let Some(mapping) = eda::RasterMapping::new(drawn, texture_size, bounds, y_down) else {
             return;
         };
 
@@ -242,7 +228,61 @@ impl View {
         }
     }
 
-    fn update(&mut self, ctx: &egui::Context, wanted: OverviewKey, files: [&FileSource; 2]) {
+    fn controls(&mut self, ui: &mut Ui, fabrication: bool) {
+        ui.horizontal_wrapped(|ui| {
+            for (mode, label) in [
+                (Mode::Changes, "Changes"),
+                (Mode::Overlay, "Overlay"),
+                (Mode::A, "A"),
+                (Mode::B, "B"),
+            ] {
+                clip_ui::buttons::choice(ui, &mut self.mode, mode, label);
+            }
+            match self.mode {
+                Mode::Overlay => {
+                    ui.add(egui::Slider::new(&mut self.opacity, 0.0..=1.0).text("B opacity"));
+                }
+                Mode::Changes => {
+                    ui.checkbox(&mut self.only_changes, "Changes only");
+                }
+                _ => {}
+            }
+            if fabrication {
+                egui::ComboBox::from_label("Edge tolerance")
+                    .selected_text(if self.tolerance_um == 0 {
+                        "0 µm".to_owned()
+                    } else {
+                        format!("{} µm", self.tolerance_um)
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.tolerance_um, 0, "0 µm");
+                        for microns in [10, 25, 50, 100] {
+                            ui.selectable_value(
+                                &mut self.tolerance_um,
+                                microns,
+                                format!("{microns} µm"),
+                            );
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "Physical edge tolerance. Geometry snaps to a fixed 0.1 µm grid.",
+                    );
+            }
+            if ui.button("Fit").clicked() {
+                self.zoom = 1.0;
+                self.pan = Vec2::ZERO;
+            }
+        });
+    }
+
+    fn update(
+        &mut self,
+        ctx: &egui::Context,
+        wanted: OverviewKey,
+        files: [&FileSource; 2],
+        format: EdaFormat,
+    ) {
         if self.display.as_ref().is_some_and(|(key, _)| *key == wanted) {
             return;
         }
@@ -263,21 +303,30 @@ impl View {
         self.pending = Some((
             wanted,
             Task::start_unbounded(&GEOMETRY_JOBS, move |cancel| {
-                let [a, b] = files.map(|file| {
-                    file.check()?;
-                    let (document, observed) = read_artwork(file.path(), cancel)?;
-                    if file != observed {
-                        return Err("Comparison source changed".to_owned());
-                    }
-                    Ok(document)
-                });
-                let [a, b] = [a?, b?];
-                let comparison = compare_artwork([&a, &b], f64::from(wanted.1) / 1000.0, cancel)?;
-                let overview = comparison.render_overview(cancel)?;
+                let (comparison, roles) =
+                    if matches!(format, EdaFormat::Gerber | EdaFormat::Excellon) {
+                        let [a, b] = files.map(|file| {
+                            let (document, observed) = read_artwork(file.path(), cancel)?;
+                            if file != observed {
+                                return Err("Comparison source changed".to_owned());
+                            }
+                            Ok(document)
+                        });
+                        let [a, b] = [a?, b?];
+                        let result =
+                            compare_artwork([&a, &b], f64::from(wanted.1) / 1000.0, cancel)?;
+                        (
+                            Comparison::Fabrication(result),
+                            [a.layer_type, b.layer_type],
+                        )
+                    } else {
+                        let result = compare_sources(format, files.each_ref(), cancel)?;
+                        (Comparison::Source(result), [String::new(), String::new()])
+                    };
                 Ok(Prepared {
+                    overview: comparison.overview(cancel)?,
                     comparison,
-                    overview,
-                    roles: [a.layer_type, b.layer_type],
+                    roles,
                 })
             }),
         ));
@@ -315,12 +364,7 @@ impl Textures {
 }
 
 impl Detail {
-    fn update(
-        &mut self,
-        ctx: &egui::Context,
-        wanted: RasterRegion,
-        comparison: &Arc<ArtworkComparison>,
-    ) {
+    fn update(&mut self, ctx: &egui::Context, wanted: RasterRegion, comparison: &Arc<Comparison>) {
         if self
             .display
             .as_ref()
@@ -354,7 +398,7 @@ impl Detail {
         self.pending = Some((
             wanted,
             Task::start_unbounded(BackgroundJobs::global(), move |cancel| {
-                comparison.render_region(wanted, cancel)
+                comparison.detail(wanted, cancel)
             }),
         ));
         ctx.request_repaint_after(REPAINT_INTERVAL);
@@ -404,6 +448,70 @@ impl Canvas {
             Mode::B => paint(1, Color32::WHITE),
         }
     }
+}
+
+impl Display {
+    fn describe(&self, ui: &mut Ui) -> Option<[f64; 2]> {
+        let mut focus = None;
+        ui.horizontal_wrapped(|ui| {
+            let [a, b] = &self.roles;
+            if !a.is_empty() || !b.is_empty() {
+                ui.label(format!("{a} / {b}"));
+            }
+            let (added, removed) = match self.comparison.as_ref() {
+                Comparison::Fabrication(result) => {
+                    (area(result.added_mm2), area(result.removed_mm2))
+                }
+                Comparison::Source(result) => (
+                    format!("{} objects", result.counts[1]),
+                    format!("{} objects", result.counts[0]),
+                ),
+            };
+            ui.colored_label(Color32::from_rgb(92, 220, 247), format!("Added {added}"));
+            ui.colored_label(
+                Color32::from_rgb(248, 140, 78),
+                format!("Removed {removed}"),
+            );
+            ui.label(format!("Overview {:.4} mm/px", self.overview.pitch));
+        });
+        if let Comparison::Source(result) = self.comparison.as_ref() {
+            source_changes(ui, result, &mut focus);
+        }
+        focus
+    }
+}
+
+fn source_changes(ui: &mut Ui, result: &SourceComparison, focus: &mut Option<[f64; 2]>) {
+    for warning in &result.warnings {
+        ui.weak(warning);
+    }
+    if result.changes.is_empty() {
+        return;
+    }
+    ui.collapsing("Changed source objects", |ui| {
+        let height = ui.spacing().interact_size.y;
+        egui::ScrollArea::vertical().max_height(120.0).show_rows(
+            ui,
+            height,
+            result.changes.len(),
+            |ui, rows| {
+                for index in rows {
+                    let change = &result.changes[index];
+                    let side = if change.side == 0 { "A" } else { "B" };
+                    if ui
+                        .add_enabled(
+                            change.center.is_some(),
+                            egui::Button::selectable(false, format!("{side} · {}", change.label))
+                                .truncate(),
+                        )
+                        .clicked()
+                    {
+                        *focus = change.center;
+                    }
+                }
+            },
+        );
+    });
 }
 
 fn area(mm2: f64) -> String {

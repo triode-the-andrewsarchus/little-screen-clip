@@ -186,12 +186,17 @@ impl Viewer {
         match self.mode {
             Mode::Sources => self.summaries(ui),
             Mode::Fields => self.fields(ui),
-            Mode::Artwork => self.artwork.ui(
-                ui,
-                [self.base, self.other],
-                pair.map(|input| &input.file),
-                pair.map(|input| input.title.as_str()),
-            ),
+            Mode::Artwork => {
+                if let Some(format) = format.filter(|_| artwork_pair) {
+                    self.artwork.ui(
+                        ui,
+                        [self.base, self.other],
+                        pair.map(|input| &input.file),
+                        pair.map(|input| input.title.as_str()),
+                        format,
+                    );
+                }
+            }
             Mode::Memory => {
                 if let Some(tags) = &mut self.tags {
                     let names =
@@ -627,8 +632,8 @@ impl Input {
 }
 
 fn is_artwork(format: little_clip_core::eda::EdaFormat) -> bool {
-    use little_clip_core::eda::EdaFormat::{Excellon, Gerber};
-    matches!(format, Gerber | Excellon)
+    use little_clip_core::eda::EdaFormat::{Excellon, Gerber, KicadPcb, KicadSchematic};
+    matches!(format, Gerber | Excellon | KicadPcb | KicadSchematic)
 }
 
 fn compare(

@@ -1377,6 +1377,43 @@ mod tests {
     }
 
     #[test]
+    fn files_compare_opens_kicad_sheet_changes() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let folder = tempfile::tempdir().unwrap();
+        let paths = ["before.kicad_sch", "after.kicad_sch"].map(|name| folder.path().join(name));
+        for (path, end_y) in paths.iter().zip([0, 3]) {
+            std::fs::write(path, format!(
+                "(kicad_sch (version 20231120) (generator eeschema) (wire (pts (xy 0 0) (xy 10 {end_y}))))"
+            )).unwrap();
+        }
+        let mut viewers = Viewers::default();
+        viewers.open_engineering(paths.into(), super::super::EngineeringAction::Compare);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut copies = super::super::preview_copy::Copies::default();
+        let mut harness = Harness::builder()
+            .allow_missing_glyphs()
+            .with_size(egui::vec2(880.0, 550.0))
+            .build_ui_state(
+                move |ui, viewers: &mut Viewers| {
+                    viewers.tick(ui.ctx());
+                    viewers.ui(ui, &palette, &mut copies);
+                },
+                viewers,
+            );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while harness.query_by_label("Changed source objects").is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "sheet comparison did not publish"
+            );
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(harness.query_by_label("Changes only").is_some());
+    }
+
+    #[test]
     fn native_diagram_extensions_select_guarded_text_studios() {
         for name in [
             "drawing.pikchr",

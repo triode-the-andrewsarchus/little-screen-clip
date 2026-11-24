@@ -131,7 +131,7 @@ fn extend_prim_bounds(bounds: &mut Option<[f64; 4]>, prim: &Prim) {
     }
 }
 
-fn draw_scene_prim(
+pub(in crate::eda) fn draw_scene_prim(
     pixmap: &mut Pixmap,
     prim: &Prim,
     rgba: [u8; 4],
