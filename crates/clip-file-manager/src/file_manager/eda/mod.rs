@@ -892,10 +892,10 @@ fn render_gerber_details(ui: &mut egui::Ui, gerber: &GerberDocument, state: &mut
     ui.separator();
     if gerber.is_excellon {
         ui.strong(format!(
-            "{} tools · {} holes · {} slots",
+            "{} tools · {} holes · {} routed paths",
             gerber.tools.len(),
             gerber.hole_count,
-            gerber.slot_count
+            gerber.route_count
         ));
         for tool in &gerber.tools {
             let selected = state.selected_tool == Some(tool.number);
@@ -904,8 +904,8 @@ fn render_gerber_details(ui: &mut egui::Ui, gerber: &GerberDocument, state: &mut
                 tool.number,
                 tool.diameter_mm,
                 tool.hit_count,
-                if tool.slot_count > 0 {
-                    format!(", {} slots", tool.slot_count)
+                if tool.route_count > 0 {
+                    format!(", {} routed paths", tool.route_count)
                 } else {
                     String::new()
                 }

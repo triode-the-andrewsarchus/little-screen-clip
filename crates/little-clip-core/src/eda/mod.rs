@@ -206,8 +206,8 @@ fn gerber_strip_summary(
                 doc.hole_count
             ),
             specs: format!(
-                "{} · {} slots · {} arcs · {:.1}×{:.1} mm",
-                doc.coordinate_format, doc.slot_count, doc.arc_count, w, h
+                "{} · {} routed paths · {} arcs · {:.1}×{:.1} mm",
+                doc.coordinate_format, doc.route_count, doc.arc_count, w, h
             ),
             detail,
         };

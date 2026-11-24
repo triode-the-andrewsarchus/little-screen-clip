@@ -6,9 +6,7 @@ use super::{
 };
 use crate::ImageThumbnail;
 use lib_gerber_edit::LayerCorners;
-use lib_gerber_edit::excellon_format::{
-    Command as ExcellonCommand, ExcellonLayerData, GeometricCode, Mode, parse_excellon,
-};
+use lib_gerber_edit::excellon_format::{ExcellonLayerData, parse_excellon};
 use lib_gerber_edit::flatten::{
     Affine2, ExpandedObject, FlatLayer, FlattenOptions, GraphicsObject, Point, Polarity,
     ResourceLimits, Segment, Shape,
@@ -65,7 +63,7 @@ pub struct GerberToolInfo {
     pub diameter_mm: f64,
     pub diameter_native: f64,
     pub hit_count: usize,
-    pub slot_count: usize,
+    pub route_count: usize,
 }
 
 /// Flattened vector polyline or closed contour stored for interactive canvas overlays.
@@ -98,7 +96,7 @@ pub struct GerberDocument {
     pub region_count: usize,
     pub clear_count: usize,
     pub hole_count: usize,
-    pub slot_count: usize,
+    pub route_count: usize,
     pub arc_count: usize,
     pub bounds_mm: [f64; 4],
     pub polylines: Vec<VectorPolyline>,
@@ -169,7 +167,7 @@ impl GerberDocument {
             region_count: stats.region_count,
             clear_count: stats.clear_count,
             hole_count: 0,
-            slot_count: 0,
+            route_count: 0,
             arc_count: stats.arc_count,
             bounds_mm: stats.bounds_mm,
             polylines: stats.polylines,
@@ -203,9 +201,10 @@ impl GerberDocument {
         let h = (self.bounds_mm[3] - self.bounds_mm[1]).max(0.0);
         if self.is_excellon {
             format!(
-                "Excellon · {} tools · {} holes · {:.1}×{:.1} mm",
+                "Excellon · {} tools · {} holes · {} routed paths · {:.1}×{:.1} mm",
                 self.tools.len(),
-                self.hole_count + self.slot_count,
+                self.hole_count,
+                self.route_count,
                 w,
                 h
             )
@@ -668,49 +667,6 @@ fn has_excellon_content(data: &ExcellonLayerData) -> bool {
     !data.tools.is_empty() || !data.is_empty()
 }
 
-struct ExcellonCommandCounts {
-    hit_by_tool: BTreeMap<u32, usize>,
-    slot_by_tool: BTreeMap<u32, usize>,
-    raw_arc_count: usize,
-}
-
-fn count_excellon_commands(excellon: &ExcellonLayerData) -> ExcellonCommandCounts {
-    let mut counts = ExcellonCommandCounts {
-        hit_by_tool: BTreeMap::new(),
-        slot_by_tool: BTreeMap::new(),
-        raw_arc_count: 0,
-    };
-    let mut current_tool: Option<u32> = None;
-    let mut route_mode = Mode::DrillMode;
-
-    for cmd in excellon.commands.iter().flatten() {
-        match cmd {
-            ExcellonCommand::Tool(id) => current_tool = Some(*id),
-            ExcellonCommand::Geometric(GeometricCode::Mode(mode)) => route_mode = *mode,
-            ExcellonCommand::Coordinate(..)
-                if matches!(route_mode, Mode::DrillMode | Mode::CannedDrill) =>
-            {
-                if let Some(t) = current_tool {
-                    *counts.hit_by_tool.entry(t).or_default() += 1;
-                }
-            }
-            ExcellonCommand::Slot { .. } => {
-                if let Some(t) = current_tool {
-                    *counts.slot_by_tool.entry(t).or_default() += 1;
-                }
-            }
-            ExcellonCommand::Arc { .. } => {
-                counts.raw_arc_count += 1;
-                if let Some(t) = current_tool {
-                    *counts.slot_by_tool.entry(t).or_default() += 1;
-                }
-            }
-            _ => {}
-        }
-    }
-    counts
-}
-
 fn build_excellon_document(
     excellon: &ExcellonLayerData,
     bytes: &[u8],
@@ -723,20 +679,26 @@ fn build_excellon_document(
 
     let (corners_lo, corners_hi) = excellon.get_corners();
     let stats = collect_flat_stats(&flat, None, corners_lo, corners_hi, cancelled)?;
-    let counts = count_excellon_commands(excellon);
 
     let mut tools: Vec<GerberToolInfo> = excellon
         .tools
         .iter()
-        .map(|(&number, &diameter_native)| GerberToolInfo {
-            number,
-            diameter_mm: match excellon.unit.unit {
-                Unit::Millimeters => diameter_native,
-                Unit::Inches => diameter_native * 25.4,
-            },
-            diameter_native,
-            hit_count: counts.hit_by_tool.get(&number).copied().unwrap_or(0),
-            slot_count: counts.slot_by_tool.get(&number).copied().unwrap_or(0),
+        .map(|(&number, &diameter_native)| {
+            let code = i32::try_from(number).ok();
+            GerberToolInfo {
+                number,
+                diameter_mm: match excellon.unit.unit {
+                    Unit::Millimeters => diameter_native,
+                    Unit::Inches => diameter_native * 25.4,
+                },
+                diameter_native,
+                hit_count: code
+                    .and_then(|code| stats.flash_by_code.get(&code).copied())
+                    .unwrap_or(0),
+                route_count: code
+                    .and_then(|code| stats.stroke_by_code.get(&code).copied())
+                    .unwrap_or(0),
+            }
         })
         .collect();
     tools.sort_by_key(|t| t.number);
@@ -774,8 +736,8 @@ fn build_excellon_document(
         region_count: stats.region_count,
         clear_count: stats.clear_count,
         hole_count: stats.flash_count,
-        slot_count: stats.stroke_count,
-        arc_count: counts.raw_arc_count.max(stats.arc_count),
+        route_count: stats.stroke_count,
+        arc_count: stats.arc_count,
         bounds_mm: stats.bounds_mm,
         polylines: stats.polylines,
         flat,
@@ -802,6 +764,8 @@ struct FlatStats {
     region_count: usize,
     clear_count: usize,
     arc_count: usize,
+    flash_by_code: BTreeMap<i32, usize>,
+    stroke_by_code: BTreeMap<i32, usize>,
     bounds_mm: [f64; 4],
     polylines: Vec<VectorPolyline>,
 }
@@ -1045,6 +1009,8 @@ fn collect_flat_stats(
         region_count: acc.region_count,
         clear_count: acc.clear_count,
         arc_count: acc.arc_count,
+        flash_by_code: acc.flash_by_code,
+        stroke_by_code: acc.stroke_by_code,
         bounds_mm,
         polylines: acc.polylines,
     })
@@ -1448,6 +1414,11 @@ G00X5.0Y5.0
 M15
 G02X15.0Y5.0I5.0J0.0
 M17
+G02X25.0Y5.0I5.0J0.0
+G00X30.0Y5.0
+M15
+G01X35.0Y5.0
+M16
 M30
 ";
         let cancel = AtomicBool::new(false);
@@ -1456,7 +1427,10 @@ M30
         assert!(doc.is_excellon);
         assert_eq!(doc.tools.len(), 2);
         assert_eq!(doc.hole_count, 3);
-        assert_eq!(doc.slot_count, 2);
+        assert_eq!(doc.route_count, 3);
+        assert_eq!((doc.tools[0].hit_count, doc.tools[0].route_count), (2, 1));
+        assert_eq!((doc.tools[1].hit_count, doc.tools[1].route_count), (1, 2));
+        assert!(doc.summary_line().contains("3 holes · 3 routed paths"));
         assert_eq!(doc.arc_count, 1);
         assert_eq!(doc.units, "Millimeters (mm)");
         assert_eq!(doc.coordinate_format, "METRIC,TZ,000.000");
