@@ -71,7 +71,7 @@ impl Format {
                 Some(Self::Multisample)
             }
             "vcv" | "vcvss" => Some(Self::VcvPatch),
-            "ger" | "drl" | "xln" | "pos" | "plt" | "hpgl" => Some(Self::Eda),
+            ext if crate::eda::supports_extension(ext) => Some(Self::Eda),
             "csv" | "tsv" | "xlsx" | "xls" | "xlsb" | "ods" => Some(Self::Spreadsheet),
             _ => crate::subtitles::is_subtitle_path(path).then_some(Self::Subtitle),
         }
@@ -393,6 +393,12 @@ mod tests {
             ("pick.POS", Format::Eda),
             ("plot.PLT", Format::Eda),
             ("plot.HPGL", Format::Eda),
+            ("board.KICAD_PCB", Format::Eda),
+            ("sheet.KICAD_SCH", Format::Eda),
+            ("proj.KICAD_PRO", Format::Eda),
+            ("pad.KICAD_MOD", Format::Eda),
+            ("lib.KICAD_SYM", Format::Eda),
+            ("fab.GBRJOB", Format::Eda),
             ("budget.CSV", Format::Spreadsheet),
             ("budget.TSV", Format::Spreadsheet),
             ("budget.XLS", Format::Spreadsheet),
