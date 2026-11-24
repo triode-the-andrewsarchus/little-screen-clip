@@ -19,9 +19,9 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
 use egui::{self, CornerRadius, Stroke, Vec2};
-use little_clip_core::pdf::{
-    PdfInfo, delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page,
-};
+use little_clip_core::pdf::{PdfInfo, delete_pdf_pages, rotate_pdf_page};
+#[cfg(test)]
+use little_clip_core::pdf::{get_pdf_info, render_pdf_page_preview};
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use source::{PageSource, SourceInfo};
 use std::path::{Path, PathBuf};
@@ -391,7 +391,7 @@ impl PdfPageViewport {
         // Clamp before interaction as well, since the host or page aspect may change.
         self.page_rect(viewport, dimensions);
         if response.hovered() {
-            let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
+            let scroll = clip_ui::ui_ext::wheel_delta_including_start(ui.ctx()).y;
             if scroll != 0.0 {
                 let old_zoom = self.zoom;
                 self.zoom = (old_zoom * (scroll * 0.002).exp()).clamp(0.25, max_zoom);

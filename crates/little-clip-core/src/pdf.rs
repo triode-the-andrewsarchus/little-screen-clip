@@ -3,11 +3,15 @@
 //! Wraps Poppler utilities (`pdfinfo`, `pdftoppm`) for inspection and previews,
 //! and uses `lopdf` for lossless page manipulation.
 
-use crate::process::CommandRequest;
 use crate::staging::ArtifactStore;
+use crate::{file_source::ReadCheck, page_region::PageRegion, process::CommandRequest};
 use lopdf::{Document, Object};
 use std::{
-    fs::File, ops::RangeInclusive, os::unix::fs::MetadataExt, path::Path, sync::atomic::AtomicBool,
+    fs::File,
+    ops::RangeInclusive,
+    os::unix::fs::MetadataExt,
+    path::Path,
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -98,7 +102,20 @@ pub fn render_pdf_page_preview(
     page: usize,
     max_dim: u32,
 ) -> Result<(Vec<u8>, u32, u32), String> {
-    render_pdf_page_png(path, page, max_dim, false)
+    render_pdf_page_preview_cancellable(path, page, max_dim, &AtomicBool::new(false))
+}
+
+/// Renders a width-bounded page preview with cancellable Poppler execution.
+///
+/// # Errors
+/// Returns path, cancellation or PNG rendering errors.
+pub fn render_pdf_page_preview_cancellable(
+    path: &Path,
+    page: usize,
+    width: u32,
+    cancel: &AtomicBool,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    render_pdf_png(path, page, width, false, cancel)
 }
 
 /// Renders a page with both dimensions bounded for compact thumbnails.
@@ -116,17 +133,18 @@ pub(crate) fn render_pdf_page_png(
     max_dim: u32,
     square_bounds: bool,
 ) -> Result<(Vec<u8>, u32, u32), String> {
-    let page_str = page.to_string();
+    render_pdf_png(path, page, max_dim, square_bounds, &AtomicBool::new(false))
+}
 
-    let mut command = CommandRequest::new("pdftoppm")
-        .die_with_parent()
-        .arg("-png")
-        .arg("-singlefile")
-        .arg("-f")
-        .arg(&page_str)
-        .arg("-l")
-        .arg(&page_str);
-    command = if square_bounds {
+fn render_pdf_png(
+    path: &Path,
+    page: usize,
+    max_dim: u32,
+    square_bounds: bool,
+    cancel: &AtomicBool,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let command = pdf_png_command(page);
+    let command = if square_bounds {
         command.arg("-scale-to").arg(max_dim.to_string())
     } else {
         command
@@ -135,13 +153,80 @@ pub(crate) fn render_pdf_page_png(
             .arg("-scale-to-y")
             .arg("-1")
     };
-    let output = command
+    let command = command
         .arg_content_file(path)
-        .map_err(|error| error.to_string())?
-        // Omitting the output prefix makes Poppler write PNG to stdout. The
-        // owned bounded pipe cannot leave rendered pages behind after a crash.
-        .max_output_bytes(if square_bounds { 8 } else { 64 } * 1024 * 1024)
-        .run()
+        .map_err(|error| error.to_string())?;
+    run_pdf_png(command, if square_bounds { 8 } else { 64 }, cancel)
+}
+
+/// Renders a physical-pixel window of one 1-based PDF page with Poppler.
+///
+/// Coordinates use the displayed page after rotation, measured from the top
+/// left of the same media box used for the regular thumbnail.
+///
+/// # Errors
+/// Returns source, cancellation, page bounds or raster budget errors.
+pub fn render_pdf_page_region(
+    path: &Path,
+    page: usize,
+    region: PageRegion,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    region.validate()?;
+    if page == 0 {
+        return Err("PDF page numbers start at 1".into());
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err("PDF detail cancelled".into());
+    }
+    let (input, source) = ReadCheck::default().open(path, None, cancel)?;
+    // Poppler's default scale arguments swap the requested axes on a
+    // rotated page. This option keeps them in displayed page coordinates.
+    let mut command = pdf_png_command(page).arg("-scale-dimension-before-rotation");
+    for (flag, value) in [
+        ("-scale-to-x", region.page[0]),
+        ("-scale-to-y", region.page[1]),
+        ("-x", region.origin[0]),
+        ("-y", region.origin[1]),
+        ("-W", region.size[0]),
+        ("-H", region.size[1]),
+    ] {
+        command = command.arg(flag).arg(value.to_string());
+    }
+    let command = command
+        .timeout(Duration::from_secs(15))
+        .resource_limit(rustix::process::Resource::As, 768 * 1024 * 1024)
+        .arg_owned_content_file(input.try_clone().map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    let (png, w, h) = run_pdf_png(command, 32, cancel)?;
+    source.check_file(&input)?;
+    if [w, h] != region.size {
+        return Err("Poppler returned an unexpected PDF detail size".into());
+    }
+    Ok(png)
+}
+
+fn pdf_png_command(page: usize) -> CommandRequest {
+    let page = page.to_string();
+    CommandRequest::new("pdftoppm")
+        .die_with_parent()
+        .arg("-png")
+        .arg("-singlefile")
+        .arg("-f")
+        .arg(&page)
+        .arg("-l")
+        .arg(page)
+}
+
+fn run_pdf_png(
+    command: CommandRequest,
+    max_output_mib: usize,
+    cancel: &AtomicBool,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    // Without an output prefix, Poppler writes PNG to a bounded stdout pipe.
+    let output = command
+        .max_output_bytes(max_output_mib * 1024 * 1024)
+        .run_cancellable(cancel)
         .map_err(|e| format!("pdftoppm execution failed: {}", e))?;
 
     if !output.status.success() || output.stdout_truncated {
@@ -688,6 +773,101 @@ mod tests {
         assert!(thumb_width <= 96 && thumb_height <= 96);
         assert_eq!(thumb_height, 96);
         assert!(render_pdf_page_thumbnail(&path, 4, 96).is_err());
+    }
+
+    #[test]
+    fn detail_crops_preserve_rotation_and_page_edges() {
+        let (_directory, path) = navigation_fixture();
+        let mut document = Document::load(&path).unwrap();
+        let page = document.get_pages()[&2];
+        document
+            .get_object_mut(page)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("Rotate", 90);
+        document.save(&path).unwrap();
+        let cancel = AtomicBool::new(false);
+        for (page, dimensions) in [(1, [595, 842]), (2, [842, 595])] {
+            let (full, w, h) = render_pdf_page_thumbnail(&path, page, 842).unwrap();
+            assert_eq!([w, h], dimensions);
+            let full = image::load_from_memory(&full).unwrap().to_rgb8();
+            for (origin, size) in [([0, 0], [520, 510]), ([w - 103, h - 57], [103, 57])] {
+                let region = PageRegion {
+                    page: dimensions,
+                    origin,
+                    size,
+                };
+                let png = render_pdf_page_region(&path, page, region, &cancel).unwrap();
+                let actual = image::load_from_memory(&png).unwrap().to_rgb8();
+                let expected =
+                    image::imageops::crop_imm(&full, origin[0], origin[1], size[0], size[1]);
+                assert_eq!(actual, expected.to_image(), "page {page}, {origin:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn deep_detail_renders_subpoint_rules_over_native_raster_assets() {
+        use lopdf::{Stream, dictionary};
+        let (_directory, path) = navigation_fixture();
+        let mut document = Document::load(&path).unwrap();
+        let target = document.get_pages()[&1];
+        let resources = document
+            .get_object(target)
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"Resources")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        let raster = document.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject", "Subtype" => "Image", "Width" => 32, "Height" => 32,
+                "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8,
+            },
+            [55, 130, 211].repeat(32 * 32),
+        ));
+        document
+            .get_object_mut(resources)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("XObject", dictionary! { "SurveyImage" => raster });
+        let stream = document.add_object(Stream::new(dictionary! {},
+            b"q 120 0 0 50 45 655 cm /SurveyImage Do Q\n0 G .2 w 45 700 m 165 700 l S\nBT /F1 10 Tf 48 707 Td (Survey station 243) Tj ET".to_vec()
+        ));
+        document
+            .get_object_mut(target)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("Contents", stream);
+        document.save(&path).unwrap();
+
+        let region = PageRegion {
+            page: [11900, 16840],
+            origin: [1000, 2800],
+            size: [850, 370],
+        };
+        let png = render_pdf_page_region(&path, 1, region, &AtomicBool::new(false)).unwrap();
+        let actual = image::load_from_memory(&png).unwrap().to_rgb8();
+        assert_eq!(actual.dimensions(), (850, 370));
+        assert_eq!(actual.get_pixel(300, 130).0, [55, 130, 211]);
+        let ink_rows = (30..50)
+            .filter(|y| actual.get_pixel(300, *y).0 == [0, 0, 0])
+            .count();
+        assert!(
+            (3..=5).contains(&ink_rows),
+            "{ink_rows} opaque rows in 0.2pt line"
+        );
+        assert!(render_pdf_page_region(&path, 1, region, &AtomicBool::new(true)).is_err());
+        let oversized = PageRegion {
+            size: [4097, 370],
+            ..region
+        };
+        assert!(render_pdf_page_region(&path, 1, oversized, &AtomicBool::new(false)).is_err());
     }
 
     #[test]

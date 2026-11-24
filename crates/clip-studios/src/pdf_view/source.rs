@@ -1,5 +1,6 @@
 //! Page preparation shared by editable PDFs and read-only notebooks.
 use super::*;
+use little_clip_core::pdf::{get_pdf_info_cancellable, render_pdf_page_preview_cancellable};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) enum PageSource {
@@ -30,12 +31,12 @@ impl PageSource {
     }
 
     pub fn has_region_detail(self) -> bool {
-        self == Self::Xournal
+        self != Self::Notebook
     }
 
     pub fn info(self, path: &Path, cancel: &AtomicBool) -> Result<SourceInfo, String> {
         match self {
-            Self::Pdf => get_pdf_info(path).map(SourceInfo::from),
+            Self::Pdf => get_pdf_info_cancellable(path, cancel).map(SourceInfo::from),
             Self::Notebook | Self::Xournal => {
                 let info = little_clip_core::notebook::inspect(path, cancel)?;
                 let pdf = PdfInfo {
@@ -64,7 +65,7 @@ impl PageSource {
         cancel: &AtomicBool,
     ) -> Result<(Vec<u8>, u32, u32), String> {
         match self {
-            Self::Pdf => render_pdf_page_preview(path, page, edge),
+            Self::Pdf => render_pdf_page_preview_cancellable(path, page, edge, cancel),
             Self::Notebook | Self::Xournal => {
                 little_clip_core::notebook::render_page(path, page, edge, cancel)
             }

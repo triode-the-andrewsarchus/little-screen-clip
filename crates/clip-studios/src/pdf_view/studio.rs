@@ -334,8 +334,11 @@ impl PdfEditorState {
                     response.rect,
                     page_rect,
                     texture.size(),
-                    &self.path,
-                    &self.read_check,
+                    detail::DetailSource {
+                        path: &self.path,
+                        check: &self.read_check,
+                        backend: self.source,
+                    },
                 );
             }
             if let Some(layout) = layout {

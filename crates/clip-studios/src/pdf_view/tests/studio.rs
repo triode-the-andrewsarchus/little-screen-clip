@@ -251,77 +251,26 @@ fn selected_pdf_page_preview_stays_inside_compact_and_wide_panes() {
 }
 
 #[test]
-fn zoom_detail_replaces_texture_without_blanking_or_resampling_pdf_text() {
+fn pdf_zoom_keeps_the_overview_texture_and_shared_raster() {
     let (source, raster) = gallery_pdf_page_source().unwrap();
     let mut state = PdfEditorState::from_shared_page_raster(source, raster);
     let ctx = egui::Context::default();
-    let _ = clip_ui::test_support::run_frame(
-        &ctx,
-        egui::RawInput {
-            max_texture_side: Some(4096),
-            ..Default::default()
-        },
-        |_| {},
-    );
-    let base_id = upload_page(&mut state, 1, &ctx);
-    // The portrait raster must retain its native height instead of being reduced to 1200.
+    let base = upload_page(&mut state, 1, &ctx);
     assert_eq!(
         state.pages[0].texture.as_ref().unwrap().size(),
         [1200, 1600]
     );
-    let base_raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
-
+    let overview = Arc::clone(state.pages[0].raster.as_ref().unwrap());
     state.viewport.select_page(1);
-    state.viewport.zoom = 2.0;
-    state.viewport.pan = egui::vec2(30.0, 50.0);
-    state.viewport.update_render_width(
-        egui::vec2(750.0, 1000.0),
-        2.0,
-        PAGE_DETAIL_MAX_DIM as usize,
-    );
-    assert_eq!(state.viewport.render_width, 2304);
-    assert_eq!(state.ensure_page_texture(1, &ctx), Some(base_id));
-    let detail_id = upload_page(&mut state, 1, &ctx);
-    assert_ne!(base_id, detail_id);
-    assert_eq!(
-        state.pages[0].texture.as_ref().unwrap().size(),
-        [2304, 3072]
-    );
-    let detail_raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
-    assert_eq!(detail_raster.render_width, 2304);
-    assert_ne!(base_raster.path(), detail_raster.path());
-    assert!(
-        base_raster.path().exists(),
-        "replacement must preserve readers' original pixels"
-    );
-    assert_eq!(state.viewport.zoom, 2.0);
-    assert_eq!(state.viewport.pan, egui::vec2(30.0, 50.0));
-    assert!(resident_textures(&state).1 <= PAGE_TEXTURE_BYTE_LIMIT);
-
-    state.viewport.update_render_width(
-        egui::vec2(250.0, 1000.0 / 3.0),
-        1.0,
-        PAGE_DETAIL_MAX_DIM as usize,
-    );
-    assert_eq!(state.ensure_page_texture(1, &ctx), Some(detail_id));
-    let reduced_id = upload_page(&mut state, 1, &ctx);
-    assert_ne!(detail_id, reduced_id);
-    assert_eq!(state.pages[0].raster.as_ref().unwrap().render_width, 512);
-    assert_eq!(state.pages[0].texture.as_ref().unwrap().size(), [512, 683]);
-
-    // A failed quality upgrade must preserve the usable texture and stop retrying.
-    std::fs::remove_file(&state.path).unwrap();
-    state.viewport.update_render_width(
-        egui::vec2(750.0, 1000.0),
-        2.0,
-        PAGE_DETAIL_MAX_DIM as usize,
-    );
-    assert_eq!(state.ensure_page_texture(1, &ctx), Some(reduced_id));
-    wait_for_decode(&mut state, 1, &ctx);
-    assert!(state.pages[0].error.is_some());
-    assert_eq!(state.ensure_page_texture(1, &ctx), Some(reduced_id));
+    state.viewport.zoom = 24.0;
+    state.viewport.render_width = PAGE_DETAIL_MAX_DIM;
+    assert_eq!(state.ensure_page_texture(1, &ctx), Some(base));
     state.schedule_page_decode(&ctx);
     assert!(state.decode_job.is_none());
+    assert!(Arc::ptr_eq(
+        state.pages[0].raster.as_ref().unwrap(),
+        &overview
+    ));
 }
 
 #[test]
@@ -396,12 +345,13 @@ fn pdf_viewport_wheel_zoom_drag_and_double_click_use_constrained_canvas() {
     let (rect, _) = frame(&mut view, vec![]);
     let center = rect.center();
     // Zoom around the center to overflow only vertically.
+    let mut first_scroll = clip_ui::test_support::scroll(egui::vec2(0.0, 200.0));
+    if let egui::Event::MouseWheel { phase, .. } = &mut first_scroll {
+        *phase = egui::TouchPhase::Start;
+    }
     frame(
         &mut view,
-        vec![
-            egui::Event::PointerMoved(center),
-            clip_ui::test_support::scroll(egui::vec2(0.0, 200.0)),
-        ],
+        vec![egui::Event::PointerMoved(center), first_scroll],
     );
     assert!(view.zoom > 1.0 && view.zoom < 2.0);
     let button = |pos, pressed| egui::Event::PointerButton {
