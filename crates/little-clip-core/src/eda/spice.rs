@@ -264,8 +264,11 @@ pub struct SpiceRawDocument {
 impl SpiceRawDocument {
     pub fn parse(bytes: &[u8], cancelled: &AtomicBool) -> Result<Self, String> {
         check_cancelled(cancelled, "SPICE raw parse cancelled")?;
-        if !is_spice_raw_bytes(bytes) {
+        let Some(fast_access) = inspect_raw_prefix(bytes) else {
             return Err("File is not a SPICE/LTspice .raw simulation output".into());
+        };
+        if fast_access {
+            return parse_ltspice_raw(bytes, cancelled);
         }
         if let Ok(raw) = Rawfile::parse(bytes)
             && !raw.plots.is_empty()
@@ -277,7 +280,9 @@ impl SpiceRawDocument {
                 .iter()
                 .any(|warning| warning.eq_ignore_ascii_case("unknown flag fastaccess"))
             {
-                return Err("LTspice FastAccess binary layout is unsupported".into());
+                // A FastAccess flag outside the qualified first header cannot
+                // be associated with the right plot by the interleaved reader.
+                return Err("LTspice FastAccess requires a single identified binary plot".into());
             }
             return convert_dune_rawfile(raw, cancelled);
         }
@@ -498,14 +503,21 @@ impl LtspicePlotDocument {
 
 /// Returns whether a `.raw` buffer is a SPICE/LTspice waveform file rather than camera RAW.
 pub fn is_spice_raw_bytes(bytes: &[u8]) -> bool {
+    inspect_raw_prefix(bytes).is_some()
+}
+
+// Once the prefix qualifies as a waveform, report whether its first header
+// specifies FastAccess. Stop at the data marker even when looking for flags.
+fn inspect_raw_prefix(bytes: &[u8]) -> Option<bool> {
     if bytes.len() < 16 || looks_like_camera_raw_magic(bytes) {
-        return false;
+        return None;
     }
     let prefix = &bytes[..bytes.len().min(4096)];
     let header = decode_spice_text(prefix);
     let mut title = false;
     let mut plot_name = false;
     let mut variable_count = false;
+    let mut fast_access = false;
     for (key, value) in header
         .lines()
         .filter_map(|line| line.trim().split_once(':'))
@@ -514,14 +526,16 @@ pub fn is_spice_raw_bytes(bytes: &[u8]) -> bool {
             "title" => title = true,
             "plotname" => plot_name = !value.trim().is_empty(),
             "no. variables" => variable_count = value.trim().parse::<usize>().is_ok_and(|n| n > 0),
+            "flags" => {
+                fast_access = value
+                    .split_ascii_whitespace()
+                    .any(|flag| flag.eq_ignore_ascii_case("fastaccess"))
+            }
             "values" | "binary" => break,
             _ => {}
         }
-        if title && plot_name && variable_count {
-            return true;
-        }
     }
-    false
+    (title && plot_name && variable_count).then_some(fast_access)
 }
 
 /// Returns whether an on-disk `.raw` path holds a SPICE/LTspice simulation output.
@@ -1331,6 +1345,9 @@ fn parse_ltspice_raw(bytes: &[u8], cancelled: &AtomicBool) -> Result<SpiceRawDoc
     let (is_binary, payload_offset) = find_raw_data_marker(bytes)
         .ok_or_else(|| "Missing Binary:/Values: section in SPICE .raw file".to_string())?;
     let meta = parse_ltspice_header(&bytes[..payload_offset])?;
+    if meta.fast_access && !is_binary {
+        return Err("LTspice FastAccess requires binary data".into());
+    }
 
     let payload = &bytes[payload_offset..];
     let plot = if is_binary {
@@ -1351,20 +1368,19 @@ fn decode_ltspice_binary_plot(
     payload: &[u8],
     cancelled: &AtomicBool,
 ) -> Result<SpiceRawPlot, String> {
-    if meta.fast_access {
-        return Err("LTspice FastAccess binary layout is unsupported".into());
-    }
     let nvars = meta.variables.len();
-    let stride_bytes = if meta.is_complex {
-        nvars.checked_mul(16)
+    let value_bytes = if meta.is_complex {
+        16
     } else if meta.is_double {
-        nvars.checked_mul(8)
+        8
     } else {
-        (nvars - 1)
-            .checked_mul(4)
-            .and_then(|size| size.checked_add(8))
-    }
-    .ok_or("Invalid LTspice variable count")?;
+        4
+    };
+    let first_bytes = value_bytes.max(8);
+    let stride_bytes = (nvars - 1)
+        .checked_mul(value_bytes)
+        .and_then(|size| size.checked_add(first_bytes))
+        .ok_or("Invalid LTspice variable count")?;
     let total_points = meta.npoints;
     if stride_bytes.checked_mul(total_points) != Some(payload.len()) {
         return Err("LTspice binary data size does not match the header".into());
@@ -1372,8 +1388,23 @@ fn decode_ltspice_binary_plot(
     let layout = meta.layout();
     let signals = layout.trace_indices(nvars);
     let has_axis = layout.has_axis();
-    let read_x = |record: &[u8]| {
-        let x = binary_double(record);
+    let sample = |row: usize, column: usize| {
+        let (offset, size) = if column == 0 {
+            (0, first_bytes)
+        } else {
+            (first_bytes + (column - 1) * value_bytes, value_bytes)
+        };
+        // The declared row size and total payload length have been checked.
+        // FastAccess stores each variable's samples in its own contiguous block.
+        let start = if meta.fast_access {
+            offset * total_points + row * size
+        } else {
+            row * stride_bytes + offset
+        };
+        &payload[start..start + size]
+    };
+    let read_x = |row| {
+        let x = binary_double(sample(row, 0));
         // LTspice's compressed transient format can encode negative time stamps.
         if layout.kind == RawAnalysisKind::Transient {
             x.abs()
@@ -1381,18 +1412,16 @@ fn decode_ltspice_binary_plot(
             x
         }
     };
-    let mut records = payload.chunks_exact(stride_bytes);
-    let ranges = layout.ranges(records.clone().map(read_x), cancelled)?;
+    let ranges = layout.ranges((0..total_points).map(read_x), cancelled)?;
     let preview = peaks::reduce(
         &ranges,
         meta.traces(&layout),
         meta.is_complex,
-        |_, row| {
-            let record = records.next().ok_or("Missing LTspice binary sample")?;
+        |point, row| {
             for (field, index) in row.iter_mut().zip(signals.clone()) {
-                *field = Some(ltspice_binary_value(meta, record, index));
+                *field = Some(ltspice_binary_value(sample(point, index)));
             }
-            Ok(if has_axis { read_x(record) } else { 0.0 })
+            Ok(if has_axis { read_x(point) } else { 0.0 })
         },
         cancelled,
     )?;
@@ -1403,25 +1432,16 @@ fn binary_double(bytes: &[u8]) -> f64 {
     f64::from_le_bytes(bytes.first_chunk::<8>().copied().unwrap_or_default())
 }
 
-fn ltspice_binary_value(meta: &RawHeaderMeta, record: &[u8], index: usize) -> peaks::Value {
-    if meta.is_complex {
-        let pos = index * 16;
-        displayed_value(
-            binary_double(&record[pos..]),
-            binary_double(&record[pos + 8..]),
-            true,
-        )
-    } else if index == 0 || meta.is_double {
-        (binary_double(&record[index * 8..]), 0.0)
-    } else {
-        let pos = 8 + (index - 1) * 4;
-        let value = f32::from_le_bytes(
-            record[pos..]
-                .first_chunk::<4>()
-                .copied()
-                .unwrap_or_default(),
-        );
-        (f64::from(value), 0.0)
+fn ltspice_binary_value(bytes: &[u8]) -> peaks::Value {
+    match bytes.len() {
+        16 => displayed_value(binary_double(bytes), binary_double(&bytes[8..]), true),
+        8 => (binary_double(bytes), 0.0),
+        _ => (
+            f64::from(f32::from_le_bytes(
+                bytes.first_chunk::<4>().copied().unwrap_or_default(),
+            )),
+            0.0,
+        ),
     }
 }
 
@@ -2021,15 +2041,67 @@ Binary:
     }
 
     #[test]
-    fn fast_access_layout_is_rejected_even_when_record_sizes_match() {
+    fn fast_access_uses_column_offsets_even_when_record_sizes_match() {
         let mut bytes = b"Title: FastAccess demo\nPlotname: Transient Analysis\nFlags: real double FastAccess\nNo. Variables: 2\nNo. Points: 2\nVariables:\n0 time time\n1 V(out) voltage\nBinary:\n".to_vec();
         for column in [[0.0_f64, 1.0], [5.0, 7.0]] {
             for value in column {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
         }
-        let error = SpiceRawDocument::parse(&bytes, &AtomicBool::new(false)).unwrap_err();
-        assert!(error.contains("FastAccess"));
+        let cancel = AtomicBool::new(false);
+        let doc = SpiceRawDocument::parse(&bytes, &cancel).unwrap();
+        let trace = &doc.primary().unwrap().traces[0];
+        assert_eq!(preview_axis(trace), [0.0, 1.0]);
+        assert_eq!(trace.sample_at(0).unwrap().value, 5.0);
+        assert_eq!(trace.sample_at(1).unwrap().value, 7.0);
+        assert!(
+            SpiceRawDocument::parse(&bytes[..bytes.len() - 1], &cancel)
+                .unwrap_err()
+                .contains("data size")
+        );
+    }
+
+    #[test]
+    fn utf16_fast_access_mixed_precision_keeps_steps_and_negative_peaks() {
+        let points_per_step = 3000;
+        let header = format!(
+            "Title: FastAccess run\r\nPlotname: Transient Analysis\r\nFlags: real forward stepped FastAccess\r\nNo. Variables: 2\r\nNo. Points: {}\r\nVariables:\r\n0 time time\r\n1 V(out) voltage\r\nBinary:\r\n",
+            points_per_step * 2
+        );
+        let mut bytes: Vec<_> = header.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        for row in 0..points_per_step * 2 {
+            let time = (row % points_per_step) as f64 * 0.00001;
+            bytes.extend_from_slice(&time.to_le_bytes());
+        }
+        for row in 0..points_per_step * 2 {
+            let value: f32 = if row == points_per_step + 5 {
+                -18.0
+            } else {
+                1.0
+            };
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let doc = SpiceRawDocument::parse(&bytes, &AtomicBool::new(false)).unwrap();
+        let trace = &doc.primary().unwrap().traces[0];
+        assert_eq!(trace.sweeps().count(), 2);
+        assert!(trace.samples().len() <= MAX_WAVEFORM_POINTS);
+        let peak = trace.sample_at(points_per_step + 5).unwrap();
+        assert_eq!(peak.value, -18.0);
+        assert!((peak.x - 0.00005).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fast_access_complex_traces_keep_frequency_magnitude_and_phase() {
+        let mut bytes = b"Title: FastAccess AC\nPlotname: AC Analysis\nFlags: complex FastAccess\nNo. Variables: 2\nNo. Points: 2\nVariables:\n0 frequency frequency\n1 V(out) voltage\nBinary:\n".to_vec();
+        for value in [1000.0_f64, 0.0, 2000.0, 0.0, 1.0, 0.0, 0.0, -2.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let doc = SpiceRawDocument::parse(&bytes, &AtomicBool::new(false)).unwrap();
+        let trace = &doc.primary().unwrap().traces[0];
+        assert_eq!(preview_axis(trace), [1000.0, 2000.0]);
+        let sample = trace.sample_at(1).unwrap();
+        assert!((sample.value - 20.0 * 2_f64.log10()).abs() < 1e-12);
+        assert_eq!(sample.phase_deg, -90.0);
     }
 
     #[test]
