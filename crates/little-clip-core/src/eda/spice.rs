@@ -1,12 +1,15 @@
 //! SPICE circuit netlists (`.cir`, `.sp`, `.spice`), SPICE/LTspice simulation
 //! output waveforms (`.raw`), and LTspice plot settings (`.plt`).
 
+mod sweeps;
+
 use super::{StripSummary, bounded_source_excerpt, check_cancelled, pixmap_to_thumbnail};
 use crate::ImageThumbnail;
 use dune_netlist::IncludeLoader;
 use dune_netlist::ir::Analysis;
 use dune_raw::Rawfile;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use tiny_skia::{
@@ -244,15 +247,32 @@ pub struct SpiceRawPlot {
     pub x_name: String,
     pub x_unit: String,
     pub x_values: Vec<f64>,
+    sweep_starts: Vec<usize>,
     pub traces: Vec<SpiceRawTrace>,
 }
 
 impl SpiceRawPlot {
+    /// Returns the retained sample ranges for independent plotted sweeps.
+    pub fn sweep_ranges(&self) -> impl Iterator<Item = Range<usize>> + '_ {
+        self.sweep_starts
+            .iter()
+            .copied()
+            .zip(
+                self.sweep_starts
+                    .iter()
+                    .copied()
+                    .skip(1)
+                    .chain([self.x_values.len()]),
+            )
+            .map(|(start, end)| start..end)
+    }
+
     fn include_first_operating_point_signal(mut self) -> Self {
         if self.kind == RawAnalysisKind::DcOperatingPoint
             && !self.is_complex
             && let Some(&value) = self.x_values.first()
         {
+            self.sweep_starts.clear();
             self.traces.truncate(MAX_DECODED_TRACES - 1);
             self.traces.insert(
                 0,
@@ -1075,6 +1095,16 @@ fn decimate_stride(total_points: usize) -> usize {
     total_points.div_ceil(MAX_WAVEFORM_POINTS).max(1)
 }
 
+fn sampled_sweep_starts(sweeps: &[Range<usize>], stride: usize) -> Vec<usize> {
+    sweeps
+        .iter()
+        .filter_map(|sweep| {
+            let start = sweep.start.div_ceil(stride);
+            (start < sweep.end.div_ceil(stride)).then_some(start)
+        })
+        .collect()
+}
+
 fn min_max_finite(vals: &[f64]) -> (f64, f64) {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
@@ -1092,12 +1122,19 @@ fn min_max_finite(vals: &[f64]) -> (f64, f64) {
 }
 
 fn convert_dune_rawfile(raw: Rawfile, cancelled: &AtomicBool) -> Result<SpiceRawDocument, String> {
+    // The decoder only exposes unknown flags for the entire file. A stepped
+    // warning can be matched to a specific plot when there is only one.
+    let stepped = raw.plots.len() == 1
+        && raw
+            .warnings
+            .iter()
+            .any(|warning| warning.eq_ignore_ascii_case("unknown flag stepped"));
     let mut plots = Vec::new();
     for (p_idx, plot) in raw.plots.into_iter().take(MAX_RAW_PLOTS).enumerate() {
         if p_idx.is_multiple_of(2) {
             check_cancelled(cancelled, "SPICE raw conversion cancelled")?;
         }
-        plots.push(convert_single_dune_plot(plot));
+        plots.push(convert_single_dune_plot(plot, stepped, cancelled)?);
     }
     let title = plots
         .first()
@@ -1110,7 +1147,11 @@ fn convert_dune_rawfile(raw: Rawfile, cancelled: &AtomicBool) -> Result<SpiceRaw
     })
 }
 
-fn convert_single_dune_plot(plot: dune_raw::Plot) -> SpiceRawPlot {
+fn convert_single_dune_plot(
+    plot: dune_raw::Plot,
+    stepped: bool,
+    cancelled: &AtomicBool,
+) -> Result<SpiceRawPlot, String> {
     let total_points = plot.data.num_points();
     let total_vars = plot.variables.len();
     let stride = decimate_stride(total_points);
@@ -1120,19 +1161,36 @@ fn convert_single_dune_plot(plot: dune_raw::Plot) -> SpiceRawPlot {
     let x_name = x_var.map_or_else(|| "x".into(), |v| v.name.clone());
     let x_unit = x_var.map_or_else(String::new, |v| v.vtype.name().to_string());
 
-    let (x_values, traces) = match &plot.data {
-        dune_raw::Data::Real(cols) => extract_real_traces(&plot.variables, cols, stride),
+    let dimensions = plot
+        .scale()
+        .and_then(|var| var.dims.as_deref())
+        .or(plot.dimensions.as_deref());
+    let (source_sweeps, (x_values, traces)) = match &plot.data {
+        dune_raw::Data::Real(cols) => {
+            let axis = cols.first().map_or(&[][..], Vec::as_slice);
+            let ranges =
+                sweeps::source_sweeps(axis.iter().copied(), dimensions, kind, stepped, cancelled)?;
+            (ranges, extract_real_traces(&plot.variables, cols, stride))
+        }
         dune_raw::Data::Complex(cols) => {
+            let axis = cols.first().map_or(&[][..], Vec::as_slice);
+            let ranges = sweeps::source_sweeps(
+                axis.iter().map(|x| x.re),
+                dimensions,
+                kind,
+                stepped,
+                cancelled,
+            )?;
             let pairs: Vec<Vec<(f64, f64)>> = cols
                 .iter()
                 .take(MAX_DECODED_TRACES + 1)
                 .map(|col| col.iter().step_by(stride).map(|c| (c.re, c.im)).collect())
                 .collect();
-            extract_complex_traces(&plot.variables, &pairs)
+            (ranges, extract_complex_traces(&plot.variables, &pairs))
         }
     };
 
-    SpiceRawPlot {
+    Ok(SpiceRawPlot {
         title: if plot.title.trim().is_empty() {
             "SPICE Simulation".into()
         } else {
@@ -1147,9 +1205,10 @@ fn convert_single_dune_plot(plot: dune_raw::Plot) -> SpiceRawPlot {
         x_name,
         x_unit,
         x_values,
+        sweep_starts: sampled_sweep_starts(&source_sweeps, stride),
         traces,
     }
-    .include_first_operating_point_signal()
+    .include_first_operating_point_signal())
 }
 
 fn extract_real_traces(
@@ -1195,11 +1254,7 @@ fn extract_complex_traces(
 ) -> (Vec<f64>, Vec<SpiceRawTrace>) {
     let x_values = cols
         .first()
-        .map(|col| {
-            col.iter()
-                .map(|&(re, im)| re.hypot(im).max(re.abs()))
-                .collect()
-        })
+        .map(|col| col.iter().map(|&(re, _)| re).collect())
         .unwrap_or_default();
     let mut traces = Vec::new();
     for (idx, col) in cols.iter().enumerate().skip(1).take(MAX_DECODED_TRACES) {
@@ -1232,6 +1287,8 @@ struct RawHeaderMeta {
     is_complex: bool,
     is_double: bool,
     fast_access: bool,
+    stepped: bool,
+    dimensions: Option<Vec<usize>>,
     nvars: usize,
     npoints: usize,
     variables: Vec<(String, String)>,
@@ -1314,10 +1371,13 @@ fn apply_raw_header_line(line: &str, meta: &mut RawHeaderMeta, in_vars: &mut boo
             meta.is_complex = fl.split_ascii_whitespace().any(|flag| flag == "complex");
             meta.is_double = fl.split_ascii_whitespace().any(|flag| flag == "double");
             meta.fast_access = fl.split_ascii_whitespace().any(|flag| flag == "fastaccess");
+            meta.stepped = fl.split_ascii_whitespace().any(|flag| flag == "stepped");
         } else if lower.starts_with("no. variables:") {
             meta.nvars = v.parse().unwrap_or(0);
         } else if lower.starts_with("no. points:") {
             meta.npoints = v.parse().unwrap_or(0);
+        } else if lower.starts_with("dimensions:") {
+            meta.dimensions = v.split(',').map(|dim| dim.trim().parse().ok()).collect();
         } else if lower.starts_with("variables:") {
             *in_vars = true;
         }
@@ -1370,8 +1430,23 @@ fn decode_ltspice_binary_plot(
     let kept_vars = nvars.saturating_sub(1).min(MAX_DECODED_TRACES);
 
     // LTspice's compressed transient format can encode negative time stamps.
-    let transient = RawAnalysisKind::classify(&meta.plot_name, meta.is_complex, total_points)
-        == RawAnalysisKind::Transient;
+    let kind = RawAnalysisKind::classify(&meta.plot_name, meta.is_complex, total_points);
+    let read_x = |record: &[u8]| {
+        let x = f64::from_le_bytes(record.first_chunk::<8>().copied().unwrap_or_default());
+        if kind == RawAnalysisKind::Transient {
+            x.abs()
+        } else {
+            x
+        }
+    };
+    let records = payload.chunks_exact(stride_bytes);
+    let ranges = sweeps::source_sweeps(
+        records.clone().map(read_x),
+        meta.dimensions.as_deref(),
+        kind,
+        meta.stepped,
+        cancelled,
+    )?;
     let mut x_values = Vec::with_capacity(total_points / step + 1);
     let mut reals: Vec<Vec<f64>> = vec![Vec::new(); kept_vars];
     let mut phases: Vec<Vec<f64>> = if meta.is_complex {
@@ -1380,13 +1455,11 @@ fn decode_ltspice_binary_plot(
         Vec::new()
     };
 
-    for pt in (0..total_points).step_by(step) {
+    for (pt, rec) in records.enumerate().step_by(step) {
         if pt.is_multiple_of(512) {
             check_cancelled(cancelled, "LTspice binary decode cancelled")?;
         }
-        let rec = &payload[pt * stride_bytes..(pt + 1) * stride_bytes];
-        let x_val = f64::from_le_bytes(rec[0..8].try_into().unwrap_or([0; 8]));
-        x_values.push(if transient { x_val.abs() } else { x_val });
+        x_values.push(read_x(rec));
 
         for v in 0..kept_vars {
             let var_idx = v + 1;
@@ -1409,7 +1482,13 @@ fn decode_ltspice_binary_plot(
         }
     }
 
-    build_plot_from_vecs(meta, total_points, x_values, reals, phases)
+    build_plot_from_vecs(
+        meta,
+        x_values,
+        sampled_sweep_starts(&ranges, step),
+        reals,
+        phases,
+    )
 }
 
 fn decode_ltspice_ascii_plot(
@@ -1419,6 +1498,22 @@ fn decode_ltspice_ascii_plot(
 ) -> Result<SpiceRawPlot, String> {
     let text = decode_spice_text(payload);
     let mut tokens = text.split_whitespace();
+    let mut axes = tokens.clone();
+    let axis = (0..meta.npoints).map(|_| {
+        axes.next(); // point index
+        let x = parse_raw_scalar(axes.next(), meta.is_complex).map_or(f64::NAN, |(x, _)| x);
+        if meta.nvars > 1 {
+            axes.nth(meta.nvars - 2);
+        }
+        x
+    });
+    let ranges = sweeps::source_sweeps(
+        axis,
+        meta.dimensions.as_deref(),
+        RawAnalysisKind::classify(&meta.plot_name, meta.is_complex, meta.npoints),
+        meta.stepped,
+        cancelled,
+    )?;
     let step = decimate_stride(meta.npoints);
     let kept_vars = (meta.variables.len() - 1).min(MAX_DECODED_TRACES);
     let mut x_values = Vec::new();
@@ -1453,7 +1548,13 @@ fn decode_ltspice_ascii_plot(
         return Err("Unexpected data after SPICE .raw values".into());
     }
 
-    build_plot_from_vecs(meta, meta.npoints, x_values, reals, phases)
+    build_plot_from_vecs(
+        meta,
+        x_values,
+        sampled_sweep_starts(&ranges, step),
+        reals,
+        phases,
+    )
 }
 
 fn parse_raw_scalar(token: Option<&str>, complex: bool) -> Result<(f64, f64), String> {
@@ -1470,8 +1571,8 @@ fn parse_raw_scalar(token: Option<&str>, complex: bool) -> Result<(f64, f64), St
 
 fn build_plot_from_vecs(
     meta: &RawHeaderMeta,
-    total_points: usize,
     x_values: Vec<f64>,
+    sweep_starts: Vec<usize>,
     reals: Vec<Vec<f64>>,
     mut phases: Vec<Vec<f64>>,
 ) -> Result<SpiceRawPlot, String> {
@@ -1502,6 +1603,7 @@ fn build_plot_from_vecs(
         .first()
         .cloned()
         .unwrap_or_else(|| ("x".into(), String::new()));
+    let total_points = meta.npoints;
     let kind = RawAnalysisKind::classify(&meta.plot_name, meta.is_complex, total_points);
     Ok(SpiceRawPlot {
         title: if meta.title.trim().is_empty() {
@@ -1518,6 +1620,7 @@ fn build_plot_from_vecs(
         x_name,
         x_unit,
         x_values,
+        sweep_starts,
         traces,
     }
     .include_first_operating_point_signal())
@@ -1618,16 +1721,25 @@ fn draw_waveform_curves(
         paint.set_color_rgba8(r, g, b, 235);
         paint.anti_alias = true;
         let mut pb = PathBuilder::new();
-        for (i, (&xv, &yv)) in x_mapped.iter().zip(&trace.values).enumerate() {
-            if !yv.is_finite() || !xv.is_finite() {
-                continue;
-            }
-            let px = pad + ((xv - xmin) / xspan) as f32 * uw;
-            let py = pad + (1.0 - (yv - ymin) / yspan) as f32 * uh;
-            if i == 0 {
-                pb.move_to(px, py);
-            } else {
-                pb.line_to(px, py);
+        for range in plot.sweep_ranges() {
+            let mut started = false;
+            let ys = trace
+                .values
+                .get(range.start..range.end.min(trace.values.len()))
+                .unwrap_or_default();
+            for (&xv, &yv) in x_mapped[range].iter().zip(ys) {
+                if !yv.is_finite() || !xv.is_finite() {
+                    started = false;
+                    continue;
+                }
+                let px = pad + ((xv - xmin) / xspan) as f32 * uw;
+                let py = pad + (1.0 - (yv - ymin) / yspan) as f32 * uh;
+                if started {
+                    pb.line_to(px, py);
+                } else {
+                    pb.move_to(px, py);
+                    started = true;
+                }
             }
         }
         if let Some(path) = pb.finish() {
@@ -1861,6 +1973,50 @@ Binary:
 
         let fake_tiff = b"II*\0\x08\0\0\0\x01\0\x00\x01\x03\0\x01\0\0\0";
         assert!(!is_spice_raw_bytes(fake_tiff));
+    }
+
+    #[test]
+    fn descending_nested_dc_sweeps_draw_without_a_connector() {
+        // Representative ngspice nested .dc output: descending inner source,
+        // with two values of the outer source and no Dimensions header.
+        let bytes = b"Title: Nested DC sweep\nPlotname: DC transfer characteristic\nFlags: real\nNo. Variables: 2\nNo. Points: 6\nVariables:\n0 v(v-sweep) voltage\n1 v(offset) voltage\nValues:\n0 1 -2\n1 0 -2\n2 -1 -2\n3 1 2\n4 0 2\n5 -1 2\n";
+        let cancel = AtomicBool::new(false);
+        let doc = SpiceRawDocument::parse(bytes, &cancel).unwrap();
+        let plot = doc.primary().unwrap();
+        assert_eq!(plot.x_values, [1.0, 0.0, -1.0, 1.0, 0.0, -1.0]);
+        assert_eq!(plot.sweep_ranges().collect::<Vec<_>>(), [0..3, 3..6]);
+        let thumb = doc.render_thumbnail([128, 80], &cancel).unwrap();
+        let green = |x: usize, y: usize| {
+            let i = (y * 128 + x) * 4;
+            let pixel: &[u8] = &thumb.premultiplied_rgba[i..i + 4];
+            pixel[1] > 140
+        };
+        assert!(green(64, 6) && green(64, 74));
+        assert!(!(62..67).any(|x| (38..43).any(|y| green(x, y))));
+    }
+
+    #[test]
+    fn explicit_dimensions_separate_sweeps_even_without_an_axis_reset() {
+        let header = "Title: Explicit sweeps\nPlotname: DC transfer characteristic\nFlags: real\nNo. Variables: 2\nNo. Points: 6\nDimensions: 2,3\n";
+        let samples = "Variables:\n0 v-sweep voltage\n1 v(out) voltage\nValues:\n0 -3 0\n1 -2 0\n2 -1 0\n3 0 1\n4 1 1\n5 2 1\n";
+        for extra in ["", "Offset: 0\n"] {
+            // Offset exercises the LTspice fallback.
+            let input = format!("{header}{extra}{samples}");
+            let doc = SpiceRawDocument::parse(input.as_bytes(), &AtomicBool::new(false)).unwrap();
+            assert_eq!(
+                doc.primary().unwrap().sweep_ranges().collect::<Vec<_>>(),
+                [0..3, 3..6]
+            );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_axis_reversal_is_preserved() {
+        let bytes = b"Title: DC sweep\nPlotname: DC transfer characteristic\nFlags: real\nNo. Variables: 2\nNo. Points: 6\nVariables:\n0 v-sweep voltage\n1 v(out) voltage\nValues:\n0 -2 0\n1 1 1\n2 0 2\n3 -2 3\n4 1 4\n5 2 5\n";
+        let doc = SpiceRawDocument::parse(bytes, &AtomicBool::new(false)).unwrap();
+        let plot = doc.primary().unwrap();
+        assert_eq!(plot.sweep_ranges().collect::<Vec<_>>(), [0..6]);
+        assert_eq!(plot.x_values, [-2.0, 1.0, 0.0, -2.0, 1.0, 2.0]);
     }
 
     #[test]

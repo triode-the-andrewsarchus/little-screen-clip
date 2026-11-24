@@ -325,16 +325,19 @@ fn paint_trace_curves(
         }
         let [r, g, b] = TRACE_PALETTE[idx % TRACE_PALETTE.len()];
         let stroke = Stroke::new(1.7, Color32::from_rgb(r, g, b));
-        let pts: Vec<Pos2> = (0..n)
-            .filter(|&i| x_mapped[i].is_finite() && ys[i].is_finite())
-            .map(|i| {
-                let u = (x_mapped[i] - xmin) / xspan;
-                let v = (ys[i] - ymin) / yspan;
-                map_point(plot_rect, u, v, state.zoom, state.pan)
-            })
-            .collect();
-        for seg in pts.windows(2) {
-            scope_painter.line_segment([seg[0], seg[1]], stroke);
+        for range in plot.sweep_ranges() {
+            let mut previous = None;
+            for i in range.start..range.end.min(n) {
+                let next = (x_mapped[i].is_finite() && ys[i].is_finite()).then(|| {
+                    let u = (x_mapped[i] - xmin) / xspan;
+                    let v = (ys[i] - ymin) / yspan;
+                    map_point(plot_rect, u, v, state.zoom, state.pan)
+                });
+                if let (Some(a), Some(b)) = (previous, next) {
+                    scope_painter.line_segment([a, b], stroke);
+                }
+                previous = next;
+            }
         }
     }
 }
