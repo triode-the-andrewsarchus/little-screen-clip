@@ -1,0 +1,8 @@
+RC transient and divider operating point
+V1 in 0 DC 2 PULSE(0 2 0 1u 1u 10m 20m)
+R1 in out 1k
+R2 out 0 1k
+C1 out 0 1u
+.op
+.tran 5u 4m
+.end

@@ -3,6 +3,7 @@
 
 mod peaks;
 pub mod raw_compare;
+pub mod simulation;
 mod sweeps;
 
 pub use peaks::{SpicePreviewSample, SpiceRawTrace};

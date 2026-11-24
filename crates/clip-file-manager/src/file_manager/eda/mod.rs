@@ -2,6 +2,7 @@
 
 mod kicad;
 pub(super) mod raster_task;
+mod simulation;
 pub(super) mod spice;
 
 use super::{
@@ -230,6 +231,7 @@ pub(super) struct Viewer {
     requested: Option<kicad::ProjectLink>,
     show_project_source: bool,
     links_enabled: bool,
+    simulation: simulation::View,
 }
 
 impl Viewer {
@@ -260,11 +262,16 @@ impl Viewer {
             requested: None,
             show_project_source: false,
             links_enabled: true,
+            simulation: simulation::View::default(),
         })
     }
 
     pub(super) fn enable_project_links(&mut self, enabled: bool) {
         self.links_enabled = enabled;
+    }
+
+    pub(super) fn enable_simulation(&mut self, enabled: bool) {
+        self.simulation.enabled = enabled;
     }
 
     pub(super) fn take_project_link(&mut self) -> Option<(FileSource, kicad::ProjectLink)> {
@@ -298,11 +305,13 @@ impl Viewer {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
         let format = self.doc.format();
-        let colors = WorkbenchColors::from_palette(palette);
         let mut reset_view = false;
         StudioShell::new(format.label(), icon_for_format(format), palette, close).render_header(
             ui,
             |ui| {
+                if format == EdaFormat::SpiceNetlist {
+                    self.simulation.navigation(ui, palette);
+                }
                 if !matches!(
                     format,
                     EdaFormat::KicadProject | EdaFormat::SpiceNetlist | EdaFormat::LtspicePlot
@@ -314,6 +323,10 @@ impl Viewer {
                 }
             },
         );
+        if self.simulation.is_open() {
+            self.simulation.ui(ui, &self.source, palette);
+            return;
+        }
         if self.links_enabled
             && format != EdaFormat::KicadProject
             && let Some(link) = self.related.first()
@@ -357,17 +370,23 @@ impl Viewer {
             self.state.pan = Vec2::ZERO;
         }
 
-        let layout = StudioPanelLayout::default().with_left().allocate(ui);
-        if let Some(left) = layout.left {
-            StudioPanelLayout::show_region(ui, left, |ui| {
-                render_left_panel(ui, &self.doc, &mut self.state, palette);
-            });
-        }
-
-        StudioPanelLayout::show_region(ui, layout.center, |ui| {
-            render_center_panel(ui, &self.doc, &mut self.state, colors);
-        });
+        render_with_panels(ui, &self.doc, &mut self.state, palette);
     }
+}
+
+fn render_with_panels(
+    ui: &mut egui::Ui,
+    doc: &Arc<Document>,
+    state: &mut ViewerState,
+    palette: &AppPalette,
+) {
+    let layout = StudioPanelLayout::default().with_left().allocate(ui);
+    if let Some(left) = layout.left {
+        StudioPanelLayout::show_region(ui, left, |ui| render_left_panel(ui, doc, state, palette));
+    }
+    StudioPanelLayout::show_region(ui, layout.center, |ui| {
+        render_center_panel(ui, doc, state, WorkbenchColors::from_palette(palette));
+    });
 }
 
 fn render_left_panel(

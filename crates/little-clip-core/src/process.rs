@@ -51,6 +51,7 @@ pub struct CommandRequest {
     args: Vec<OsString>,
     current_dir: Option<PathBuf>,
     envs: Vec<(OsString, OsString)>,
+    clear_environment: bool,
     content_inputs: Vec<std::sync::Arc<std::fs::File>>,
     stdin: Option<Vec<u8>>,
     timeout: Duration,
@@ -70,6 +71,7 @@ impl CommandRequest {
             args: Vec::new(),
             current_dir: None,
             envs: Vec::new(),
+            clear_environment: false,
             content_inputs: Vec::new(),
             stdin: None,
             timeout: Duration::from_secs(30),
@@ -91,6 +93,12 @@ impl CommandRequest {
     /// Sets an environment variable override for the spawned child process.
     pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
         self.envs.push((key.into(), value.into()));
+        self
+    }
+
+    /// Starts with an empty environment before applying any request overrides.
+    pub fn clear_environment(mut self) -> Self {
+        self.clear_environment = true;
         self
     }
 
@@ -377,6 +385,9 @@ impl CommandRequest {
         command.args(&self.args);
         if let Some(dir) = &self.current_dir {
             command.current_dir(dir);
+        }
+        if self.clear_environment {
+            command.env_clear();
         }
         for (key, value) in &self.envs {
             command.env(key, value);

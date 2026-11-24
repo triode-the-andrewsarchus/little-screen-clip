@@ -441,9 +441,9 @@ impl Viewers {
                     }
                 }
                 if let ViewerSession::Eda(viewer) = &mut opened {
-                    viewer.enable_project_links(
-                        self.source_guard.is_none() && self.archive_location.is_none(),
-                    );
+                    let ordinary = self.source_guard.is_none() && self.archive_location.is_none();
+                    viewer.enable_project_links(ordinary);
+                    viewer.enable_simulation(ordinary && self.archive_export_directory.is_none());
                 }
                 self.session = Some(opened);
             }
@@ -1437,13 +1437,58 @@ mod tests {
         paths: Vec<PathBuf>,
         ready_label: &str,
     ) -> egui_kittest::Harness<'static, Viewers> {
-        use egui_kittest::{Harness, kittest::Queryable};
         let mut viewers = Viewers::default();
         viewers.open_engineering(paths, super::super::EngineeringAction::Compare);
+        let mut harness = files_harness(viewers);
+        wait_for_files(&mut harness, ready_label);
+        harness
+    }
+
+    #[test]
+    fn files_runs_simulation_only_after_explicit_action_and_opens_raw_results() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use little_clip_core::eda::spice::simulation::check_support;
+
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("trusted_rc.cir");
+        std::fs::write(
+            &path,
+            include_bytes!("../../../little-clip-core/tests/fixtures/eda/trusted_rc.cir"),
+        )
+        .unwrap();
+        let mut viewers = Viewers::default();
+        viewers.open(path);
+        let mut harness = files_harness(viewers);
+        wait_for_files(&mut harness, "Simulation…");
+        assert!(harness.query_by_label("Run Simulation").is_none());
+        assert!(harness.query_by_label("Simulation results").is_none());
+        harness.get_by_label("Simulation…").click();
+        wait_for_files(&mut harness, "Run Simulation");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while harness
+            .query_by_label("Checking Linux sandbox support…")
+            .is_some()
+        {
+            assert!(std::time::Instant::now() < deadline);
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let run = harness.get_by_label("Run Simulation");
+        if check_support(&std::sync::atomic::AtomicBool::new(false)).is_err() {
+            assert!(run.accesskit_node().is_disabled());
+            return;
+        }
+        assert!(!run.accesskit_node().is_disabled());
+        assert!(harness.query_by_label("Simulation results").is_none());
+        run.click();
+        wait_for_files(&mut harness, "Simulation results");
+    }
+
+    fn files_harness(viewers: Viewers) -> egui_kittest::Harness<'static, Viewers> {
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut copies = super::super::preview_copy::Copies::default();
-        let mut harness = Harness::builder()
+        egui_kittest::Harness::builder()
             .allow_missing_glyphs()
             .with_size(egui::vec2(880.0, 550.0))
             .build_ui_state(
@@ -1452,17 +1497,20 @@ mod tests {
                     viewers.ui(ui, &palette, &mut copies);
                 },
                 viewers,
-            );
+            )
+    }
+
+    fn wait_for_files(harness: &mut egui_kittest::Harness<'_, Viewers>, ready_label: &str) {
+        use egui_kittest::kittest::Queryable;
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while harness.query_by_label(ready_label).is_none() {
             assert!(
                 std::time::Instant::now() < deadline,
-                "comparison did not publish {ready_label}"
+                "Files did not render {ready_label}"
             );
             harness.step();
             std::thread::sleep(Duration::from_millis(5));
         }
-        harness
     }
 
     #[test]
