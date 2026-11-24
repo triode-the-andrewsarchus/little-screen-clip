@@ -276,38 +276,22 @@ fn render_left_panel(
         });
 }
 
-fn render_center_panel(
+fn text_only_heading(doc: &Document) -> Option<&'static str> {
+    match doc {
+        Document::KicadProject(_) => Some("Configuration JSON"),
+        Document::SpiceNetlist(_) => Some("SPICE Netlist Deck"),
+        _ => None,
+    }
+}
+
+fn paint_canvas_document(
     ui: &mut egui::Ui,
+    rect: Rect,
+    response: &egui::Response,
     doc: &Document,
     state: &mut ViewerState,
     colors: WorkbenchColors,
-) {
-    if matches!(doc, Document::KicadProject(_)) {
-        ui.strong("Configuration JSON");
-        ui.separator();
-        render_source_rows(ui, source_text_for(doc), state);
-        return;
-    }
-    if matches!(doc, Document::SpiceNetlist(_)) {
-        ui.strong("SPICE Netlist Deck");
-        ui.separator();
-        render_source_rows(ui, source_text_for(doc), state);
-        return;
-    }
-
-    let has_source = matches!(doc, Document::Hpgl(_) | Document::LtspicePlot(_))
-        && !state.source_lines.is_empty();
-    let canvas_h = if has_source {
-        (ui.available_height() - 160.0).max(120.0)
-    } else {
-        (ui.available_height() - 26.0).max(120.0)
-    };
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(ui.available_width(), canvas_h),
-        egui::Sense::click_and_drag(),
-    );
-    crate::ui_ext::pan_zoom_canvas(ui, rect, &response, &mut state.zoom, &mut state.pan, 32.0);
-
+) -> String {
     let mut raw_readout = None;
     let cursor_mm = match doc {
         Document::Gerber(gerber) => {
@@ -322,9 +306,9 @@ fn render_center_panel(
             paint_gerber_canvas(ui, rect, gerber, state, colors)
         }
         Document::PickAndPlace(pos_doc) => {
-            paint_pick_place_canvas(ui, rect, &response, pos_doc, state, colors)
+            paint_pick_place_canvas(ui, rect, response, pos_doc, state, colors)
         }
-        Document::Hpgl(hpgl) => paint_hpgl_canvas(ui, rect, &response, hpgl, state, colors),
+        Document::Hpgl(hpgl) => paint_hpgl_canvas(ui, rect, response, hpgl, state, colors),
         Document::KicadPcb(pcb) => kicad::paint_pcb_center(ui, rect, pcb, state, colors),
         Document::KicadSchematic(sch) => {
             kicad::paint_schematic_center(ui, rect, sch, state, colors)
@@ -349,11 +333,40 @@ fn render_center_panel(
         Document::KicadProject(_) | Document::SpiceNetlist(_) => None,
     };
 
-    let coord_text = raw_readout.unwrap_or_else(|| {
+    raw_readout.unwrap_or_else(|| {
         cursor_mm
             .map(|[x, y]| format!("Cursor {x:.3}, {y:.3} mm · drag to pan · scroll to zoom"))
             .unwrap_or_else(|| "Drag to pan · scroll to zoom".into())
-    });
+    })
+}
+
+fn render_center_panel(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    state: &mut ViewerState,
+    colors: WorkbenchColors,
+) {
+    if let Some(heading) = text_only_heading(doc) {
+        ui.strong(heading);
+        ui.separator();
+        render_source_rows(ui, source_text_for(doc), state);
+        return;
+    }
+
+    let has_source = matches!(doc, Document::Hpgl(_) | Document::LtspicePlot(_))
+        && !state.source_lines.is_empty();
+    let canvas_h = if has_source {
+        (ui.available_height() - 160.0).max(120.0)
+    } else {
+        (ui.available_height() - 26.0).max(120.0)
+    };
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), canvas_h),
+        egui::Sense::click_and_drag(),
+    );
+    crate::ui_ext::pan_zoom_canvas(ui, rect, &response, &mut state.zoom, &mut state.pan, 32.0);
+
+    let coord_text = paint_canvas_document(ui, rect, &response, doc, state, colors);
     ui.label(coord_text);
 
     if has_source {

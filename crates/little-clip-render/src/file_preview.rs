@@ -355,16 +355,7 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
                 thumbnail,
             }))
         }
-        Kind::Eda => {
-            let cancelled = AtomicBool::new(false);
-            let thumbnail =
-                little_clip_core::eda::render_thumbnail(path, [320, 220], &cancelled).ok()?;
-            Some(Preview::Page(Page {
-                width: 0,
-                height: 0,
-                thumbnail,
-            }))
-        }
+        Kind::Eda => load_eda_page(path),
         Kind::Pdf | Kind::Office => load_page(path, kind == Kind::Office).map(Preview::Page),
         Kind::Spreadsheet => {
             let data = spreadsheet::load_spreadsheet_preview(
@@ -389,22 +380,7 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             }
             Some(Preview::Midi(score))
         }
-        Kind::Brush => {
-            let cancelled = std::sync::atomic::AtomicBool::new(false);
-            if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("gbr"))
-                && let Ok(thumbnail) =
-                    little_clip_core::eda::render_thumbnail(path, [320, 220], &cancelled)
-            {
-                return Some(Preview::Page(Page {
-                    width: 0,
-                    height: 0,
-                    thumbnail,
-                }));
-            }
-            little_clip_core::brushes::load_brush_library(path, 6, &cancelled)
-                .ok()
-                .map(Preview::Brush)
-        }
+        Kind::Brush => load_brush_preview(path, extension),
         Kind::Text => {
             let contents = little_clip_core::kernel_interface::read_content_to_string_bounded(
                 path,
@@ -421,6 +397,28 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
             })
         }
     }
+}
+
+fn load_eda_page(path: &Path) -> Option<Preview> {
+    let cancelled = AtomicBool::new(false);
+    let thumbnail = little_clip_core::eda::render_thumbnail(path, [320, 220], &cancelled).ok()?;
+    Some(Preview::Page(Page {
+        width: 0,
+        height: 0,
+        thumbnail,
+    }))
+}
+
+fn load_brush_preview(path: &Path, extension: Option<&str>) -> Option<Preview> {
+    if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("gbr"))
+        && let Some(page) = load_eda_page(path)
+    {
+        return Some(page);
+    }
+    let cancelled = AtomicBool::new(false);
+    little_clip_core::brushes::load_brush_library(path, 6, &cancelled)
+        .ok()
+        .map(Preview::Brush)
 }
 
 fn load_page(path: &Path, office: bool) -> Option<Page> {
