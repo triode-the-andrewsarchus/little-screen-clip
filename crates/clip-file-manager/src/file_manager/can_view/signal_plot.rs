@@ -30,6 +30,7 @@ pub(super) struct Hit {
 pub(super) struct FrameCursor {
     pub row: u64,
     pub time_ns: i128,
+    pub evidence_visit: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -141,11 +142,11 @@ impl Plot {
             colors,
             paired: self.comparison.is_some(),
         };
-        let row = self.primary.as_mut()?.show(ui, &chart, copies);
+        let row = self.primary.as_mut()?.show(ui, &chart, copies, true);
         let comparison_row = self
             .comparison
             .as_mut()
-            .and_then(|lane| lane.show(ui, &chart, copies));
+            .and_then(|lane| lane.show(ui, &chart, copies, false));
         let (axis, _) = ui.allocate_exact_size(vec2(ui.available_width(), 12.0), Sense::hover());
         paint_time_axis(
             &ui.painter_at(axis),
@@ -195,7 +196,13 @@ impl Lane {
         }
     }
 
-    fn show(&mut self, ui: &mut Ui, chart: &Chart<'_>, copies: &mut Copies) -> Option<Hit> {
+    fn show(
+        &mut self,
+        ui: &mut Ui,
+        chart: &Chart<'_>,
+        copies: &mut Copies,
+        primary: bool,
+    ) -> Option<Hit> {
         let field = chart
             .database
             .message(self.signal.id)?
@@ -263,7 +270,15 @@ impl Lane {
             chart.colors,
         );
         if let Some(cursor) = chart.cursor {
-            paint_selected(&painter, rect, chart, &series.points, cursor, scale);
+            paint_selected(
+                &painter,
+                rect,
+                chart,
+                &series.points,
+                cursor,
+                scale,
+                primary,
+            );
         }
         let point_at = |pos: egui::Pos2| {
             if !rect.contains(pos) {
@@ -389,8 +404,12 @@ fn paint_selected(
     points: &[Point],
     cursor: FrameCursor,
     scale: Option<ValueScale>,
+    primary: bool,
 ) {
     activity::marker(painter, rect, chart.span, cursor.time_ns, chart.colors);
+    if primary && cursor.evidence_visit && chart.span.contains(&cursor.time_ns) {
+        paint_cursor_label(painter, rect, chart, cursor);
+    }
     if let Some(scale) = scale
         && let Some(value) = points_at(points, cursor.time_ns)
             .iter()
@@ -406,6 +425,22 @@ fn paint_selected(
             Stroke::new(1.3, chart.colors.focus),
         );
     }
+}
+
+fn paint_cursor_label(painter: &Painter, rect: Rect, chart: &Chart<'_>, cursor: FrameCursor) {
+    let x = activity::x(rect, chart.span, cursor.time_ns);
+    let (x, align) = if x < rect.center().x {
+        (x + 4.0, Align2::LEFT_TOP)
+    } else {
+        (x - 4.0, Align2::RIGHT_TOP)
+    };
+    painter.with_clip_rect(rect).text(
+        pos2(x, rect.top() + 2.0),
+        align,
+        format!("Frame {}", cursor.row + 1),
+        FontId::monospace(11.0),
+        chart.colors.focus,
+    );
 }
 
 fn tooltip(point: Point, unit: &str, origin: i128) -> String {

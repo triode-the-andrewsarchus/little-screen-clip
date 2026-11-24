@@ -1,10 +1,11 @@
 use super::{activity, direction, hex, kind};
 use crate::{
-    file_manager::capture_browse::table::{Columns, Page, Response},
+    file_manager::capture_browse::table::{Columns, Page, Response, Sort, TableOptions},
     ui_appearance::WorkbenchColors,
 };
 use egui::{Rect, ScrollArea, Ui};
-use little_clip_core::engineering::can::{Frame, FrameKind};
+use little_clip_core::engineering::can::{Channel, Frame, FrameKind};
+use std::cmp::Ordering;
 
 const COLUMNS: Columns<7> = Columns {
     id: "can-frames",
@@ -17,14 +18,14 @@ const COLUMNS: Columns<7> = Columns {
 
 pub(super) fn show<'a>(
     ui: &mut Ui,
-    page: Page<'_>,
+    view: (Page<'_>, TableOptions),
     origin: i128,
     colors: WorkbenchColors,
     frame: impl Fn(u64) -> Option<&'a Frame>,
 ) -> Response {
-    COLUMNS.show(
+    COLUMNS.show_with_options(
         ui,
-        page,
+        view,
         colors,
         frame,
         |frame| frame.row,
@@ -32,6 +33,24 @@ pub(super) fn show<'a>(
             contents(ui, rect, frame, origin, colors);
         },
     )
+}
+
+pub(super) fn compare(sort: Sort, left: &Frame, right: &Frame) -> Ordering {
+    fn channel(frame: &Frame) -> Option<&Channel> {
+        (frame.channel != Channel::Unknown).then_some(&frame.channel)
+    }
+    match sort.column {
+        0 => sort.compare(left.row, right.row),
+        1 => sort.compare(left.timestamp_ns, right.timestamp_ns),
+        2 => sort.known_first(channel(left), channel(right)),
+        3 => sort.known_first(left.id, right.id),
+        4 => sort.compare(
+            (kind(left.kind), direction(left.direction)),
+            (kind(right.kind), direction(right.direction)),
+        ),
+        5 => sort.compare(left.data_len, right.data_len),
+        _ => Ordering::Equal,
+    }
 }
 
 fn contents(ui: &Ui, rect: Rect, frame: &Frame, origin: i128, colors: WorkbenchColors) {

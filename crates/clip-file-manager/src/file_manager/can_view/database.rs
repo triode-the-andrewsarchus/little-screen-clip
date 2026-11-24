@@ -84,39 +84,7 @@ impl Panel {
             self.nearby_checked = true;
         }
         let ready = self.loading.is_none() && self.picker.is_none();
-        if !self.attached()
-            && let Some(path) = self.nearby.clone()
-            && ui
-                .add_enabled(
-                    ready,
-                    egui::Button::new(format!("Attach {}", path.display())),
-                )
-                .on_hover_text("Attach the DBC with the same filename as the capture.")
-                .clicked()
-        {
-            self.begin_attach(ui.ctx(), capture, path);
-        }
-        let available = clip_studios::is_zenity_available();
-        if ui
-            .add_enabled(ready && available, egui::Button::new("Browse DBC…"))
-            .on_disabled_hover_text("The file chooser needs Zenity. You can enter a DBC path.")
-            .clicked()
-        {
-            let initial = capture.directory().join("");
-            self.editing = false;
-            self.picker = Some(start(&PICKERS, ui.ctx(), PICKER_TIMEOUT, move |cancel| {
-                pick_database(&initial, cancel)
-            }));
-            ui.ctx().request_repaint_after(Duration::from_millis(250));
-        }
-        if ui
-            .add_enabled(ready, egui::Button::new("Enter DBC path"))
-            .clicked()
-        {
-            self.editing = true;
-            self.autofocus = true;
-        }
-        if let Some((path, database)) = self.database.as_ref() {
+        let label = if let Some((path, database)) = self.database.as_ref() {
             let name = path
                 .file_name()
                 .unwrap_or(path.as_os_str())
@@ -126,37 +94,75 @@ impl Panel {
                 database.message_count(),
                 path.display()
             ));
-            if ui.small_button("Detach DBC").clicked() {
-                self.database = None;
-                self.plot = signal_plot::Plot::default();
-                self.loading = None;
-                self.picker = None;
-                self.error = None;
-                self.selected = None;
-                self.reveal_field = None;
-                self.generation += 1;
-            }
-        }
+            "Change DBC"
+        } else {
+            "Attach DBC"
+        };
+        ui.add_enabled_ui(ready, |ui| {
+            egui::menu::MenuButton::new(label)
+                .config(
+                    egui::menu::MenuConfig::new()
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+                )
+                .ui(ui, |ui| self.attachment_menu(ui, capture));
+        });
         if self.loading.is_some() {
             ui.weak("Reading DBC…");
         }
-        if let Some(error) = &self.error {
+        if let Some(error) = self.error.as_ref().filter(|_| !self.editing) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
     }
 
-    pub(super) fn attachment(&mut self, ui: &mut Ui, capture: &Arc<Capture>) {
+    fn attachment_menu(&mut self, ui: &mut Ui, capture: &Arc<Capture>) {
+        if let Some(path) = self.nearby.as_ref()
+            && ui.button(format!("Use {}", path.display())).clicked()
+        {
+            self.begin_attach(ui.ctx(), capture, path.clone());
+            ui.close();
+        }
+        let available = clip_studios::is_zenity_available();
+        if ui
+            .add_enabled(available, egui::Button::new("Browse DBC…"))
+            .on_disabled_hover_text("The file chooser needs Zenity. You can enter a DBC path.")
+            .clicked()
+        {
+            let initial = capture.directory().join("");
+            self.editing = false;
+            self.picker = Some(start(&PICKERS, ui.ctx(), PICKER_TIMEOUT, move |cancel| {
+                pick_database(&initial, cancel)
+            }));
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+            ui.close();
+        }
+        if !self.editing && ui.button("Enter DBC path").clicked() {
+            self.editing = true;
+            self.autofocus = true;
+        }
+        self.attachment(ui, capture);
+        if self.attached() && ui.button("Detach DBC").clicked() {
+            self.database = None;
+            self.plot = signal_plot::Plot::default();
+            self.error = None;
+            self.editing = false;
+            self.selected = None;
+            self.reveal_field = None;
+            self.generation += 1;
+            ui.close();
+        }
+    }
+
+    fn attachment(&mut self, ui: &mut Ui, capture: &Arc<Capture>) {
         if !self.editing {
             return;
         }
-        let width = (ui.available_width() * 0.63).min(470.0);
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             ui.label("DBC path");
             let field = ui.add(
                 egui::TextEdit::singleline(&mut self.path)
                     .id_salt("attach-can-database")
                     .hint_text("Path to a .dbc file")
-                    .desired_width(width),
+                    .desired_width(250.0),
             );
             field
                 .clone()
@@ -174,6 +180,7 @@ impl Panel {
                 match little_clip_core::path_address::decode_path(self.path.trim()) {
                     Ok(path) if !path.as_os_str().is_empty() => {
                         self.begin_attach(ui.ctx(), capture, path);
+                        ui.close();
                     }
                     Ok(_) => self.error = Some("Enter a DBC path.".into()),
                     Err(error) => self.error = Some(error),
@@ -184,6 +191,11 @@ impl Panel {
                 self.error = None;
             }
         });
+        if self.editing
+            && let Some(error) = &self.error
+        {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
     }
 
     fn begin_attach(&mut self, ctx: &Context, capture: &Arc<Capture>, path: PathBuf) {

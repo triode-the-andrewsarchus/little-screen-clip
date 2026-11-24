@@ -13,7 +13,7 @@ use super::{
         Job, PAGE_ROWS, keyed_poll, poll,
         rows::{RowWindows, needed_window},
         start,
-        table::Page,
+        table::{Page, RowOrder, TableOptions},
     },
     preview_copy::Copies,
 };
@@ -57,6 +57,7 @@ pub(super) struct Viewer {
     page: u64,
     jump_to: u64,
     scroll_to: Option<usize>,
+    order: RowOrder,
     generation: u64,
     viewport: Option<activity::Domain>,
     brush_anchor: Option<i128>,
@@ -96,6 +97,7 @@ impl Viewer {
             page: 0,
             jump_to: 1,
             scroll_to: None,
+            order: RowOrder::default(),
             generation: 0,
             viewport: None,
             brush_anchor: None,
@@ -173,7 +175,6 @@ impl Viewer {
     fn frame_workspace(&mut self, ui: &mut Ui, colors: WorkbenchColors, copies: &mut Copies) {
         self.toolbar(ui, copies);
         self.filter_controls(ui);
-        self.database.attachment(ui, &self.capture);
         self.timeline(ui, colors);
         self.signal_plot(ui, colors, copies);
         self.navigation(ui);
@@ -518,12 +519,14 @@ impl Viewer {
             return Some(signal_plot::FrameCursor {
                 row: selection.point.row,
                 time_ns: selection.point.time_ns,
+                evidence_visit: selection.return_field.is_some(),
             });
         }
         let frame = self.source_frame(self.selected?)?;
         Some(signal_plot::FrameCursor {
             row: frame.row,
             time_ns: frame.timestamp_ns,
+            evidence_visit: false,
         })
     }
 
@@ -558,6 +561,7 @@ impl Viewer {
         };
         let back = ui
             .horizontal_wrapped(|ui| {
+                ui.strong(format!("Inspecting Frame {}", row + 1));
                 ui.weak(status);
                 ui.small_button("Back to matches").clicked()
             })
@@ -577,7 +581,7 @@ impl Viewer {
             .map_or(self.prefix.sample.len() as u64, |index| {
                 index.summary.frames
             });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(self.page > 0, egui::Button::new("Previous"))
                 .clicked()
@@ -602,6 +606,17 @@ impl Viewer {
                         "frames"
                     },
                 ));
+            }
+            if self.order.sort.is_some() && ui.small_button("Restore capture order").clicked() {
+                self.order.sort = None;
+                self.rebuild_frame_order();
+                if let Some(row) = self.selected {
+                    self.reveal(row);
+                }
+            }
+            if self.sortable_frames().is_none() && count > 0 {
+                ui.weak("Capture order")
+                    .on_hover_text("Apply a filter to sort its matches across all result pages");
             }
             ui.separator();
             ui.label("Frame");
@@ -635,24 +650,37 @@ impl Viewer {
             (height * 0.34).clamp(70.0, 152.0)
         };
         let table_top = ui.next_widget_position();
-        let table = table::show(
-            ui,
-            Page {
-                offset: self.page,
-                count,
-                selected: self.selected,
-                selection: match &self.selection {
-                    Some(Selection::Rows(rows)) => Some(rows),
-                    _ => None,
-                },
-                scroll_to: self.scroll_to.take(),
-                generation: self.generation,
-                height: (height - details - 7.0).max(72.0),
+        let options = TableOptions {
+            sortable_columns: if self.sortable_frames().is_some() {
+                6
+            } else {
+                0
             },
-            origin,
-            colors,
-            |position| self.table_frame(position),
-        );
+            sort: self.order.sort,
+            ..Default::default()
+        };
+        let page = Page {
+            offset: self.page,
+            count,
+            selected: self.selected,
+            selection: match &self.selection {
+                Some(Selection::Rows(rows)) => Some(rows),
+                _ => None,
+            },
+            scroll_to: self.scroll_to.take(),
+            generation: self.generation,
+            height: (height - details - 7.0).max(72.0),
+        };
+        let table = table::show(ui, (page, options), origin, colors, |position| {
+            self.table_frame(position)
+        });
+        if let Some(sort) = table.sort {
+            self.order.sort = Some(sort);
+            self.rebuild_frame_order();
+            if let Some(row) = self.selected {
+                self.reveal(row);
+            }
+        }
         if let Some((row, shift)) = table.clicked {
             self.select(row, shift);
             self.reveal_detail = true;
@@ -713,10 +741,31 @@ impl Viewer {
     }
 
     fn table_frame(&self, position: u64) -> Option<&Frame> {
-        if let Some(filtered) = &self.filtered {
-            return filtered.frames.get(position as usize);
+        if let Some(frames) = self.sortable_frames() {
+            return frames.get(self.order.source_index(usize::try_from(position).ok()?));
         }
         self.source_frame(position)
+    }
+
+    fn sortable_frames(&self) -> Option<&[Frame]> {
+        if let Some(filtered) = &self.filtered {
+            Some(&filtered.frames)
+        } else {
+            let sample = &self.prefix.sample;
+            let summary = self.summary();
+            (summary.complete && summary.frames == sample.len() as u64).then_some(sample)
+        }
+    }
+
+    fn rebuild_frame_order(&mut self) {
+        if let Some(filtered) = &self.filtered {
+            self.order.rebuild(&filtered.frames, table::compare);
+        } else if self.sortable_frames().is_some() {
+            self.order.rebuild(&self.prefix.sample, table::compare);
+        } else {
+            self.order = RowOrder::default();
+        }
+        self.generation = self.generation.wrapping_add(1);
     }
 
     fn source_frame(&self, row: u64) -> Option<&Frame> {
@@ -773,7 +822,7 @@ impl Viewer {
     }
 
     fn reveal(&mut self, row: u64) {
-        let position = if self.filtered.is_some() {
+        let mut position = if self.filtered.is_some() {
             let Some(position) = self.filtered_position(row) else {
                 return;
             };
@@ -781,6 +830,9 @@ impl Viewer {
         } else {
             row
         };
+        if self.order.sort.is_some() {
+            position = self.order.display_index(position as usize) as u64;
+        }
         self.set_page(position / PAGE_ROWS * PAGE_ROWS);
         self.scroll_to = Some((position % PAGE_ROWS) as usize);
     }
@@ -873,7 +925,7 @@ impl Viewer {
         self.filter_job = None;
         self.filtered = None;
         self.error = None;
-        self.generation = self.generation.wrapping_add(1);
+        self.rebuild_frame_order();
     }
 
     fn accept_detail(&mut self, row: u64, frame: Option<Frame>) {
@@ -923,7 +975,7 @@ impl Viewer {
                     let first = filtered.frames.first().map(|frame| frame.row);
                     self.filtered = Some(filtered);
                     self.selection = None;
-                    self.generation = self.generation.wrapping_add(1);
+                    self.rebuild_frame_order();
                     self.set_page(0);
                     if let Some(row) = first {
                         self.focus_frame(row);
@@ -1094,5 +1146,16 @@ mod tests {
         assert_eq!(view.selected_span(), Some(brush));
         assert_eq!(view.viewport, Some(visible));
         assert_eq!(view.table_count(), 2);
+
+        view.order.sort = Some(crate::file_manager::capture_browse::table::Sort {
+            column: 1,
+            descending: true,
+        });
+        view.rebuild_frame_order();
+        view.reveal(2);
+        assert_eq!(view.table_frame(0).map(|frame| frame.row), Some(2));
+        assert_eq!(view.filtered_position(2), Some(1));
+        assert_eq!(view.scroll_to, Some(0));
+        assert_eq!(view.selected, Some(2));
     }
 }
