@@ -1,7 +1,8 @@
+use super::Selection;
 use crate::ui_appearance::WorkbenchColors;
 use egui::{Align2, Color32, FontId, Painter, Pos2, ScrollArea, Ui, vec2};
 use little_clip_core::engineering::{
-    flowgraph::{Direction, Graph, RateMeaning, Rates, StreamRate},
+    flowgraph::{Direction, Graph, RateMeaning, RateSetting, Rates, StreamRate},
     waveforms::display_value,
 };
 
@@ -10,10 +11,17 @@ impl super::Viewer {
         ui.separator();
         ui.toggle_value(&mut self.show_rates, "Sample rates")
             .on_hover_text("Trace nominal rates and rate changes from the saved settings");
-        if self.show_rates
-            && let Some(block) = self.rates.issues(ui, &self.graph)
+        if !self.rates.issues.is_empty()
+            && ui
+                .add(
+                    egui::Button::new(format!("Rate checks ({})", self.rates.issues.len()))
+                        .selected(self.show_rate_checks),
+                )
+                .on_hover_text("Show the checks in the inspector")
+                .clicked()
         {
-            self.select(Some(block), true);
+            self.show_rate_checks = !self.show_rate_checks;
+            self.show_rates |= self.show_rate_checks;
         }
     }
 
@@ -36,13 +44,13 @@ pub(super) struct Overlay {
 
 pub(super) struct WireLabel {
     pub text: String,
-    pub warning: bool,
+    warning: Option<&'static str>,
     nominal: bool,
 }
 
 impl WireLabel {
     pub fn color(&self, colors: WorkbenchColors) -> Option<Color32> {
-        if self.warning {
+        if self.warning.is_some() {
             Some(colors.warning)
         } else {
             self.nominal.then_some(colors.success)
@@ -50,7 +58,7 @@ impl WireLabel {
     }
 
     pub fn paint(&self, painter: &Painter, source: Pos2, sink: Pos2, color: Color32) {
-        if !self.nominal && !self.warning
+        if !self.nominal && self.warning.is_none()
             || (source.x - sink.x).abs() <= self.text.len() as f32 * 5.0
         {
             return;
@@ -68,15 +76,6 @@ impl WireLabel {
 impl Overlay {
     pub fn new(graph: &Graph) -> Self {
         let rates = Rates::inspect(graph);
-        let issues = graph
-            .blocks
-            .iter()
-            .enumerate()
-            .filter_map(|(index, _)| {
-                issue(&rates, index, rates.block(index)?.input)
-                    .map(|description| (index, description))
-            })
-            .collect();
         let labels = graph
             .connections
             .iter()
@@ -85,9 +84,18 @@ impl Overlay {
                 let rate = rates.wire(index)?;
                 Some(WireLabel {
                     text: rate_text(rate),
-                    warning: issue(&rates, link.sink.block, rate).is_some(),
+                    warning: wire_issue(&rates, link.sink.block, rate),
                     nominal: matches!(rate, StreamRate::Nominal(_)),
                 })
+            })
+            .collect();
+        let issues = graph
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| {
+                issue(&rates, index, rates.block(index)?.input)
+                    .map(|description| (index, description))
             })
             .collect();
         Self {
@@ -101,41 +109,100 @@ impl Overlay {
         self.labels.get(index)?.as_ref()
     }
 
-    pub fn issues(&self, ui: &mut Ui, graph: &Graph) -> Option<usize> {
+    pub fn issue_list(
+        &self,
+        ui: &mut Ui,
+        graph: &Graph,
+        current: Option<Selection>,
+        height: f32,
+    ) -> Option<Selection> {
         let mut selected = None;
-        if self.issues.is_empty() {
-            return selected;
-        }
-        ui.menu_button(format!("Rate checks ({})", self.issues.len()), |ui| {
-            let height = ui.spacing().interact_size.y;
-            ScrollArea::vertical().max_height(245.0).show_rows(
-                ui,
-                height,
-                self.issues.len(),
-                |ui, rows| {
-                    for row in rows {
-                        let (block, description) = self.issues[row];
-                        ui.horizontal(|ui| {
-                            let label = format!("{} · {description}", graph.blocks[block].name);
-                            if ui
-                                .add_sized(
-                                    vec2(ui.available_width(), height),
-                                    egui::Button::new(label),
-                                )
-                                .clicked()
-                            {
-                                selected = Some(block);
-                                ui.close();
-                            }
-                        });
+        let row_height = ui.spacing().interact_size.y;
+        ScrollArea::vertical()
+            .id_salt("flowgraph-rate-checks")
+            .max_height((height * 0.28).clamp(38.0, 136.0))
+            .show_rows(ui, row_height, self.issues.len(), |ui, rows| {
+                for row in rows {
+                    let (block, description) = self.issues[row];
+                    let suspect = graph
+                        .adjacent(block, Direction::Upstream)
+                        .iter()
+                        .copied()
+                        .filter(|&edge| self.wire(edge).is_some_and(|wire| wire.warning.is_some()));
+                    let mut suspect = suspect.take(2);
+                    let target = match (suspect.next(), suspect.next()) {
+                        (Some(edge), None) => Selection::Wire(edge),
+                        _ => Selection::Block(block),
+                    };
+                    let label = format!("{} · {description}", graph.blocks[block].name);
+                    let button = egui::Button::new(&label)
+                        .selected(current == Some(target))
+                        .truncate();
+                    if ui
+                        .add_sized(vec2(ui.available_width(), row_height), button)
+                        .on_hover_text(label)
+                        .clicked()
+                    {
+                        selected = Some(target);
                     }
-                },
-            );
-        });
+                }
+            });
         selected
     }
 
-    pub fn inspector(&self, ui: &mut Ui, graph: &Graph, index: usize, select: &mut Option<usize>) {
+    pub fn connection(
+        &self,
+        ui: &mut Ui,
+        graph: &Graph,
+        edge: usize,
+        select: &mut Option<Selection>,
+    ) {
+        let Some(rate) = self.rates.wire(edge) else {
+            ui.weak("Nominal rate unavailable");
+            return;
+        };
+        let wire = &graph.connections[edge];
+        let source = wire.source.block;
+        clock_row(ui, graph, source, "Nominal rate", rate, select);
+        if let Some(ratio) = self.rates.block(source).and_then(|block| block.ratio)
+            && ratio != 1.0
+        {
+            let mut streams = graph
+                .adjacent(source, Direction::Upstream)
+                .iter()
+                .copied()
+                .filter_map(|edge| Some((edge, self.rates.wire(edge)?)));
+            if let (Some((input, rate)), None) = (streams.next(), streams.next()) {
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .small_button(format!("Input · {}", rate_text(rate)))
+                        .clicked()
+                    {
+                        *select = Some(Selection::Wire(input));
+                    }
+                    ratio_label(ui, ratio);
+                });
+            }
+        }
+        if let Some(warning) = self.wire(edge).and_then(|wire| wire.warning) {
+            ui.colored_label(ui.visuals().warn_fg_color, warning);
+            if let Some(setting) = self
+                .rates
+                .block(wire.sink.block)
+                .and_then(|block| block.setting)
+            {
+                rate_setting_row(ui, setting);
+            }
+        }
+    }
+
+    pub fn inspector(
+        &self,
+        ui: &mut Ui,
+        graph: &Graph,
+        index: usize,
+        select: &mut Option<Selection>,
+    ) {
         let Some(block) = self.rates.block(index) else {
             return;
         };
@@ -159,25 +226,10 @@ impl Overlay {
             clock_row(ui, graph, index, "Output", block.output, select);
         }
         if let Some(ratio) = block.ratio {
-            let factor = format!("{ratio:.6}");
-            ui.weak(format!(
-                "Output / input · ×{}",
-                factor.trim_end_matches('0').trim_end_matches('.')
-            ));
+            ratio_label(ui, ratio);
         }
         if let Some(setting) = block.setting {
-            let (name, unit) = match setting.meaning {
-                RateMeaning::Signal => ("Signal setting", "S/s"),
-                RateMeaning::Hardware => ("Hardware setting", "S/s"),
-                RateMeaning::Pacing => ("Throttle target", "items/s"),
-                RateMeaning::Display => (
-                    "Display scale",
-                    if setting.key == "bw" { "Hz" } else { "S/s" },
-                ),
-            };
-            let value = display_value(setting.rate, unit);
-            ui.label(format!("{name} · {value}"))
-                .on_hover_text(setting.key);
+            rate_setting_row(ui, setting);
         }
         if let Some(description) = issue(&self.rates, index, block.input) {
             ui.colored_label(ui.visuals().warn_fg_color, description);
@@ -191,7 +243,7 @@ fn clock_row(
     current: usize,
     label: &str,
     rate: StreamRate,
-    select: &mut Option<usize>,
+    select: &mut Option<Selection>,
 ) {
     ui.horizontal_wrapped(|ui| {
         ui.label(format!("{label} · {}", rate_text(rate)));
@@ -208,10 +260,48 @@ fn clock_row(
                 .on_hover_text(description)
                 .clicked()
             {
-                *select = Some(origin.block);
+                *select = Some(Selection::Block(origin.block));
             }
         }
     });
+}
+
+fn ratio_label(ui: &mut Ui, ratio: f64) {
+    let factor = format!("{ratio:.6}");
+    ui.weak(format!(
+        "Output / input · ×{}",
+        factor.trim_end_matches('0').trim_end_matches('.'),
+    ));
+}
+
+fn rate_setting_row(ui: &mut Ui, setting: RateSetting) {
+    let (name, unit) = match setting.meaning {
+        RateMeaning::Signal => ("Signal setting", "S/s"),
+        RateMeaning::Hardware => ("Hardware setting", "S/s"),
+        RateMeaning::Pacing => ("Throttle target", "items/s"),
+        RateMeaning::Display => (
+            "Display scale",
+            if setting.key == "bw" { "Hz" } else { "S/s" },
+        ),
+    };
+    ui.label(format!("{name} · {}", display_value(setting.rate, unit)))
+        .on_hover_text(setting.key);
+}
+
+fn wire_issue(rates: &Rates, sink: usize, rate: StreamRate) -> Option<&'static str> {
+    if rate == StreamRate::Unknown {
+        return None;
+    }
+    let input = rates.block(sink)?.input;
+    issue(
+        rates,
+        sink,
+        if input == StreamRate::Conflicting {
+            input
+        } else {
+            rate
+        },
+    )
 }
 
 fn rate_text(rate: StreamRate) -> String {

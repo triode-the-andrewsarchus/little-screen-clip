@@ -173,3 +173,32 @@ metadata: {file_format: 1}
     assert_eq!(paced.rate, 12_000.0);
     assert_eq!(paced.origin.unwrap().meaning, RateMeaning::Pacing);
 }
+
+#[test]
+fn layout_gives_distinct_authored_ports_separate_anchors_and_keeps_fanout_together() {
+    let source = r#"options:
+  parameters: {id: ports}
+blocks:
+- {name: source, id: analog_sig_source_x, states: {coordinate: [0, 0]}}
+- {name: sink, id: blocks_message_debug, states: {coordinate: [250, 0]}}
+connections:
+- [source, 17, sink, 8]
+- [source, last, sink, store]
+- [source, 0, sink, 0]
+- [source, command, sink, print]
+- [source, 17, sink, 22]
+metadata: {file_format: 1}
+"#;
+    let graph = read(file(source), &AtomicBool::new(false)).unwrap();
+    let layout = graph.layout();
+    let anchors = &layout.wire_anchors;
+    for [source, sink] in anchors {
+        assert_eq!(source[0], super::BLOCK_SIZE[0]);
+        assert_eq!(sink[0], 250.0);
+    }
+    assert!(anchors[2][0][1] < anchors[0][0][1]);
+    assert!(anchors[0][0][1] < anchors[3][0][1]);
+    assert!(anchors[3][0][1] < anchors[1][0][1]);
+    assert_eq!(anchors[0][0], anchors[4][0]);
+    assert!(anchors[0][1][1] < anchors[4][1][1]);
+}

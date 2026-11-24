@@ -20,6 +20,8 @@ pub struct Layout {
     /// Minimum and maximum block origins.
     pub bounds: [Position; 2],
     pub saved_positions: usize,
+    /// Source and sink port positions in saved connection order.
+    pub wire_anchors: Vec<[Position; 2]>,
 }
 
 pub(super) fn valid(position: Position) -> Option<Position> {
@@ -61,9 +63,40 @@ pub(super) fn make(graph: &Graph) -> Layout {
     separate_blocks(&mut positions);
     Layout {
         bounds: bounds(positions.iter().copied()),
+        wire_anchors: wire_anchors(graph, &positions),
         positions,
         saved_positions,
     }
+}
+
+fn wire_anchors(graph: &Graph, positions: &[Position]) -> Vec<[Position; 2]> {
+    let mut anchors = vec![[[0.0; 2]; 2]; graph.connections.len()];
+    let mut ports = Vec::new();
+    for (block, &[x, y]) in positions.iter().enumerate() {
+        for (side, direction, x) in [
+            (0, Direction::Downstream, x + BLOCK_SIZE[0]),
+            (1, Direction::Upstream, x),
+        ] {
+            ports.clear();
+            ports.extend(graph.adjacent(block, direction).iter().map(|&edge| {
+                let wire = &graph.connections[edge];
+                let port = match direction {
+                    Direction::Downstream => wire.source.port.as_str(),
+                    Direction::Upstream => wire.sink.port.as_str(),
+                };
+                (port.parse::<u64>().ok(), port, edge)
+            }));
+            ports.sort_unstable_by_key(|&(numeric, name, _)| (numeric.is_none(), numeric, name));
+            let groups = ports.chunk_by(|a, b| a.1 == b.1);
+            let step = BLOCK_SIZE[1] / (groups.clone().count() + 1) as f32;
+            for (index, group) in groups.enumerate() {
+                for &(_, _, edge) in group {
+                    anchors[edge][side] = [x, y + (index + 1) as f32 * step];
+                }
+            }
+        }
+    }
+    anchors
 }
 
 fn separate_blocks(positions: &mut [Position]) {

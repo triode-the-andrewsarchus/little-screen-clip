@@ -1,4 +1,5 @@
 use super::{
+    Selection,
     canvas::{Camera, Highlights, Scene},
     preview,
 };
@@ -77,7 +78,7 @@ pub(in crate::file_manager) fn show(
         rect,
         projection,
         &Highlights {
-            selected: hovered,
+            selected: hovered.map(Selection::Block),
             ..Default::default()
         },
         colors,
@@ -120,7 +121,7 @@ impl Preview {
             rect,
             projection,
             &Highlights {
-                selected: hovered,
+                selected: hovered.map(Selection::Block),
                 ..Default::default()
             },
             colors,

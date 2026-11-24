@@ -8,19 +8,25 @@ use crate::{file_source::ReadCheck, ui_appearance::WorkbenchColors};
 use canvas::{Camera, Highlights, Scene};
 use egui::{Layout as UiLayout, PointerButton, ScrollArea, Sense, Ui, Vec2, vec2};
 use little_clip_core::{
-    engineering::flowgraph::{self, Direction, Graph, Layout, Preview, Setting, Step},
+    engineering::flowgraph::{self, Direction, Endpoint, Graph, Layout, Preview, Setting, Step},
     palette::AppPalette,
 };
 use std::{path::Path, sync::atomic::AtomicBool};
 
 const TRACE_LIMIT: usize = 512;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Selection {
+    Block(usize),
+    Wire(usize),
+}
+
 pub(super) struct Viewer {
     graph: Graph,
     layout: Layout,
     camera: Camera,
-    selected: Option<usize>,
-    reveal: Option<usize>,
+    selected: Option<Selection>,
+    reveal: Option<Selection>,
     trace_direction: Option<Direction>,
     trace_steps: Vec<Step>,
     trace_blocks: Vec<bool>,
@@ -30,6 +36,7 @@ pub(super) struct Viewer {
     search_marks: Vec<bool>,
     rates: rate_overlay::Overlay,
     show_rates: bool,
+    show_rate_checks: bool,
 }
 
 impl Viewer {
@@ -40,7 +47,8 @@ impl Viewer {
             .connections
             .first()
             .map(|wire| wire.source.block)
-            .or_else(|| (!graph.blocks.is_empty()).then_some(0));
+            .or_else(|| (!graph.blocks.is_empty()).then_some(0))
+            .map(Selection::Block);
         let block_count = graph.blocks.len();
         let connection_count = graph.connections.len();
         let rates = rate_overlay::Overlay::new(&graph);
@@ -59,6 +67,7 @@ impl Viewer {
             search_marks: vec![false; block_count],
             rates,
             show_rates: false,
+            show_rate_checks: false,
         })
     }
 
@@ -66,7 +75,7 @@ impl Viewer {
         if let Ok(block) = usize::try_from(ordinal)
             && block < self.graph.blocks.len()
         {
-            self.select(Some(block), true);
+            self.select(Some(Selection::Block(block)), true);
         }
     }
 
@@ -148,7 +157,7 @@ impl Viewer {
                 && ui.input(|input| input.key_pressed(egui::Key::Enter))
                 && let Some(&block) = self.matches.first()
             {
-                self.select(Some(block), true);
+                self.select(Some(Selection::Block(block)), true);
             }
             ui.separator();
             let last = self.trace_direction;
@@ -172,8 +181,13 @@ impl Viewer {
 
     fn canvas(&mut self, ui: &mut Ui, size: Vec2, colors: WorkbenchColors) {
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
-        if let Some(node) = self.reveal.take() {
-            self.camera.reveal(rect, &self.layout, node);
+        match self.reveal.take() {
+            Some(Selection::Block(node)) => self.camera.reveal(rect, &self.layout, node),
+            Some(Selection::Wire(index)) => {
+                self.camera
+                    .reveal_wire(rect, &self.graph, &self.layout, index)
+            }
+            None => {}
         }
         if let Some(pointer) = response.hover_pos() {
             let scroll = ui.input(|input| input.smooth_scroll_delta().y);
@@ -192,21 +206,39 @@ impl Viewer {
             graph: &self.graph,
             layout: &self.layout,
         };
+        let mut highlights = Highlights {
+            selected: self.selected,
+            traced_blocks: &self.trace_blocks,
+            traced_links: &self.trace_connections,
+            search: &self.search_marks,
+            rates: self.show_rates.then_some(&self.rates),
+            ..Default::default()
+        };
         let hovered = response
-            .interact_pointer_pos()
-            .or_else(|| response.hover_pos())
-            .and_then(|point| scene.pick(projection, point));
+            .hover_pos()
+            .or_else(|| {
+                response
+                    .interact_pointer_pos()
+                    .filter(|point| rect.contains(*point))
+            })
+            .and_then(|point| {
+                scene
+                    .pick(projection, point)
+                    .map(Selection::Block)
+                    .or_else(|| {
+                        scene
+                            .pick_wire(projection, point, &highlights)
+                            .map(Selection::Wire)
+                    })
+            });
+        if let Some(Selection::Wire(edge)) = hovered {
+            highlights.hovered_wire = Some(edge);
+        }
         scene.draw(
             &ui.painter_at(rect),
             rect,
             projection,
-            &Highlights {
-                selected: self.selected,
-                traced_blocks: &self.trace_blocks,
-                traced_links: &self.trace_connections,
-                search: &self.search_marks,
-                rates: self.show_rates.then_some(&self.rates),
-            },
+            &highlights,
             colors,
             false,
         );
@@ -214,79 +246,164 @@ impl Viewer {
             self.select(hovered, false);
             ui.ctx().request_repaint();
         }
-        response.on_hover_ui(|ui| {
-            if let Some(block) = hovered.and_then(|block| self.graph.blocks.get(block)) {
+        response.on_hover_ui(|ui| self.canvas_hint(ui, hovered));
+    }
+
+    fn canvas_hint(&self, ui: &mut Ui, hovered: Option<Selection>) {
+        match hovered {
+            Some(Selection::Block(index)) => {
+                let block = &self.graph.blocks[index];
                 ui.strong(&block.name);
                 ui.monospace(&block.kind);
                 ui.weak(block.state.label());
-            } else {
-                ui.weak("Click a block to inspect · Drag to pan · Scroll to zoom");
             }
-        });
+            Some(Selection::Wire(index)) => {
+                let wire = &self.graph.connections[index];
+                ui.label(format!(
+                    "{} · {} → {} · {}",
+                    self.graph.blocks[wire.source.block].name,
+                    wire.source.port,
+                    self.graph.blocks[wire.sink.block].name,
+                    wire.sink.port,
+                ));
+                if self.show_rates
+                    && let Some(rate) = self.rates.wire(index)
+                {
+                    ui.weak(&rate.text);
+                }
+            }
+            None => {
+                ui.weak("Click a block or connection to inspect · Drag to pan · Scroll to zoom");
+            }
+        }
     }
 
     fn inspector(&mut self, ui: &mut Ui, height: f32) {
         let mut select = None;
-        let pane = ("flowgraph-block", self.selected);
+        let top = ui.cursor().top();
+        if self.show_rate_checks {
+            select = self
+                .rates
+                .issue_list(ui, &self.graph, self.selected, height);
+            ui.separator();
+        }
+        self.search_results(ui, height, &mut select);
+        let available = (height - (ui.cursor().top() - top)).max(32.0);
         ScrollArea::vertical()
-            .id_salt(pane)
-            .max_height(height)
-            .show(ui, |ui| {
-                if !self.query.trim().is_empty() {
-                    ui.strong(format!("{} matches", self.matches.len()));
-                    ScrollArea::vertical()
-                        .id_salt("flowgraph-matches")
-                        .max_height(130.0)
-                        .show_rows(ui, 20.0, self.matches.len(), |ui, rows| {
-                            for row in rows {
-                                let index = self.matches[row];
-                                let block = &self.graph.blocks[index];
-                                if ui
-                                    .selectable_label(self.selected == Some(index), &block.name)
-                                    .on_hover_text(&block.kind)
-                                    .clicked()
-                                {
-                                    select = Some(index);
-                                }
-                            }
-                        });
-                    ui.separator();
-                }
-                let Some(index) = self.selected else {
+            .id_salt(("flowgraph-inspector", self.selected))
+            .max_height(available)
+            .show(ui, |ui| match self.selected {
+                Some(Selection::Block(index)) => self.block_inspector(ui, index, &mut select),
+                Some(Selection::Wire(index)) => self.connection_inspector(ui, index, &mut select),
+                None => {
                     ui.strong("Flowgraph options");
                     show_settings(ui, &self.graph.options);
-                    return;
-                };
-                let block = &self.graph.blocks[index];
-                ui.strong(&block.name);
-                ui.monospace(&block.kind);
-                ui.horizontal_wrapped(|ui| {
-                    ui.weak(block.state.label());
-                    if let Some(degrees) = block.rotation.filter(|rotation| *rotation != 0) {
-                        ui.weak(format!("{degrees}°"));
-                    }
-                });
-                if self.show_rates {
-                    self.rates.inspector(ui, &self.graph, index, &mut select);
-                }
-                if !block.settings.is_empty() {
-                    ui.separator();
-                    show_settings(ui, &block.settings);
-                }
-                ui.separator();
-                if self.trace_direction.is_some() {
-                    self.trace_inspector(ui, &mut select);
-                } else {
-                    self.links_inspector(ui, index, &mut select);
                 }
             });
-        if let Some(block) = select {
-            self.select(Some(block), true);
+        if let Some(selection) = select {
+            self.select(Some(selection), true);
             ui.ctx().request_repaint();
         }
     }
 
-    fn links_inspector(&self, ui: &mut Ui, index: usize, select: &mut Option<usize>) {
+    fn search_results(&self, ui: &mut Ui, height: f32, select: &mut Option<Selection>) {
+        if self.query.trim().is_empty() {
+            return;
+        }
+        ui.strong(format!("{} matches", self.matches.len()));
+        ScrollArea::vertical()
+            .id_salt("flowgraph-matches")
+            .max_height((height * 0.28).clamp(38.0, 130.0))
+            .show_rows(ui, 20.0, self.matches.len(), |ui, rows| {
+                for row in rows {
+                    let selection = Selection::Block(self.matches[row]);
+                    let block = &self.graph.blocks[self.matches[row]];
+                    if ui
+                        .selectable_label(self.selected == Some(selection), &block.name)
+                        .on_hover_text(&block.kind)
+                        .clicked()
+                    {
+                        *select = Some(selection);
+                    }
+                }
+            });
+        ui.separator();
+    }
+
+    fn block_inspector(&self, ui: &mut Ui, index: usize, select: &mut Option<Selection>) {
+        let block = &self.graph.blocks[index];
+        ui.strong(&block.name);
+        ui.monospace(&block.kind);
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(block.state.label());
+            if let Some(degrees) = block.rotation.filter(|rotation| *rotation != 0) {
+                ui.weak(format!("{degrees}°"));
+            }
+        });
+        if self.show_rates {
+            self.rates.inspector(ui, &self.graph, index, select);
+        }
+        ui.separator();
+        if self.trace_direction.is_none() {
+            self.links_inspector(ui, index, select);
+        }
+        if !block.settings.is_empty() {
+            ui.separator();
+            show_settings(ui, &block.settings);
+        }
+        if self.trace_direction.is_some() {
+            ui.separator();
+            self.trace_inspector(ui, select);
+        }
+    }
+
+    fn connection_inspector(&self, ui: &mut Ui, index: usize, select: &mut Option<Selection>) {
+        let wire = &self.graph.connections[index];
+        ui.strong("Connection");
+        for (role, endpoint) in [("From", &wire.source), ("To", &wire.sink)] {
+            self.endpoint_button(ui, role, endpoint, select);
+        }
+        self.rates.connection(ui, &self.graph, index, select);
+        if !wire.settings.is_empty() {
+            ui.separator();
+            show_settings(ui, &wire.settings);
+        }
+        if self.trace_direction.is_some() {
+            ui.separator();
+            self.trace_inspector(ui, select);
+        }
+    }
+
+    fn endpoint_button(
+        &self,
+        ui: &mut Ui,
+        role: &str,
+        endpoint: &Endpoint,
+        select: &mut Option<Selection>,
+    ) {
+        let block = &self.graph.blocks[endpoint.block];
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(role);
+            if ui
+                .small_button(&block.name)
+                .on_hover_text(&block.kind)
+                .clicked()
+            {
+                *select = Some(Selection::Block(endpoint.block));
+            }
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("Port {}", endpoint.port)).monospace(),
+                )
+                .extend(),
+            );
+            if block.state != flowgraph::State::Enabled {
+                ui.weak(block.state.label());
+            }
+        });
+    }
+
+    fn links_inspector(&self, ui: &mut Ui, index: usize, select: &mut Option<Selection>) {
         for (direction, name) in [
             (Direction::Upstream, "Inputs"),
             (Direction::Downstream, "Outputs"),
@@ -294,36 +411,7 @@ impl Viewer {
             let links = self.graph.adjacent(index, direction);
             ui.weak(format!("{} {name}", links.len()));
             for &edge in links.iter().take(128) {
-                let wire = &self.graph.connections[edge];
-                let (other, label) = match direction {
-                    Direction::Upstream => (
-                        wire.source.block,
-                        format!(
-                            "{} · {} → {}",
-                            self.graph.blocks[wire.source.block].name,
-                            wire.source.port,
-                            wire.sink.port
-                        ),
-                    ),
-                    Direction::Downstream => (
-                        wire.sink.block,
-                        format!(
-                            "{} → {} · {}",
-                            wire.source.port,
-                            wire.sink.port,
-                            self.graph.blocks[wire.sink.block].name
-                        ),
-                    ),
-                };
-                let item = ui.button(self.rate_link_label(label, edge));
-                let item = if wire.settings.is_empty() {
-                    item
-                } else {
-                    item.on_hover_ui(|ui| setting_rows(ui, &wire.settings))
-                };
-                if item.clicked() {
-                    *select = Some(other);
-                }
+                self.link_row(ui, edge, direction, select);
             }
             if links.len() > 128 {
                 ui.weak(format!("First 128 of {} connected ports", links.len()));
@@ -331,7 +419,39 @@ impl Viewer {
         }
     }
 
-    fn trace_inspector(&self, ui: &mut Ui, select: &mut Option<usize>) {
+    fn link_row(
+        &self,
+        ui: &mut Ui,
+        index: usize,
+        direction: Direction,
+        select: &mut Option<Selection>,
+    ) {
+        let wire = &self.graph.connections[index];
+        let other = match direction {
+            Direction::Upstream => wire.source.block,
+            Direction::Downstream => wire.sink.block,
+        };
+        let ports = format!("{} → {}", wire.source.port, wire.sink.port);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .small_button(ports)
+                .on_hover_text("Inspect this connection")
+                .clicked()
+            {
+                *select = Some(Selection::Wire(index));
+            }
+            let block = &self.graph.blocks[other];
+            if ui
+                .small_button(self.rate_link_label(block.name.clone(), index))
+                .on_hover_text(&block.kind)
+                .clicked()
+            {
+                *select = Some(Selection::Block(other));
+            }
+        });
+    }
+
+    fn trace_inspector(&self, ui: &mut Ui, select: &mut Option<Selection>) {
         if self.trace_steps.is_empty() {
             ui.weak("No connected blocks in this direction");
         }
@@ -350,7 +470,7 @@ impl Viewer {
                 .button(self.rate_link_label(name, step.connection))
                 .clicked()
             {
-                *select = Some(step.block);
+                *select = Some(Selection::Block(step.block));
             }
         }
         if self.trace_steps.len() == TRACE_LIMIT {
@@ -358,23 +478,31 @@ impl Viewer {
         }
     }
 
-    fn select(&mut self, block: Option<usize>, reveal: bool) {
-        self.selected = block;
-        if reveal {
-            self.reveal = block;
-        }
+    fn select(&mut self, selection: Option<Selection>, reveal: bool) {
+        self.selected = selection;
+        self.reveal = selection.filter(|_| reveal);
         self.refresh_trace();
     }
 
     fn refresh_trace(&mut self) {
         self.trace_blocks.fill(false);
         self.trace_connections.fill(false);
-        self.trace_steps = self
-            .selected
-            .zip(self.trace_direction)
-            .map_or_else(Vec::new, |(start, direction)| {
+        self.trace_steps = self.selected.zip(self.trace_direction).map_or_else(
+            Vec::new,
+            |(selection, direction)| {
+                let start = match selection {
+                    Selection::Block(block) => block,
+                    Selection::Wire(index) => {
+                        let wire = &self.graph.connections[index];
+                        match direction {
+                            Direction::Upstream => wire.source.block,
+                            Direction::Downstream => wire.sink.block,
+                        }
+                    }
+                };
                 self.graph.trace(start, direction, TRACE_LIMIT)
-            });
+            },
+        );
         for step in &self.trace_steps {
             self.trace_blocks[step.block] = true;
             self.trace_connections[step.connection] = true;

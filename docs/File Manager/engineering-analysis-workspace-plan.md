@@ -217,6 +217,14 @@ In an interleaved scope comparison, each filtered waveform sits immediately belo
 
 The desktop check applied a 1.7 kHz low-pass to CH1 of a 40 ms two-tone capture. The filtered waveform was visible with the recorded input hidden. Its inline FFT showed the surviving 1 kHz component. With a 0.50 V display offset, the probe showed −205.8 mV unshifted and 294.2 mV shifted. Brushing the filtered waveform snapped to 5.144 and 10.144 ms. Reopening the filter editor kept the brush and showed the original 0–40 ms processing window. A separate check selected recording B first and opened A’s filter from its lane. The saved recipe reopened with the 1.7 kHz stage attached to A, and B had no filter. The shared editor also returned to the source and reopened from the output at 800 × 620 in the light theme.
 
+## 25. Inspect connections and trace sample-rate checks in a flowgraph
+
+Select a wire on the canvas or use a block’s port-pair button to inspect the same connection. Its endpoints stay highlighted, with links to the original blocks, port names and any saved connection metadata. The layout gives each connected port its own position, and wires sharing one port use the same anchor. Rate checks open inside the inspector. A check with one identified input opens that wire. For a disagreement across multiple inputs, the check opens their receiving block so its inputs can be inspected separately.
+
+The desktop check followed a display set to 48 kHz back through its 16 kS/s input and the resampler’s 24 kS/s input to the 96 kS/s clock setting. At 800 × 620 in the light theme, the named-port connection retained its disabled destination and copied its saved label as text. The same named ports were inspectable beneath the canvas at 640 × 540. A legacy GNU Radio 3.7 XML graph opened the connection from a block’s port button and reported its unresolved nominal rate.
+
+A headless CPU profile measured a six-block graph and an 8,000-block graph with 7,999 connections. The large graph took 39.6 ms to parse, 2.4 ms to lay out and 2.6 ms for rate inspection. At fit, p95 was 0.62 ms for wire picking, 2.42 ms for drawing and the egui pass, and 1.74 ms for tessellation. While panning around one connection, the same stages took 0.83 ms, 1.37 ms, and 0.03 ms respectively. Set `FLOWGRAPH_BENCH_PATHS` to measure with the ignored `connection_frame_profile` test.
+
 ## Review after each addition
 
 Walk a representative task in both directions, from the source to its result and from a surprising result back to the source. Check keyboard and pointer operation, narrow windows, source changes and the recovery path. Time large-file work on the existing guarded readers and prioritize whichever render or read cost most limits the real interaction. Use the next review to find related improvements across the engineering viewers and their shared workflows.
