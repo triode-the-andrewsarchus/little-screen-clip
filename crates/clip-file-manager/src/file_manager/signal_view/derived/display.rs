@@ -89,15 +89,18 @@ impl TraceDisplay {
     }
 }
 
+pub(super) type RangeLane = (u64, bool);
+
 pub(super) struct TracePlot {
     pub rect: Rect,
     pub response: Response,
     pub trace: Trace,
+    pub range_lane: RangeLane,
     offset: f32,
 }
 
 impl TracePlot {
-    pub fn allocate(ui: &mut Ui, trace: Trace, offset: f32) -> Self {
+    pub fn allocate(ui: &mut Ui, trace: Trace, id: u64, offset: f32) -> Self {
         let (area, reserved) =
             ui.allocate_exact_size(vec2(ui.available_width(), 65.0), Sense::hover());
         let rect = Rect::from_min_max(area.min + vec2(78.0, 7.0), area.max - vec2(9.0, 7.0));
@@ -110,6 +113,7 @@ impl TracePlot {
             rect,
             response,
             trace,
+            range_lane: (id, matches!(trace, Trace::Filtered(_))),
             offset,
         }
     }
@@ -228,16 +232,11 @@ impl TracePlot {
 }
 
 impl Frame {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "plot rows share a timeline and selection"
-    )]
     pub(super) fn paint(
         &self,
         ui: &mut Ui,
         plots: &[TracePlot],
         span: &Range<f64>,
-        selected: Option<&Range<f64>>,
         frequency: &Frequency,
         probe: Option<f64>,
         reference: Option<f64>,
@@ -264,15 +263,6 @@ impl Frame {
         for row in plots.iter().filter(|plot| ui.is_rect_visible(plot.rect)) {
             let rect = row.rect;
             let clipped = painter.with_clip_rect(rect);
-            if let Some(selected) = selected {
-                plot::highlight(
-                    &clipped,
-                    rect,
-                    span,
-                    selected.clone(),
-                    plot::color(1).gamma_multiply(0.22),
-                );
-            }
             match row.samples(self, frequency) {
                 Some(lane @ Lane::Analog { .. }) => row.analog(ui, &clipped, lane, span, probe),
                 Some(lane @ Lane::Digital { .. }) => {

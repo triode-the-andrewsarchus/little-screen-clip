@@ -194,6 +194,7 @@ impl Digital {
                 let origin = sigrok::View {
                     span: span.clone(),
                     selection: None,
+                    selection_scope: Default::default(),
                     cursor: self.cursor,
                 };
                 *span = self.sigrok.visit(origin, &time, domain, step);

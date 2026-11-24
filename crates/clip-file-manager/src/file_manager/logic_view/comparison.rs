@@ -1,8 +1,17 @@
-use super::{Copies, Link, Rect, Sense, Ui, Viewer, plot, timeline, timing};
+use super::{Copies, Drag, Link, Rect, Sense, Ui, Viewer, plot, timeline, timing};
 use crate::file_manager::scope_view::{Lane, TraceInteraction, lanes::coverage_note, trace_header};
 use egui::{Color32, Painter, PointerButton, Stroke, vec2};
 
 impl Viewer {
+    pub(in crate::file_manager) fn comparison_range(
+        &mut self,
+        times: [f64; 2],
+        lanes: Vec<usize>,
+        color: usize,
+    ) {
+        self.apply_range(times, lanes, Some(color));
+    }
+
     pub(in crate::file_manager) fn comparison_visible(&self, index: usize) -> bool {
         !self.comparison_hidden.contains(&index)
     }
@@ -83,7 +92,7 @@ impl Viewer {
         if pointer_select || selected {
             self.pick_plotted_lane(index);
         }
-        self.move_cursor(ui, lane.plot, &hit);
+        self.move_cursor(&hit, lane.plot, index);
         let rect = lane.plot;
         let clipped = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
         self.paint_comparison_wave(&clipped, rect, index, color, link);
@@ -101,6 +110,7 @@ impl Viewer {
             selected: selected || pointer_select,
             probe,
             span_changed: self.span != previous,
+            drag: Drag::read(ui, &hit),
             ..Default::default()
         }
     }
@@ -133,15 +143,14 @@ impl Viewer {
             recorded.start_seconds..recorded.end_seconds,
             painter.ctx().global_style().visuals.weak_text_color(),
         );
-        if let Some(selected) = &self.selected {
-            timing::highlight(
-                painter,
-                rect,
-                &self.span,
-                selected.clone(),
-                color.gamma_multiply(0.18),
-            );
-        }
+        self.ranges.paint(
+            painter,
+            rect,
+            &self.span,
+            self.selected.as_ref(),
+            index,
+            None,
+        );
         Link::paint_trace_evidence(Some(link), painter, rect, &self.span, index);
         link.paint_markers(painter, rect, &self.span);
     }

@@ -1,5 +1,5 @@
 use super::{
-    MarkedRange, ScopeTrace, Viewer, filters::SavedFilter, spectrum_input::DisplaySettings,
+    MarkedRange, Scope, ScopeTrace, Viewer, filters::SavedFilter, spectrum_input::DisplaySettings,
 };
 use little_clip_core::engineering::analysis::SpectrumWindow;
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,8 @@ pub(in crate::file_manager) struct AnalysisEdits {
 pub(in crate::file_manager) struct Settings {
     active: usize,
     cursors: [Option<f64>; 2],
+    #[serde(default, skip_serializing_if = "Scope::legacy")]
+    cursor_scope: Scope<ScopeTrace>,
     marks: Vec<MarkedRange>,
     stacked: bool,
     visible: Vec<bool>,
@@ -49,6 +51,7 @@ impl Viewer {
         Settings {
             active: self.active,
             cursors: self.cursors,
+            cursor_scope: self.cursor_scope.clone(),
             marks: self.marks.clone(),
             stacked: self.stacked,
             visible: self.visible.clone(),
@@ -86,6 +89,7 @@ impl Viewer {
             .restore(state.filters, &self.overview.channels)?;
         self.active = state.active;
         self.cursors = state.cursors;
+        self.cursor_scope = state.cursor_scope;
         self.marks = state.marks;
         self.stacked = state.stacked
             || self
@@ -147,8 +151,10 @@ mod tests {
         view.visible[1] = false;
         view.display_offsets[0] = 0.25;
         view.cursors = [Some(0.0625), Some(0.125)];
+        view.cursor_scope = Scope::new(vec![ScopeTrace::Recorded(0)], Some(2));
         view.marks.push(MarkedRange {
             span: 0.0625..0.125,
+            scope: Default::default(),
             peaks: Default::default(),
             legacy_peak: Some((0.5, "V".into())),
         });

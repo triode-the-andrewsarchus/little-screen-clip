@@ -11,7 +11,10 @@ use super::{
     preview_copy::Copies,
     preview_job::Task,
     scope_view::plot as timing,
-    signal_view::timeline::{self, Interaction, Link},
+    signal_view::{
+        lane_range::{self, Draft, Drag, Marks, Scope},
+        timeline::{self, Interaction, Link},
+    },
 };
 use crate::file_source::ReadCheck;
 use egui::{Color32, Context, PointerButton, Rect, Sense, Stroke, Ui, pos2, vec2};
@@ -48,6 +51,7 @@ pub(super) struct Viewer {
     comparison_lanes: Vec<usize>,
     channel_picker: Wiring,
     selected: Option<Range<f64>>,
+    ranges: Marks<usize>,
     cursor: Option<f64>,
     frame: Option<Frame>,
     request: Option<WindowKey>,
@@ -68,6 +72,8 @@ pub(super) struct Viewer {
 pub(in crate::file_manager) struct SessionSettings {
     active: usize,
     selected: Option<Range<f64>>,
+    #[serde(default, skip_serializing_if = "Marks::empty")]
+    ranges: Marks<usize>,
     cursor: Option<f64>,
     show_transitions: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -109,6 +115,7 @@ impl Viewer {
         SessionSettings {
             active: self.active,
             selected: self.selected.clone(),
+            ranges: self.ranges.clone(),
             cursor: self.cursor,
             show_transitions: self.show_transitions,
             comparison_hidden: self.comparison_hidden.clone(),
@@ -131,6 +138,7 @@ impl Viewer {
         self.active = state.active;
         self.channel_picker.close();
         self.selected = state.selected.filter(|range| !range.is_empty());
+        self.ranges = state.ranges;
         self.cursor = state.cursor;
         self.show_transitions = state.show_transitions;
         self.comparison_hidden = state
@@ -155,6 +163,7 @@ impl Viewer {
             comparison_lanes: Vec::new(),
             channel_picker: Wiring::default(),
             selected: None,
+            ranges: Marks::default(),
             cursor: None,
             frame: None,
             request: None,
@@ -181,6 +190,7 @@ impl Viewer {
     pub fn focus_time(&mut self, start: f64, end: f64) {
         if start.is_finite() && end.is_finite() && end > start {
             self.selected = Some(start..end);
+            self.ranges.active = Scope::new(vec![self.active], None);
             self.cursor = Some(start);
             let padding = (end - start) * 0.08;
             self.span = self.fit(start - padding..end + padding);
@@ -295,12 +305,14 @@ impl Viewer {
                 let origin = sigrok::View {
                     span: self.span.clone(),
                     selection: self.selected.clone(),
+                    selection_scope: self.ranges.active.clone(),
                     cursor: self.cursor,
                 };
                 let domain = link.map_or(&self.overview.span, |link| &link.domain);
                 self.span = self.sigrok.visit(origin, &time, domain, step);
                 self.cursor = Some(time.start);
                 self.selected = (!time.is_empty()).then_some(time);
+                self.ranges.active = Scope::new(self.sigrok.channels().collect(), None);
                 ui.ctx().request_repaint();
             }
         } else if self.show_transitions && !self.protocols.edges() {
@@ -372,6 +384,7 @@ impl Viewer {
         if let Some(origin) = origin {
             self.span = origin.span;
             self.selected = origin.selection;
+            self.ranges.active = origin.selection_scope;
             self.cursor = origin.cursor;
         }
     }
@@ -537,7 +550,12 @@ impl Viewer {
             let domain = link.map_or(&self.overview.span, |link| &link.domain);
             self.span = timeline::fit(domain, span, self.interval());
         }
-        self.move_cursor(ui, rect, &response);
+        let visible = self.visible_lanes();
+        let lanes = visible
+            .iter()
+            .enumerate()
+            .map(|(row, &lane)| (lane, timing::lane(rect, row, visible.len())));
+        let draft = self.brush(ui, &response, lanes.clone());
         let painter = ui.painter_at(outer);
         let ink = ui.visuals().weak_text_color();
         if annotations {
@@ -570,13 +588,14 @@ impl Viewer {
         if let Some(link) = link {
             link.paint_markers(&clipped, rect, &self.span);
         }
-        if let Some(selected) = &self.selected {
-            timing::highlight(
+        for (lane, plot) in lanes.clone() {
+            self.ranges.paint(
                 &clipped,
-                rect,
+                plot,
                 &self.span,
-                selected.clone(),
-                Color32::from_white_alpha(25),
+                self.selected.as_ref(),
+                lane,
+                draft.as_ref(),
             );
         }
         let event = self
@@ -588,15 +607,7 @@ impl Viewer {
         {
             plot::highlight_event(&clipped, rect, &self.span, event.time.clone());
         }
-        if let Some(cursor) = self.cursor {
-            let x = timing::x_at(rect, &self.span, cursor);
-            let color = if event.is_some() {
-                Color32::GOLD
-            } else {
-                Color32::WHITE
-            };
-            clipped.vline(x, rect.y_range(), Stroke::new(1.25, color));
-        }
+        self.paint_cursor(&clipped, rect, lanes, event.is_some());
         let probe = response
             .hover_pos()
             .filter(|point| rect.contains(*point))
@@ -606,6 +617,45 @@ impl Viewer {
             clipped.vline(x, rect.y_range(), Stroke::new(1.0, ink));
         }
         probe
+    }
+
+    fn brush(
+        &mut self,
+        ui: &Ui,
+        response: &egui::Response,
+        lanes: impl Iterator<Item = (usize, Rect)> + Clone,
+    ) -> Option<Draft<usize>> {
+        if let Some(drag) = Drag::read(ui, response) {
+            let (lane, rect) = lanes.clone().find(|(_, rect)| rect.contains(drag.start))?;
+            let draft = Draft::new(drag, rect, &self.span, lanes);
+            if !drag.finished {
+                return Some(draft);
+            }
+            self.pick_plotted_lane(lane);
+            self.apply_range(draft.times, draft.lanes, None);
+        } else if let Some(point) = response.interact_pointer_pos()
+            && let Some((lane, rect)) = lanes.clone().find(|(_, rect)| rect.contains(point))
+        {
+            self.move_cursor(response, rect, lane);
+        }
+        None
+    }
+
+    fn paint_cursor(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        lanes: impl Iterator<Item = (usize, Rect)>,
+        event: bool,
+    ) {
+        let Some(cursor) = self.cursor else { return };
+        let x = timing::x_at(rect, &self.span, cursor);
+        let color = if event { Color32::GOLD } else { Color32::WHITE };
+        for (lane, plot) in lanes {
+            if self.selected.is_none() || self.ranges.active.includes(lane) || event {
+                painter.vline(x, plot.y_range(), Stroke::new(1.25, color));
+            }
+        }
     }
 
     fn pick_waveform_channel(&mut self, ui: &Ui, rect: Rect, hit: &egui::Response) {
@@ -804,24 +854,31 @@ impl Viewer {
         }
     }
 
-    fn move_cursor(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
-        let Some(pointer) = response.interact_pointer_pos() else {
+    fn move_cursor(&mut self, response: &egui::Response, rect: Rect, lane: usize) {
+        let Some(pointer) = response
+            .interact_pointer_pos()
+            .filter(|point| rect.contains(*point))
+        else {
             return;
         };
         let time = timing::at(rect, &self.span, pointer.x);
-        if response.clicked_by(PointerButton::Primary) && rect.contains(pointer) {
-            self.selected = None;
+        if response.clicked_by(PointerButton::Primary) {
+            self.ranges.archive(&mut self.selected);
             self.cursor = Some(time);
             self.protocols.clear_event_pick();
+        } else if response.secondary_clicked() {
+            self.ranges.clear_lane(&mut self.selected, lane, time);
         }
-        if response.dragged_by(PointerButton::Primary)
-            && let Some(origin) = ui
-                .input(|input| input.pointer.press_origin())
-                .filter(|p| rect.contains(*p))
-        {
-            let start = timing::at(rect, &self.span, origin.x);
-            self.selected = (time != start).then(|| time.min(start)..time.max(start));
-            self.cursor = Some(time);
+    }
+
+    fn apply_range(&mut self, times: [f64; 2], lanes: Vec<usize>, color: Option<usize>) {
+        if self.ranges.select(
+            &mut self.selected,
+            lane_range::interval(times),
+            lanes,
+            color,
+        ) {
+            self.cursor = Some(times[1]);
             self.protocols.clear_event_pick();
         }
     }

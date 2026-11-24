@@ -22,7 +22,7 @@ mod session;
 mod snap;
 mod trace_fft;
 pub(super) use session::{AnalysisEdits, Settings as SessionSettings};
-use trace_fft::Trace as ScopeTrace;
+pub(super) use trace_fft::Trace as ScopeTrace;
 pub(super) mod strip;
 
 use super::signal_view::spectra as spectrum_input;
@@ -31,6 +31,7 @@ use super::{
     preview_job::Task,
     signal_view::{
         frequency_plot::paint_window,
+        lane_range::{self, Drag, Scope},
         timeline::{self, Interaction, Link},
     },
 };
@@ -62,6 +63,8 @@ const MATH_COLOR: Color32 = Color32::from_rgb(215, 153, 246);
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct MarkedRange {
     span: Range<f64>,
+    #[serde(default, skip_serializing_if = "Scope::legacy")]
+    scope: Scope<ScopeTrace>,
     #[serde(flatten)]
     peaks: RangePeaks,
     #[serde(
@@ -76,6 +79,9 @@ struct MarkedRange {
 struct CursorDrag {
     slot: usize,
     origin: egui::Pos2,
+    trace: ScopeTrace,
+    resizing: Option<[Option<f64>; 2]>,
+    free: bool,
 }
 
 #[derive(Default)]
@@ -100,6 +106,7 @@ pub(super) struct Viewer {
     span: Range<f64>,
     active: usize,
     cursors: [Option<f64>; 2],
+    cursor_scope: Scope<ScopeTrace>,
     marks: Vec<MarkedRange>,
     stacked: bool,
     visible: Vec<bool>,
@@ -186,6 +193,7 @@ impl Viewer {
             domain,
             active: 0,
             cursors: [None; 2],
+            cursor_scope: Scope::default(),
             marks: Vec::new(),
             stacked: true,
             channel_order: (0..visible.len()).collect(),
@@ -233,6 +241,7 @@ impl Viewer {
         let left = channel.time_at(start.min(channel.sample_count.saturating_sub(1)));
         let right = channel.time_at(end.max(start.saturating_add(1)).min(channel.sample_count));
         self.cursors = [Some(left), Some(right)];
+        self.cursor_scope = Scope::new(vec![ScopeTrace::Recorded(0)], None);
         let pad = (right - left) * 0.08;
         self.span = self.clamp_span(left - pad..right + pad);
     }
@@ -575,9 +584,10 @@ impl Viewer {
                 self.overview.channels[self.active].interval_seconds,
             );
         }
-        let origin_in_fft = ui.input(|input| input.pointer.press_origin().is_some_and(in_fft_lane));
-        if !origin_in_fft && (!hover_in_fft || self.drag.is_some()) {
-            self.move_cursors(ui, rect, &response, ScopeTrace::Recorded(self.active));
+        if response.interact_pointer_pos().is_some() || self.drag.is_some() {
+            let all = ui.input(|input| input.modifiers.shift);
+            let plots = self.brush_plots(rect, all);
+            self.move_cursors(ui, &response, &plots, true);
         }
         let painter = ui.painter_at(outer);
         let lane_count = self.lane_count();
@@ -699,6 +709,19 @@ impl Viewer {
         if let Some(link) = link {
             link.paint_markers(clipped, rect, &self.span);
         }
+        if !traces
+            .iter()
+            .any(|&trace| self.cursor_scope.includes(trace))
+        {
+            return;
+        }
+        let show_labels = self
+            .cursor_scope
+            .lanes
+            .as_ref()
+            .map_or(show_labels, |lanes| {
+                lanes.first().is_some_and(|first| traces.contains(first))
+            });
         for (label, time) in ["A", "B"]
             .into_iter()
             .zip(self.cursors)
@@ -1109,25 +1132,41 @@ impl Viewer {
         traces: &[ScopeTrace],
     ) {
         let selection = self.selection();
-        let active = selection
-            .as_ref()
-            .map(|span| (span, self.measurements_for(span).map(|data| &data.peaks)));
+        let active = selection.as_ref().map(|span| {
+            (
+                span,
+                self.measurements_for(span).map(|data| &data.peaks),
+                &self.cursor_scope,
+            )
+        });
         let marks = self
             .marks
             .iter()
-            .map(|mark| (&mark.span, Some(&mark.peaks)))
+            .map(|mark| (&mark.span, Some(&mark.peaks), &mark.scope))
             .chain(active);
         let ink = ui.visuals().text_color();
         let fill = ui.visuals().window_fill();
-        for (index, (span, peaks)) in marks.enumerate() {
-            if span.end <= self.span.start || span.start >= self.span.end {
+        for (index, (span, peaks, scope)) in marks.enumerate() {
+            if span.end <= self.span.start
+                || span.start >= self.span.end
+                || !traces.iter().any(|&trace| scope.includes(trace))
+            {
                 continue;
             }
-            let color = plot::color(index).gamma_multiply(0.25);
-            plot::highlight(painter, rect, &self.span, span.clone(), color);
+            lane_range::paint(
+                painter,
+                rect,
+                &self.span,
+                span,
+                scope.color.unwrap_or(index),
+            );
             let x = plot::x_at(rect, &self.span, span.start).max(rect.left());
-            let y = (rect.bottom() - 21.0 - (index % 3) as f32 * 18.0).max(rect.top());
-            if show_summary {
+            let inset = ((rect.height() - 72.0) * 0.25).clamp(0.0, 14.0);
+            let stagger = (index % 3) as f32 * inset;
+            let y = (rect.bottom() - 21.0 - stagger).max(rect.top());
+            if scope.lanes.as_ref().map_or(show_summary, |lanes| {
+                lanes.first().is_some_and(|first| traces.contains(first))
+            }) {
                 let length = (span.end - span.start) * time_scale;
                 let caption = format!(
                     "{}  Δt {}  1/Δt {}",
@@ -1139,13 +1178,18 @@ impl Viewer {
                     painter,
                     rect,
                     x,
-                    rect.top() + 16.0 + 18.0 * (index % 3) as f32,
+                    rect.top() + 16.0 + stagger,
                     &caption,
                     ink,
                     fill,
                 );
             }
-            for (offset, &trace) in traces.iter().enumerate() {
+            for (offset, trace) in traces
+                .iter()
+                .copied()
+                .filter(|&trace| scope.includes(trace))
+                .enumerate()
+            {
                 let Some(peak) = peaks.and_then(|peaks| peaks.get(trace)) else {
                     continue;
                 };
@@ -1188,6 +1232,7 @@ impl Viewer {
             .unwrap_or_default();
         Some(MarkedRange {
             span,
+            scope: self.cursor_scope.clone(),
             peaks,
             legacy_peak: None,
         })
@@ -1198,6 +1243,7 @@ impl Viewer {
             self.marks.push(mark);
         }
         self.cursors = [None; 2];
+        self.cursor_scope = Scope::default();
         self.snaps.iter_mut().for_each(CursorSnap::clear);
     }
 
@@ -1288,9 +1334,9 @@ impl Viewer {
                 }
             }
             if selection.is_some() {
-                ui.weak("Shift bypasses snap · Right-click to remove");
+                ui.weak("Shift-drag all shown traces · Right-click to remove");
             } else {
-                ui.weak("Scroll to zoom · Middle-drag to pan · Drag to measure");
+                ui.weak("Scroll to zoom · Middle-drag to pan · Drag to measure · Shift-drag for all traces");
             }
         });
         let share = ui
@@ -1421,109 +1467,210 @@ impl Viewer {
         )
     }
 
-    fn move_cursors(&mut self, ui: &Ui, rect: Rect, response: &egui::Response, trace: ScopeTrace) {
-        let active = response.dragged_by(PointerButton::Primary);
-        let stopped = response.drag_stopped_by(PointerButton::Primary);
-        let (down, origin, latest, free) = ui.input(|input| {
-            (
-                input.pointer.button_down(PointerButton::Primary),
-                input.pointer.press_origin(),
-                input.pointer.latest_pos(),
-                input.modifiers.shift,
-            )
+    fn brush_plots(&self, area: Rect, all: bool) -> Vec<(ScopeTrace, Rect)> {
+        let time = |index| !self.trace_fft.contains_key(&ScopeTrace::Recorded(index));
+        let focused = if self.stacked || all {
+            None
+        } else {
+            self.visible_channels()
+                .filter(|&index| time(index))
+                .min_by_key(|&index| index != self.active)
+        };
+        let recorded = self.channel_slots().filter_map(|(slot, index)| {
+            (self.visible[index] && focused.is_none_or(|focused| index == focused))
+                .then_some((slot, ScopeTrace::Recorded(index)))
         });
-        let point = response
-            .interact_pointer_pos()
-            .or_else(|| stopped.then_some(latest).flatten());
-        let Some(point) = point else {
-            if !down {
-                self.drag = None;
-            }
+        let physical = self.physical_lanes();
+        let derived = self
+            .math_state
+            .numeric()
+            .is_some()
+            .then_some(ScopeTrace::Math)
+            .into_iter()
+            .chain(self.filters.visible_indices().map(ScopeTrace::Filtered));
+        recorded
+            .chain(
+                derived
+                    .enumerate()
+                    .map(|(slot, trace)| (physical + slot, trace)),
+            )
+            .filter(|(_, trace)| !self.trace_fft.contains_key(trace))
+            .map(|(slot, trace)| (trace, self.lane(area, slot).plot))
+            .filter(|(_, plot)| plot.is_positive())
+            .collect()
+    }
+
+    fn move_cursors(
+        &mut self,
+        ui: &Ui,
+        response: &egui::Response,
+        plots: &[(ScopeTrace, Rect)],
+        allow_drag: bool,
+    ) {
+        if allow_drag && let Some(brush) = Drag::read(ui, response) {
+            self.drag_cursors(brush, plots);
+            return;
+        }
+        if allow_drag && !ui.input(|input| input.pointer.primary_down()) {
+            self.drag = None;
+        }
+        let Some(point) = response.interact_pointer_pos() else {
+            return;
+        };
+        let Some(&(trace, rect)) = plots.iter().find(|(_, rect)| rect.contains(point)) else {
             return;
         };
         let time = plot::at(rect, &self.span, point.x);
-        let radius = (self.span.end - self.span.start) * 10.0 / f64::from(rect.width().max(1.0));
-        if response.secondary_clicked() && rect.contains(point) {
-            self.remove_mark(time);
-            return;
-        }
-        let cursors = self.cursors;
-        let near = |t: f64| {
-            let [a, b] = cursors.map(|time| time.map_or(f64::INFINITY, |time| (time - t).abs()));
-            (a.min(b) <= radius).then_some(usize::from(b < a))
-        };
-        if active
-            && let Some(origin) = origin
-            && self.drag.is_none_or(|drag| drag.origin != origin)
-            && rect.contains(origin)
-        {
-            let time = plot::at(rect, &self.span, origin.x);
-            self.snaps.iter_mut().for_each(CursorSnap::clear);
-            let slot = near(time).unwrap_or_else(|| {
-                self.archive_mark();
-                self.place_cursor(0, time, radius, free, trace);
-                1
-            });
-            self.drag = Some(CursorDrag { slot, origin });
-        }
-        if response.clicked_by(PointerButton::Primary) {
-            self.select_at(time, radius, free, near(time), trace);
-        } else if (active || stopped)
-            && let Some(drag) = self.drag
-        {
-            self.place_cursor(drag.slot, time, radius, free, trace);
-        }
-        if !down {
-            self.drag = None;
+        if response.secondary_clicked() {
+            self.remove_mark(time, trace);
+        } else if response.clicked_by(PointerButton::Primary) {
+            let radius = self.snap_radius(rect);
+            let free = ui.input(|input| input.modifiers.shift);
+            self.select_at(time, radius, free, trace);
         }
     }
 
-    fn remove_mark(&mut self, time: f64) {
-        if self
-            .selection()
-            .is_some_and(|range| time >= range.start && time <= range.end)
+    fn drag_cursors(&mut self, brush: Drag, plots: &[(ScopeTrace, Rect)]) {
+        let Some(&(trace, rect)) = plots
+            .iter()
+            .filter(|(_, rect)| rect.contains(brush.start))
+            .min_by_key(|(trace, _)| *trace != ScopeTrace::Recorded(self.active))
+        else {
+            return;
+        };
+        let [start, end] = brush.times(rect, &self.span);
+        let radius = self.snap_radius(rect);
+        let targets = brush.targets(plots.iter().copied());
+        let single = !brush.all && targets.len() == 1;
+        let continuing = self.drag.filter(|drag| drag.origin == brush.start);
+        let mut drag = if let Some(drag) = continuing {
+            drag
+        } else if let Some(slot) = single
+            .then(|| self.closest_cursor(start, radius, trace))
+            .flatten()
+            && self.selection().is_some()
         {
-            self.cursors = [None; 2];
-            self.snaps.iter_mut().for_each(CursorSnap::clear);
-        } else if let Some(index) = self.mark_at(time) {
+            CursorDrag {
+                slot,
+                origin: brush.start,
+                trace,
+                resizing: Some(self.cursors),
+                free: false,
+            }
+        } else {
+            self.begin_region(brush, trace, start, radius)
+        };
+        if let Some(original) = drag.resizing.filter(|_| !single) {
+            self.cursors = original;
+            drag = self.begin_region(brush, trace, start, radius);
+        }
+        if drag.resizing.is_none() {
+            if drag.free != brush.all {
+                self.place_cursor(0, start, radius, brush.all, drag.trace);
+            }
+            let color = self.cursor_scope.color.or(Some(self.marks.len()));
+            self.cursor_scope = Scope::new(targets, color);
+        }
+        drag.free = brush.all;
+        self.place_cursor(drag.slot, end, radius, brush.all, drag.trace);
+        self.drag = (!brush.finished).then_some(drag);
+    }
+
+    fn begin_region(
+        &mut self,
+        brush: Drag,
+        trace: ScopeTrace,
+        start: f64,
+        radius: f64,
+    ) -> CursorDrag {
+        self.archive_mark();
+        self.select_cursor_trace(trace);
+        self.place_cursor(0, start, radius, brush.all, trace);
+        CursorDrag {
+            slot: 1,
+            origin: brush.start,
+            trace,
+            resizing: None,
+            free: brush.all,
+        }
+    }
+
+    fn snap_radius(&self, rect: Rect) -> f64 {
+        (self.span.end - self.span.start) * 10.0 / f64::from(rect.width().max(1.0))
+    }
+
+    fn closest_cursor(&self, time: f64, radius: f64, trace: ScopeTrace) -> Option<usize> {
+        if !self.cursor_scope.includes(trace) {
+            return None;
+        }
+        let [a, b] = self
+            .cursors
+            .map(|at| at.map_or(f64::INFINITY, |at| (at - time).abs()));
+        (a.min(b) <= radius).then_some(usize::from(b < a))
+    }
+
+    fn select_cursor_trace(&mut self, trace: ScopeTrace) {
+        if let ScopeTrace::Recorded(index) | ScopeTrace::Filtered(index) = trace
+            && self.active != index
+        {
+            let span = self.span.clone();
+            self.activate_channel(index);
+            self.span = span;
+        }
+    }
+
+    fn remove_mark(&mut self, time: f64, trace: ScopeTrace) {
+        if self.cursor_scope.includes(trace)
+            && self
+                .selection()
+                .is_some_and(|range| time >= range.start && time <= range.end)
+        {
+            if !self.cursor_scope.remove(trace) {
+                self.cursors = [None; 2];
+                self.cursor_scope = Scope::default();
+                self.snaps.iter_mut().for_each(CursorSnap::clear);
+            }
+        } else if let Some(index) = self.mark_at(time, trace)
+            && !self.marks[index].scope.remove(trace)
+        {
             self.marks.remove(index);
         }
     }
 
-    fn mark_at(&self, time: f64) -> Option<usize> {
-        self.marks
-            .iter()
-            .rposition(|mark| time >= mark.span.start && time <= mark.span.end)
+    fn mark_at(&self, time: f64, trace: ScopeTrace) -> Option<usize> {
+        self.marks.iter().rposition(|mark| {
+            mark.scope.includes(trace) && time >= mark.span.start && time <= mark.span.end
+        })
     }
 
-    fn select_at(
-        &mut self,
-        time: f64,
-        radius: f64,
-        free: bool,
-        cursor: Option<usize>,
-        trace: ScopeTrace,
-    ) {
+    fn select_at(&mut self, time: f64, radius: f64, free: bool, trace: ScopeTrace) {
+        let cursor = self.closest_cursor(time, radius, trace);
         self.snaps.iter_mut().for_each(CursorSnap::clear);
         if cursor.is_none() {
-            let mark = self.mark_at(time).map(|index| self.marks.remove(index));
+            let mark = self
+                .mark_at(time, trace)
+                .map(|index| self.marks.remove(index));
             self.archive_mark();
+            self.select_cursor_trace(trace);
             if let Some(mark) = mark {
                 self.cursors = [Some(mark.span.start), Some(mark.span.end)];
+                self.cursor_scope = mark.scope;
                 return;
             }
+            self.cursor_scope = Scope::new(vec![trace], None);
         }
         self.place_cursor(cursor.unwrap_or(0), time, radius, free, trace);
     }
 
     fn place_cursor(&mut self, slot: usize, time: f64, radius: f64, free: bool, trace: ScopeTrace) {
+        if free || trace == ScopeTrace::Math {
+            self.snaps[slot].clear();
+            self.cursors[slot] = Some(time);
+            return;
+        }
         if let ScopeTrace::Filtered(index) = trace {
             self.snaps[slot].clear();
-            self.cursors[slot] = Some(if free {
-                time
-            } else {
-                self.filters.snap(index, time, radius).unwrap_or(time)
-            });
+            self.cursors[slot] = Some(self.filters.snap(index, time, radius).unwrap_or(time));
             return;
         }
         let detail = self

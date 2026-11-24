@@ -1,7 +1,7 @@
 mod provider;
 
 use super::{Task, event_list, protocols::Source};
-use crate::file_manager::signal_view::timeline;
+use crate::file_manager::signal_view::{lane_range::Scope, timeline};
 use egui::{Context, Ui};
 use little_clip_core::{
     BackgroundJobs,
@@ -38,6 +38,7 @@ pub(in crate::file_manager) struct Panel {
 pub(in crate::file_manager) struct View {
     pub span: Range<f64>,
     pub selection: Option<Range<f64>>,
+    pub selection_scope: Scope<usize>,
     pub cursor: Option<f64>,
 }
 

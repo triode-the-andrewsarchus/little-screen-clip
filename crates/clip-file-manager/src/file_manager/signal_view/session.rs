@@ -70,6 +70,8 @@ struct Recipe {
     active_trace: Option<super::comparison::Trace>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     comparison_spectrum: bool,
+    #[serde(default)]
+    comparison_range_color: usize,
 }
 
 #[derive(Deserialize)]
@@ -245,6 +247,7 @@ impl Recipe {
             trace_order: viewer.comparison.order.clone(),
             active_trace: viewer.comparison.active,
             comparison_spectrum: viewer.comparison.spectrum,
+            comparison_range_color: viewer.comparison.range_color,
         }
     }
 
@@ -638,6 +641,7 @@ impl Viewer {
                 order: recipe.trace_order,
                 active: recipe.active_trace,
                 spectrum: recipe.comparison_spectrum,
+                range_color: recipe.comparison_range_color,
                 ..Default::default()
             },
             probe: None,

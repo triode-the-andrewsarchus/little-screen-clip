@@ -8,6 +8,7 @@ pub(super) mod filter_editor;
 pub(super) mod frequency_plot;
 mod inputs;
 mod interval;
+pub(super) mod lane_range;
 pub(super) mod session;
 pub(super) mod spectra;
 pub(super) mod timeline;

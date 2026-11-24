@@ -1,4 +1,6 @@
-use super::{Copies, Link, PlottedChannel, ScopeTrace, Viewer, lanes::Lane, plot, timeline};
+use super::{
+    Copies, Drag, Link, PlottedChannel, Scope, ScopeTrace, Viewer, lanes::Lane, plot, timeline,
+};
 use egui::{Rect, Sense, Ui};
 use little_clip_core::engineering::waveforms::Peak;
 
@@ -8,9 +10,34 @@ pub(in crate::file_manager) struct TraceInteraction {
     pub probe: Option<f64>,
     pub span_changed: bool,
     pub edit_filters: bool,
+    pub drag: Option<Drag>,
 }
 
 impl Viewer {
+    pub(in crate::file_manager) fn comparison_time_trace(&self, trace: ScopeTrace) -> bool {
+        !self.trace_fft.contains_key(&trace)
+    }
+
+    pub(in crate::file_manager) fn comparison_range(
+        &mut self,
+        times: [f64; 2],
+        traces: Vec<ScopeTrace>,
+        color: usize,
+        snap_radius: Option<f64>,
+    ) {
+        self.archive_mark();
+        if let ([trace], Some(radius)) = (traces.as_slice(), snap_radius) {
+            let trace = *trace;
+            self.select_cursor_trace(trace);
+            for (slot, time) in times.into_iter().enumerate() {
+                self.place_cursor(slot, time, radius, false, trace);
+            }
+        } else {
+            self.cursors = times.map(Some);
+        }
+        self.cursor_scope = Scope::new(traces, Some(color));
+    }
+
     pub(in crate::file_manager) fn comparison_visible(&self, index: usize) -> bool {
         self.visible[index]
     }
@@ -136,9 +163,8 @@ impl Viewer {
             self.comparison_select(index);
             interaction.selected = true;
         }
-        if index == self.active {
-            self.move_cursors(ui, rect, &response, trace);
-        }
+        self.move_cursors(ui, &response, &[(trace, rect)], false);
+        interaction.drag = Drag::read(ui, &response);
         interaction.probe = response
             .hover_pos()
             .filter(|point| rect.contains(*point))

@@ -8,11 +8,12 @@ mod measurements;
 
 use super::{
     inputs::{Input, Signature},
+    lane_range::{Draft, Drag, Marks},
     take_query_result, timeline,
 };
-use crate::file_manager::{logic_view, preview_copy, preview_job::Task, scope_view::plot};
+use crate::file_manager::{logic_view, preview_job::Task, scope_view::plot};
 use compute::{Frame, Lane};
-use display::{EquationDisplay, Trace, TracePlot};
+use display::{EquationDisplay, RangeLane, Trace, TracePlot};
 use egui::{Context, Rect, Sense, Ui, pos2, vec2};
 use little_clip_core::{BackgroundJobs, engineering::waveforms::display_value};
 use std::{collections::BTreeMap, ops::Range, sync::Arc, time::Duration};
@@ -28,6 +29,7 @@ pub(super) struct Derived {
     program_rate: Option<f64>,
     history_span: Option<Range<f64>>,
     selected: Option<Range<f64>>,
+    ranges: Marks<RangeLane>,
     reveal_equation: Option<u64>,
     revision: u64,
     request_after: f64,
@@ -41,6 +43,8 @@ pub(super) struct SessionSettings {
     sample_rate: Option<f64>,
     history_span: Option<Range<f64>>,
     selected: Option<Range<f64>>,
+    #[serde(default, skip_serializing_if = "Marks::empty")]
+    ranges: Marks<RangeLane>,
     frequency: frequency::SavedFrequency,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     display: BTreeMap<u64, EquationDisplay>,
@@ -98,6 +102,7 @@ impl Derived {
             sample_rate: self.program_rate,
             history_span: self.history_span.clone(),
             selected: self.selected.clone(),
+            ranges: self.ranges.clone(),
             frequency: self.frequency.save(),
             display: self
                 .display
@@ -135,6 +140,7 @@ impl Derived {
         self.program_rate = state.sample_rate;
         self.history_span = state.history_span;
         self.selected = state.selected.filter(|span| !span.is_empty());
+        self.ranges = state.ranges;
         self.frequency.restore(state.frequency, count)?;
         self.measurements.restore(state.measurements, count);
         self.decoders.restore(state.decoders)?;
@@ -490,7 +496,7 @@ impl Derived {
             let display = self.display.get(&id).copied().unwrap_or_default().equation;
             let trace = Trace::Equation(index);
             if !display.hidden || self.frequency.origin_trace() == Some(trace) {
-                plots.push(TracePlot::allocate(ui, trace, display.offset));
+                plots.push(TracePlot::allocate(ui, trace, id, display.offset));
             }
         }
         if let Some(frame) = frame
@@ -529,7 +535,7 @@ impl Derived {
             if show_time {
                 let state = self.display.get(&id).copied().unwrap_or_default().filtered;
                 if !state.hidden || self.frequency.origin_trace() == Some(trace) {
-                    plots.push(TracePlot::allocate(ui, trace, state.offset));
+                    plots.push(TracePlot::allocate(ui, trace, id, state.offset));
                 }
             }
         });
@@ -562,8 +568,7 @@ impl Derived {
         }
         let rect = plots.first()?.rect.union(plots.last()?.rect);
         let mut pointed = None;
-        for plot in plots.iter() {
-            Self::select_interval(ui, &plot.response, span, &mut self.selected);
+        for plot in plots {
             if let Some(requested) =
                 timeline::navigate(ui.ctx(), plot.rect, &plot.response, span, true)
             {
@@ -574,17 +579,17 @@ impl Derived {
                 pointed = Some(plot::at(plot.rect, span, point.x));
             }
         }
+        let draft = self.select_interval(ui, plots, span);
         let cursor = pointed.or(self.decoders.cursor());
         frame.paint(
             ui,
             plots,
             span,
-            self.selected.as_ref(),
             &self.frequency,
             cursor.or(probe),
             reference,
         );
-        self.paint_time_markers(ui, plots, span, shared);
+        self.paint_time_markers(ui, plots, span, shared, draft.as_ref());
         if self.measurements.take_reveal() {
             ui.scroll_to_rect(rect, Some(egui::Align::Max));
         }
@@ -612,8 +617,17 @@ impl Derived {
         plots: &[TracePlot],
         span: &Range<f64>,
         shared: Option<&Range<f64>>,
+        draft: Option<&Draft<RangeLane>>,
     ) {
         for plot in plots.iter().filter(|plot| ui.is_rect_visible(plot.rect)) {
+            self.ranges.paint(
+                ui.painter(),
+                plot.rect,
+                span,
+                self.selected.as_ref(),
+                plot.range_lane,
+                draft,
+            );
             self.measurements.paint(ui.painter(), plot.rect, span);
             timeline::paint_shared(ui.painter(), plot.rect, span, shared);
         }
@@ -634,20 +648,40 @@ impl Derived {
     }
 
     fn select_interval(
+        &mut self,
         ui: &Ui,
-        response: &egui::Response,
+        plots: &[TracePlot],
         visible: &Range<f64>,
-        selected: &mut Option<Range<f64>>,
-    ) {
-        let modified = ui.input(|input| input.modifiers.command || input.modifiers.alt);
-        let (_, drag) = preview_copy::drag_range(ui, response, response.id, modified);
-        if let Some((left, right)) = drag {
-            let width = visible.end - visible.start;
-            let start = width.mul_add(f64::from(left), visible.start);
-            let end = width.mul_add(f64::from(right), visible.start);
-            *selected = (start < end).then_some(start..end);
-        } else if response.secondary_clicked() {
-            *selected = None;
+    ) -> Option<Draft<RangeLane>> {
+        for row in plots {
+            if row.response.secondary_clicked()
+                && let Some(point) = row.response.interact_pointer_pos()
+            {
+                self.ranges.clear_lane(
+                    &mut self.selected,
+                    row.range_lane,
+                    plot::at(row.rect, visible, point.x),
+                );
+            }
+        }
+        if ui.input(|input| input.modifiers.command || input.modifiers.alt) {
+            return None;
+        }
+        let (plot, drag) = plots
+            .iter()
+            .find_map(|plot| Drag::read(ui, &plot.response).map(|drag| (plot, drag)))?;
+        let draft = Draft::new(
+            drag,
+            plot.rect,
+            visible,
+            plots.iter().map(|row| (row.range_lane, row.rect)),
+        );
+        if drag.finished {
+            self.ranges
+                .select(&mut self.selected, draft.interval(), draft.lanes, None);
+            None
+        } else {
+            Some(draft)
         }
     }
 }

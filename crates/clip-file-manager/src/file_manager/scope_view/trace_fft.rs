@@ -12,7 +12,7 @@ use std::ops::Range;
 #[derive(
     Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
 )]
-pub(super) enum Trace {
+pub(in crate::file_manager) enum Trace {
     Recorded(usize),
     Math,
     Filtered(usize),

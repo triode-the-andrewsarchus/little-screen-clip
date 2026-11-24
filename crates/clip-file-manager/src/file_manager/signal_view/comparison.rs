@@ -1,11 +1,14 @@
 use super::{
     Capture, Link, LinkedTimeline, Source, SourceAction, Viewer, alignment, frequency_plot,
+    lane_range::{self, Drag},
 };
 use crate::file_manager::{
     preview_copy::Copies,
-    scope_view::{COLLAPSED_HEIGHT, move_trace, plot, scroll_trace_drag, trace_drop},
+    scope_view::{
+        COLLAPSED_HEIGHT, Lane, ScopeTrace, move_trace, plot, scroll_trace_drag, trace_drop,
+    },
 };
-use egui::{Align, Button, Rect, Response, Sense, Ui, pos2, vec2};
+use egui::{Align, Button, PointerButton, Rect, Response, Sense, Ui, pos2, vec2};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -38,6 +41,7 @@ pub(super) struct Comparison {
     pub active: Option<Trace>,
     pub spectrum: bool,
     pub initialized: bool,
+    pub range_color: usize,
 }
 
 impl Comparison {
@@ -333,6 +337,11 @@ impl Viewer {
         let height = (desired / (visible - visible_digital).max(1) as f32).max(116.0);
         let axis = (visible > 0).then(|| comparison_time_axis(ui, &self.span));
         let mut probe = None;
+        let mut drag = None;
+        let mut plots = Vec::new();
+        let selecting = ui.input(|input| {
+            input.pointer.primary_down() || input.pointer.button_released(PointerButton::Primary)
+        });
         let mut reorder = None;
         for row in &mut rows {
             let lane_height = if row.digital { DIGITAL_HEIGHT } else { height };
@@ -343,14 +352,20 @@ impl Viewer {
             let Some(link) = links.get(&row.trace.source) else {
                 continue;
             };
-            probe = self
-                .comparison_row(ui, target.rect, filter, row, link)
-                .or(probe);
+            if selecting {
+                self.comparison_range_plots(row, target.rect, filter, &mut plots);
+            }
+            let (pointed, current_drag) = self.comparison_row(ui, target.rect, filter, row, link);
+            probe = pointed.or(probe);
+            drag = current_drag.or(drag);
             let row_bounds = filter.map_or(target.rect, |filtered| target.rect.union(filtered));
             reorder = trace_drop(ui, row_bounds, row.trace).or(reorder);
         }
         if let Some(axis) = axis {
             self.paint_comparison_fft_window(ui, axis, links);
+        }
+        if let Some(drag) = drag {
+            self.comparison_brush(ui, drag, &plots, links);
         }
         self.comparison.focus_visible(&rows);
         if let Some((from, to, after)) = reorder {
@@ -358,6 +373,93 @@ impl Viewer {
             ui.ctx().request_repaint();
         }
         probe
+    }
+
+    fn comparison_range_plots(
+        &self,
+        row: &TraceRow,
+        recorded: Rect,
+        filtered: Option<Rect>,
+        plots: &mut Vec<((u64, ScopeTrace), Rect)>,
+    ) {
+        let input = ScopeTrace::Recorded(row.trace.channel);
+        let output = ScopeTrace::Filtered(row.trace.channel);
+        let geometry = [
+            (row.visible.then_some(recorded), input),
+            (filtered.filter(|_| row.filtered == Some(true)), output),
+        ];
+        plots.extend(geometry.into_iter().filter_map(|(area, trace)| {
+            let area = area?;
+            if let Capture::Analog(view) = &self.sources[row.source_index].capture
+                && !view.comparison_time_trace(trace)
+            {
+                return None;
+            }
+            Some(((row.trace.source, trace), Lane::comparison(area, true).plot))
+        }));
+    }
+
+    fn comparison_brush(
+        &mut self,
+        ui: &Ui,
+        drag: Drag,
+        plots: &[((u64, ScopeTrace), Rect)],
+        links: &HashMap<u64, Link>,
+    ) {
+        let Some((_, origin)) = plots.iter().find(|(_, rect)| rect.contains(drag.start)) else {
+            return;
+        };
+        let times = drag.times(*origin, &self.span);
+        let interval = lane_range::interval(times);
+        if interval.is_empty() {
+            return;
+        }
+        let color = self.comparison.range_color;
+        let targets = drag.targets(plots.iter().copied());
+        if !drag.finished {
+            for (key, plot) in plots {
+                if targets.contains(key) && ui.is_rect_visible(*plot) {
+                    lane_range::paint(ui.painter(), *plot, &self.span, &interval, color);
+                }
+            }
+            return;
+        }
+        let may_snap = targets.len() == 1 && !drag.all;
+        for source in &mut self.sources {
+            let Some(link) = links.get(&source.id) else {
+                continue;
+            };
+            let traces: Vec<_> = targets
+                .iter()
+                .filter_map(|&(id, trace)| (id == source.id).then_some(trace))
+                .collect();
+            if traces.is_empty() {
+                continue;
+            }
+            let native = times.map(|time| link.clock.to_native(time));
+            match &mut source.capture {
+                Capture::Analog(view) => {
+                    let radius = may_snap.then(|| {
+                        let width = (self.span.end - self.span.start) / link.clock.scale();
+                        width * 10.0 / f64::from(origin.width().max(1.0))
+                    });
+                    view.comparison_range(native, traces, color, radius);
+                }
+                Capture::Digital(view) => {
+                    let lanes = traces
+                        .into_iter()
+                        .filter_map(|trace| match trace {
+                            ScopeTrace::Recorded(lane) => Some(lane),
+                            _ => None,
+                        })
+                        .collect();
+                    view.comparison_range(native, lanes, color);
+                }
+                Capture::Unavailable(_) => {}
+            }
+        }
+        self.comparison.range_color = color.wrapping_add(1);
+        ui.ctx().request_repaint();
     }
 
     fn paint_comparison_fft_window(&self, ui: &Ui, axis: Rect, links: &HashMap<u64, Link>) {
@@ -380,7 +482,7 @@ impl Viewer {
         filter: Option<Rect>,
         row: &mut TraceRow,
         link: &Link,
-    ) -> Option<f64> {
+    ) -> (Option<f64>, Option<Drag>) {
         let key = row.trace;
         let source = &mut self.sources[row.source_index];
         let name = source
@@ -430,7 +532,7 @@ impl Viewer {
                 row.visible = view.comparison_visible(key.channel);
                 (interaction, Default::default())
             }
-            Capture::Unavailable(_) => return None,
+            Capture::Unavailable(_) => return (None, None),
         };
         if (interaction.selected || filtered.selected) && row.has_visible_lane() {
             self.comparison.active = Some(key);
@@ -444,10 +546,13 @@ impl Viewer {
         if self.reveal_source.take_if(|id| *id == source.id).is_some() {
             ui.scroll_to_rect(rect, Some(Align::TOP));
         }
-        filtered
-            .probe
-            .or(interaction.probe)
-            .map(|time| link.clock.to_workspace(time))
+        (
+            filtered
+                .probe
+                .or(interaction.probe)
+                .map(|time| link.clock.to_workspace(time)),
+            filtered.drag.or(interaction.drag),
+        )
     }
 }
 
