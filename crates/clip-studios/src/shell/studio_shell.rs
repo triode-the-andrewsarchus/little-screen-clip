@@ -663,22 +663,10 @@ impl<'a> StudioShell<'a> {
                 title_action_ui.set_clip_rect(controls_rect);
                 title_actions(&mut title_action_ui);
                 let badges_right = (title_action_ui.min_rect().left() - SPACE_SM).min(title_right);
-                let badge_font = egui::TextStyle::Body.resolve(ui.style());
                 let badge_widths: Vec<f32> = self
                     .badges
                     .iter()
-                    .map(|badge| {
-                        ui.fonts_mut(|fonts| {
-                            fonts
-                                .layout_no_wrap(
-                                    badge.text.clone(),
-                                    badge_font.clone(),
-                                    Color32::WHITE,
-                                )
-                                .size()
-                                .x
-                        }) + 12.0
-                    })
+                    .map(|badge| crate::ui_ext::badge_pill_width(ui, &badge.text))
                     .collect();
                 let badges_width = badge_widths.iter().sum::<f32>()
                     + 4.0 * self.badges.len().saturating_sub(1) as f32;

@@ -1274,6 +1274,15 @@ pub fn stat_pill(
     });
 }
 
+/// Width of a status pill, including both sides of its border.
+pub fn badge_pill_width(ui: &mut egui::Ui, label: &str) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let text_width = ui.fonts_mut(|fonts| {
+        fonts.layout_no_wrap(label.to_owned(), font, Color32::WHITE).size().x
+    });
+    text_width.ceil() + 2.0 * (BADGE_PADDING_X + 1.0)
+}
+
 /// Renders a standardized status pill for badges and counts.
 pub fn badge_pill(ui: &mut egui::Ui, label: &str, accent: Option<Color32>, palette: &AppPalette) {
     let colors = WorkbenchColors::from_palette(palette);
