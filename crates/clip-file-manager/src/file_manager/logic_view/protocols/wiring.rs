@@ -113,6 +113,11 @@ impl Wiring {
     pub fn button(&mut self, ui: &mut Ui, pin: &Pin<'_>, lanes: &[Lane]) {
         let name = pin.name(lanes);
         let label = format!("{} · {name}", pin.role.label());
+        if lanes.len() == 1 && matches!(&pin.channel, Channel::Required(_)) && pin.lane() == Some(0)
+        {
+            ui.label(label);
+            return;
+        }
         let active = self.active == Some(pin.role);
         if ui
             .add(Button::new(label).selected(active).truncate())
@@ -137,15 +142,6 @@ impl Wiring {
             pin.assign(lane);
         }
         self.close();
-    }
-
-    pub fn ui(&mut self, ui: &mut Ui, pins: &mut [Pin<'_>], lanes: &[Lane]) {
-        ui.horizontal_wrapped(|ui| {
-            for pin in &*pins {
-                self.button(ui, pin, lanes);
-            }
-        });
-        self.choices(ui, pins, lanes);
     }
 }
 

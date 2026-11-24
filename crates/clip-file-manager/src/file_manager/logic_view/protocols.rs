@@ -25,6 +25,9 @@ pub(in crate::file_manager) use samples::Pins;
 use wiring::{Pin, Role, Wiring};
 
 pub(in crate::file_manager) trait TraceInput: Send + Sync {
+    fn validate(&self, _cancel: &AtomicBool) -> Result<(), String> {
+        Ok(())
+    }
     fn time_bounds(&self, index: usize) -> Option<Range<f64>>;
     fn read_edges(
         &self,
@@ -51,9 +54,27 @@ impl TraceInput for Capture {
     }
 }
 
-enum Source {
+pub(in crate::file_manager) enum Source {
     Recording(Arc<Recording>),
     Materialized(Arc<dyn TraceInput>),
+}
+
+impl Source {
+    pub(super) fn checked<T>(
+        &self,
+        cancel: &AtomicBool,
+        read: impl FnOnce(&dyn TraceInput) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match self {
+            Self::Recording(recording) => recording.checked(cancel, |capture| read(capture)),
+            Self::Materialized(source) => {
+                source.validate(cancel)?;
+                let value = read(source.as_ref())?;
+                source.validate(cancel)?;
+                Ok(value)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -288,22 +309,29 @@ impl Panel {
     }
 
     pub fn decoder_buttons(&mut self, ui: &mut Ui, lanes: &[Lane]) -> bool {
-        let added = ui
-            .horizontal_wrapped(|ui| {
-                ui.label("Add decoder");
-                let mut added = None;
-                let enabled = !lanes.is_empty() && self.decoders.len() < 12;
-                for mode in [Mode::Spi, Mode::I2c, Mode::Uart, Mode::I2s, Mode::Pwm] {
-                    if ui
-                        .add_enabled(enabled, egui::Button::new(mode.label()))
-                        .clicked()
-                    {
-                        added = Some(mode);
+        self.decoder_buttons_with(ui, lanes, |_| {})
+    }
+
+    pub(in crate::file_manager) fn decoder_buttons_with(
+        &mut self,
+        ui: &mut Ui,
+        lanes: &[Lane],
+        extra: impl FnOnce(&mut Ui),
+    ) -> bool {
+        let mut added = None;
+        ui.add_enabled_ui(!lanes.is_empty(), |ui| {
+            ui.menu_button("Add decoder", |ui| {
+                ui.add_enabled_ui(self.decoders.len() < 12, |ui| {
+                    for mode in [Mode::Spi, Mode::I2c, Mode::Uart, Mode::I2s, Mode::Pwm] {
+                        if ui.button(mode.label()).clicked() {
+                            added = Some(mode);
+                            ui.close();
+                        }
                     }
-                }
-                added
-            })
-            .inner;
+                });
+                extra(ui);
+            });
+        });
         let Some(mode) = added else { return false };
         self.cancel_wiring();
         self.close();
@@ -362,7 +390,7 @@ impl Panel {
         let mut remove = false;
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add(egui::Button::new("Edges").selected(selected.is_none()))
+                .add(egui::Button::new("Raw edges").selected(selected.is_none()))
                 .clicked()
             {
                 selected = None;
@@ -377,7 +405,7 @@ impl Panel {
                 }
             }
             if selected.is_some() {
-                remove = ui.button("Remove decoder").clicked();
+                remove = ui.small_button("Remove decoder").clicked();
             }
         });
         let changed = selected != self.selected || remove;
@@ -740,23 +768,41 @@ impl Decoder {
 
     pub(super) fn controls(&mut self, ui: &mut Ui, lanes: &[Lane]) {
         self.lane_count = Some(lanes.len());
-        self.wiring.ui(ui, &mut self.settings.wiring(), lanes);
-        ui.horizontal_wrapped(|ui| match self.settings.mode {
+        ui.horizontal_wrapped(|ui| {
+            for pin in &self.settings.wiring() {
+                self.wiring.button(ui, pin, lanes);
+            }
+            self.mode_controls(ui);
+        });
+        self.wiring.choices(ui, &mut self.settings.wiring(), lanes);
+        if let Err(message) = self.inputs() {
+            ui.colored_label(ui.visuals().error_fg_color, message);
+        }
+    }
+
+    fn mode_controls(&mut self, ui: &mut Ui) {
+        match self.settings.mode {
             Mode::Spi => self.settings.spi.controls(ui),
             Mode::I2s => self.settings.i2s.controls(ui),
             Mode::Pwm => {
-                if ui
-                    .add(egui::Button::new("Active high").selected(self.settings.pwm_active_high))
-                    .clicked()
-                {
-                    self.settings.pwm_active_high = true;
-                }
-                if ui
-                    .add(egui::Button::new("Active low").selected(!self.settings.pwm_active_high))
-                    .clicked()
-                {
-                    self.settings.pwm_active_high = false;
-                }
+                egui::ComboBox::from_id_salt("pwm-active-level")
+                    .selected_text(if self.settings.pwm_active_high {
+                        "Active high"
+                    } else {
+                        "Active low"
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.settings.pwm_active_high,
+                            true,
+                            "Active high",
+                        );
+                        ui.selectable_value(
+                            &mut self.settings.pwm_active_high,
+                            false,
+                            "Active low",
+                        );
+                    });
             }
             Mode::I2c => {}
             Mode::Uart => {
@@ -770,9 +816,6 @@ impl Decoder {
                 );
                 ui.weak("8N1");
             }
-        });
-        if let Err(message) = self.inputs() {
-            ui.colored_label(ui.visuals().error_fg_color, message);
         }
     }
 

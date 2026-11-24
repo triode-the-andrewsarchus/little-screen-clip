@@ -3,6 +3,7 @@
 mod frequency;
 pub(super) mod plot;
 pub(super) mod protocols;
+pub(in crate::file_manager) mod sigrok;
 pub(super) mod strip;
 
 use super::{
@@ -55,6 +56,7 @@ pub(super) struct Viewer {
     show_transitions: bool,
     evidence_lane: Option<usize>,
     protocols: protocols::Panel,
+    sigrok: sigrok::Panel,
     frequency: frequency::Frequency,
     error: Option<String>,
 }
@@ -151,6 +153,7 @@ impl Viewer {
             show_transitions: false,
             evidence_lane: None,
             protocols,
+            sigrok: sigrok::Panel::default(),
             frequency: frequency::Frequency::default(),
             error: None,
         })
@@ -250,30 +253,35 @@ impl Viewer {
             self.protocols.cancel_wiring();
             self.protocols.exit_inspection(&mut self.span);
             self.protocols.close();
+            let origin = self.sigrok.close();
+            self.restore_sigrok_view(origin);
             self.frequency(ui, link);
             return Interaction {
                 share,
                 ..Interaction::default()
             };
         }
-        if self.protocols.decoder_buttons(ui, &self.overview.lanes) {
-            self.channel_picker.close();
-            self.show_transitions = true;
-        }
-        if self.show_transitions {
-            self.protocols.controls(ui, &self.overview.lanes);
-            self.protocols.return_controls(ui, &mut self.span);
-        } else {
-            self.protocols.cancel_wiring();
-            self.protocols.exit_inspection(&mut self.span);
-        }
+        self.decoder_controls(ui);
         let reserved = if self.show_transitions { 238.0 } else { 39.0 };
         let minimum = (44.0 + 24.0 * self.visible_lanes().len() as f32).max(75.0);
         let height = (ui.available_height() - reserved).max(minimum);
         let probe = self.waveforms(ui, height, link);
         self.overview(ui);
         self.request_window(ui.ctx());
-        if self.show_transitions && !self.protocols.edges() {
+        if self.show_transitions && self.sigrok.active {
+            if let Some((time, step)) = self.sigrok.table(ui, Link::clock(link)) {
+                let origin = sigrok::View {
+                    span: self.span.clone(),
+                    selection: self.selected.clone(),
+                    cursor: self.cursor,
+                };
+                let domain = link.map_or(&self.overview.span, |link| &link.domain);
+                self.span = self.sigrok.visit(origin, &time, domain, step);
+                self.cursor = Some(time.start);
+                self.selected = (!time.is_empty()).then_some(time);
+                ui.ctx().request_repaint();
+            }
+        } else if self.show_transitions && !self.protocols.edges() {
             self.protocols
                 .update(ui.ctx(), self.span.clone(), self.refined, &self.recording);
             if let Some(action) = self.protocols.table(
@@ -298,6 +306,59 @@ impl Viewer {
         }
     }
 
+    fn decoder_controls(&mut self, ui: &mut Ui) {
+        let mut sigrok = false;
+        if self
+            .protocols
+            .decoder_buttons_with(ui, &self.overview.lanes, |ui| {
+                if ui.button("Sigrok catalog…").clicked() {
+                    sigrok = true;
+                    ui.close();
+                }
+            })
+        {
+            let origin = self.sigrok.close();
+            self.restore_sigrok_view(origin);
+            self.channel_picker.close();
+            self.show_transitions = true;
+        }
+        if sigrok {
+            self.protocols.cancel_wiring();
+            self.protocols.exit_inspection(&mut self.span);
+            self.protocols.close();
+            self.sigrok.open(ui.ctx());
+            self.channel_picker.close();
+            self.show_transitions = true;
+        }
+        if !self.show_transitions {
+            self.protocols.cancel_wiring();
+            self.protocols.exit_inspection(&mut self.span);
+            let origin = self.sigrok.close();
+            self.restore_sigrok_view(origin);
+        } else if self.sigrok.active {
+            let origin = self.sigrok.return_controls(ui);
+            self.restore_sigrok_view(origin);
+            self.sigrok.controls(
+                ui,
+                &self.overview.lanes,
+                || protocols::Source::Recording(self.recording.clone()),
+                &self.span,
+                self.selected.as_ref(),
+            );
+        } else {
+            self.protocols.controls(ui, &self.overview.lanes);
+            self.protocols.return_controls(ui, &mut self.span);
+        }
+    }
+
+    fn restore_sigrok_view(&mut self, origin: Option<sigrok::View>) {
+        if let Some(origin) = origin {
+            self.span = origin.span;
+            self.selected = origin.selection;
+            self.cursor = origin.cursor;
+        }
+    }
+
     fn toolbar(
         &mut self,
         ui: &mut Ui,
@@ -312,7 +373,10 @@ impl Viewer {
                 self.overview.span.end - self.overview.span.start,
                 "s",
             ));
-            if self.frequency.visible || !self.show_transitions || self.protocols.edges() {
+            if self.frequency.visible
+                || !self.show_transitions
+                || self.protocols.edges() && !self.sigrok.active
+            {
                 self.channel_picker.button(
                     ui,
                     &Pin::required(Role::Channel, &mut self.active),
@@ -395,7 +459,14 @@ impl Viewer {
             .show_transitions
             .then(|| self.protocols.channels())
             .flatten();
-        let mut visible = configured.unwrap_or_default();
+        let mut visible = if self.sigrok.active {
+            let mut channels: Vec<_> = self.sigrok.channels().collect();
+            channels.sort_unstable();
+            channels.dedup();
+            channels
+        } else {
+            configured.unwrap_or_default()
+        };
         visible.retain(|lane| *lane < self.overview.lanes.len());
         if visible.is_empty() {
             let first = self.active / LANES_PER_PAGE * LANES_PER_PAGE;
@@ -408,6 +479,9 @@ impl Viewer {
     }
 
     fn focused_lane(&self) -> usize {
+        if self.sigrok.active {
+            return self.sigrok.channels().next().unwrap_or(self.active);
+        }
         if self.show_transitions
             && let Some(lane) = self
                 .protocols
@@ -432,7 +506,7 @@ impl Viewer {
     fn waveforms(&mut self, ui: &mut Ui, height: f32, link: Option<&Link>) -> Option<f64> {
         let (outer, frame) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-        let annotations = self.show_transitions && !self.protocols.edges();
+        let annotations = self.show_transitions && !self.sigrok.active && !self.protocols.edges();
         let top = if annotations { 25.0 } else { 3.0 };
         let rect = Rect::from_min_max(outer.min + vec2(78.0, top), outer.max - vec2(9.0, 18.0));
         let response = ui.interact(rect, frame.id.with("waveform"), Sense::click_and_drag());

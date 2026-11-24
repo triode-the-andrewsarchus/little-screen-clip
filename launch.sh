@@ -391,6 +391,7 @@ function run_file_manager() {
     fi
     if [ ! -x "$file_manager_bin" ]; then
         cargo build --release -p clip-file-manager -p clip-media-worker
+        "$SCRIPT_DIR/scripts/build_sigrok_decoder.sh" || echo 'Optional Sigrok decoder build failed.' >&2
         file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
     fi
     ensure_media_worker "$file_manager_bin"
@@ -627,6 +628,7 @@ case "${1:-}" in
             python3 "$SCRIPT_DIR/scripts/build_media_helper.py"
         fi
         if [ -x "$SCRIPT_DIR/target/release/clip-file-manager" ]; then
+            "$SCRIPT_DIR/scripts/build_sigrok_decoder.sh" || echo 'Optional Sigrok decoder build failed.' >&2
             "$SCRIPT_DIR/scripts/build_timelens.sh"
             "$SCRIPT_DIR/scripts/build_video_strip.sh"
         fi
