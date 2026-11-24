@@ -91,3 +91,4 @@ png = "0.18.1"
 hokusai-brush = "0.3.0"
 hokusai-core = "0.3.0"
 rusqlite = { version = "0.43", features = ["bundled", "fallible_uint", "hooks", "limits", "serialize"] }
+x11rb.workspace = true

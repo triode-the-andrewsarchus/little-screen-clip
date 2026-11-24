@@ -31,6 +31,7 @@ pub(super) const TRANSFER_LIMIT: u64 = 256 * 1024 * 1024;
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Runs a read-only compatibility adapter with the native transfer timeout.
 /// Incomplete, oversized and failed reads never become clipboard content.
+#[cfg(test)]
 pub(super) async fn read_with_tool(
     request: little_clip_core::CommandRequest,
     limit: usize,

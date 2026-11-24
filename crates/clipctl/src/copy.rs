@@ -2,7 +2,7 @@
 
 use super::send_ipc_req;
 use little_clip_core::ipc::{ClipboardRouteStatus, IpcRequest, IpcResponse};
-use little_clip_core::{HandSide, process::CommandRequest};
+use little_clip_core::{ClipboardSelection, ClipboardShortcutAction, HandSide};
 use std::time::Duration;
 use tokio::io::{BufReader, Lines};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
@@ -60,34 +60,30 @@ pub(super) async fn copy_to_hand(
     }
 
     let shortcut = tokio::task::spawn_blocking(|| {
-        CommandRequest::new("wtype")
-            .args(["-m", "alt", "-M", "ctrl", "-k", "c", "-m", "ctrl"])
-            .timeout(Duration::from_millis(500))
-            .max_output_bytes(16 * 1024)
-            .own_process_group()
-            .run()
+        little_clip_core::send_clipboard_shortcut(ClipboardShortcutAction::Copy, true)
     })
     .await;
-    let sent_shortcut = matches!(shortcut, Ok(Ok(ref output)) if output.status.success());
+    let sent_shortcut = matches!(shortcut, Ok(Ok(())));
     if finish_route(writer, lines, id, sent_shortcut).await? {
         println!("Copy accepted for routing to {hand:?}");
         return Ok(());
     }
 
     let primary = tokio::task::spawn_blocking(|| {
-        CommandRequest::new("wl-paste")
-            .args(["--primary", "-n"])
-            .timeout(Duration::from_secs(1))
-            .max_output_bytes(1024 * 1024)
-            .own_process_group()
-            .run()
+        little_clip_core::read_system_clipboard_bytes(
+            ClipboardSelection::Primary,
+            None,
+            1024 * 1024,
+        )
     })
     .await?;
-    let output = primary?;
-    if !output.status.success() || output.stdout_truncated || output.stdout.is_empty() {
-        return Err("No usable primary selection after copy routing ended".into());
-    }
-    let text = String::from_utf8(output.stdout)?;
+    let bytes = match primary {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        Ok(_) | Err(_) => {
+            return Err("No usable primary selection after copy routing ended".into());
+        }
+    };
+    let text = String::from_utf8(bytes)?;
     let response = send_ipc_req(writer, lines, &IpcRequest::PushText { text, hand }).await?;
     match response {
         IpcResponse::Success { .. } => {

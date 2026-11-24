@@ -209,10 +209,13 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                 copy_item_to_os_clipboard(item).await;
 
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                let _ = tokio::process::Command::new("wtype")
-                    .args(["-m", "alt", "-M", "ctrl", "-k", "v", "-m", "ctrl"])
-                    .status()
-                    .await;
+                let _ = tokio::task::spawn_blocking(|| {
+                    little_clip_core::send_clipboard_shortcut(
+                        little_clip_core::ClipboardShortcutAction::Paste,
+                        true,
+                    )
+                })
+                .await;
 
                 if slot == SlotId::RightHand {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
