@@ -185,7 +185,8 @@ impl GerberDocument {
         cancelled: &AtomicBool,
     ) -> Result<Self, String> {
         check_cancelled(cancelled, "Excellon parse cancelled")?;
-        match parse_excellon(BufReader::new(Cursor::new(bytes))) {
+        let cleaned = strip_excellon_park_tool(bytes);
+        match parse_excellon(BufReader::new(Cursor::new(cleaned.as_ref()))) {
             Ok(excellon) if has_excellon_content(&excellon) || !looks_like_gerber(bytes) => {
                 build_excellon_document(&excellon, bytes, cancelled)
             }
@@ -586,6 +587,37 @@ fn format_polarity_label(
         format!("{base} (with Clear polarity cutouts)")
     } else {
         base.to_string()
+    }
+}
+
+/// Strips KiCad/CAM `T0` / `T00` park-tool lines that `lib_gerber_edit` rejects as tool 0.
+fn strip_excellon_park_tool(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return std::borrow::Cow::Borrowed(bytes);
+    };
+    let mut has_park_tool = false;
+    let mut out = String::new();
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("T0") || trimmed.eq_ignore_ascii_case("T00") {
+            if !has_park_tool {
+                out.reserve(text.len());
+                // Lazily backfill everything processed before the first park-tool line.
+                let prefix_len = line.as_ptr() as usize - text.as_ptr() as usize;
+                out.push_str(&text[..prefix_len]);
+                has_park_tool = true;
+            }
+            if line.ends_with('\n') {
+                out.push('\n');
+            }
+        } else if has_park_tool {
+            out.push_str(line);
+        }
+    }
+    if has_park_tool {
+        std::borrow::Cow::Owned(out.into_bytes())
+    } else {
+        std::borrow::Cow::Borrowed(bytes)
     }
 }
 
@@ -1329,5 +1361,22 @@ M30
         fake_gimp[16..20].copy_from_slice(&1_u32.to_be_bytes());
         fake_gimp[20..24].copy_from_slice(b"GIMP");
         assert!(!super::super::is_gerber_gbr_bytes(&fake_gimp));
+    }
+
+    #[test]
+    fn kicad_excellon_park_tool_t0_and_empty_npth_parse() {
+        let cancel = AtomicBool::new(false);
+        let pth = "M48\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX4.9Y33.08\nT0\nM30\n";
+        let doc = GerberDocument::parse_excellon(Path::new("pth.drl"), pth.as_bytes(), &cancel)
+            .expect("KiCad PTH drill file with T0 park command should parse");
+        assert!(doc.is_excellon);
+        assert_eq!(doc.hole_count, 1);
+
+        let npth = "M48\nFMAT,2\nMETRIC\n%\nG90\nG05\nT0\nM30\n";
+        let empty = GerberDocument::parse_excellon(Path::new("npth.drl"), npth.as_bytes(), &cancel)
+            .expect("KiCad NPTH drill file with zero holes and T0 should parse");
+        assert!(empty.is_excellon);
+        assert_eq!(empty.hole_count, 0);
+        assert!(empty.render_thumbnail([120, 80], &cancel).is_ok());
     }
 }

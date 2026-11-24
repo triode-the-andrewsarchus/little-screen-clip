@@ -639,14 +639,68 @@ fn spice_device_kind(prefix: char) -> (&'static str, &'static str, usize) {
     }
 }
 
+fn is_decorative_comment(text: &str) -> bool {
+    !text.is_empty() && !text.chars().any(char::is_alphanumeric)
+}
+
+fn update_title_candidate(idx: usize, trimmed: &str, title: &mut String) {
+    if !title.is_empty() {
+        return;
+    }
+    let is_comment_header = idx < 4 && trimmed.starts_with('*');
+    let is_first_title_card = idx == 0 && !trimmed.is_empty() && !trimmed.starts_with('.');
+    if !is_comment_header && !is_first_title_card {
+        return;
+    }
+    let candidate = trimmed.trim_start_matches('*').trim();
+    if !is_decorative_comment(candidate) {
+        *title = candidate.to_string();
+    }
+}
+
+fn try_consume_control_or_title(
+    trimmed: &str,
+    in_control: &mut bool,
+    dot_title: &mut String,
+) -> bool {
+    let lower = trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match lower.as_str() {
+        ".control" => {
+            *in_control = true;
+            true
+        }
+        ".endc" => {
+            *in_control = false;
+            true
+        }
+        ".title" => {
+            if dot_title.is_empty() {
+                *dot_title = trimmed
+                    .get(".title".len()..)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 fn scan_spice_cards(text: &str, cancelled: &AtomicBool) -> Result<ScannedNetlist, String> {
     let cards = join_logical_lines(text);
     let mut title = String::new();
+    let mut dot_title = String::new();
     let mut node_set: BTreeSet<String> = BTreeSet::new();
     let mut components = Vec::new();
     let mut cats: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut subcircuits = Vec::new();
     let mut active_subckt: Option<SpiceSubcktInfo> = None;
+    let mut in_control = false;
     let mut models = Vec::new();
     let mut analyses = Vec::new();
     let mut includes = Vec::new();
@@ -656,21 +710,26 @@ fn scan_spice_cards(text: &str, cancelled: &AtomicBool) -> Result<ScannedNetlist
             check_cancelled(cancelled, "SPICE scan cancelled")?;
         }
         let trimmed = line.trim();
-        if idx == 0 && !trimmed.is_empty() && !trimmed.starts_with('.') {
-            title = trimmed.trim_start_matches('*').trim().to_string();
-        }
+        update_title_candidate(idx, trimmed, &mut title);
         if trimmed.is_empty() || trimmed.starts_with('*') || trimmed.starts_with(';') {
             continue;
         }
         if trimmed.starts_with('.') {
-            scan_dot_directive(
-                trimmed,
-                &mut active_subckt,
-                &mut subcircuits,
-                &mut models,
-                &mut analyses,
-                &mut includes,
-            );
+            if !try_consume_control_or_title(trimmed, &mut in_control, &mut dot_title)
+                && !in_control
+            {
+                scan_dot_directive(
+                    trimmed,
+                    &mut active_subckt,
+                    &mut subcircuits,
+                    &mut models,
+                    &mut analyses,
+                    &mut includes,
+                );
+            }
+            continue;
+        }
+        if in_control {
             continue;
         }
         if let Some(sub) = &mut active_subckt {
@@ -681,6 +740,9 @@ fn scan_spice_cards(text: &str, cancelled: &AtomicBool) -> Result<ScannedNetlist
     }
     if let Some(sub) = active_subckt {
         subcircuits.push(sub);
+    }
+    if !dot_title.is_empty() {
+        title = dot_title;
     }
 
     let category_counts: Vec<(&'static str, usize)> = cats.into_iter().collect();
@@ -781,12 +843,21 @@ fn record_top_element(
 }
 
 fn pick_netlist_title(ir_title: &str, scan_title: &str, path: &Path) -> String {
-    let ir = ir_title.trim();
-    if !ir.is_empty() && ir != "*untitled*" {
-        return ir.to_string();
-    }
     if !scan_title.is_empty() {
         return scan_title.to_string();
+    }
+    let ir = ir_title.trim();
+    let ir = if ir
+        .get(..6)
+        .is_some_and(|p| p.eq_ignore_ascii_case(".title"))
+    {
+        ir.get(6..).unwrap_or("").trim()
+    } else {
+        ir
+    };
+    let cleaned = ir.trim_start_matches('*').trim();
+    if !cleaned.is_empty() && ir != "*untitled*" && !is_decorative_comment(cleaned) {
+        return cleaned.to_string();
     }
     path.file_stem()
         .and_then(|s| s.to_str())
@@ -1685,6 +1756,25 @@ X1 mid out vdd BUF
                 .iter()
                 .any(|inc| inc.contains("missing_lib.lib"))
         );
+
+        let ng = "\
+* ======================================
+.title SR Latch Deck
+Vdd vdd 0 1.8
+XL1 a b q 0 SR
+.tran 1n 10n
+.control
+set xgridwidth = 2
+foreach x 1 2 3 4
+  run
+end
+.endc
+.end
+";
+        let ng_doc =
+            SpiceNetlistDocument::parse(Path::new("ng.cir"), ng.as_bytes(), &cancel).unwrap();
+        assert_eq!(ng_doc.title, "SR Latch Deck");
+        assert!(ng_doc.node_count <= 5);
 
         let thumb = doc.render_thumbnail([180, 100], &cancel).unwrap();
         assert!(
