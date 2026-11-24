@@ -1114,7 +1114,7 @@ fn extract_real_traces(
 ) -> (Vec<f64>, Vec<SpiceRawTrace>) {
     let x_values = cols
         .first()
-        .map(|col| col.iter().step_by(stride).copied().map(f64::abs).collect())
+        .map(|col| col.iter().step_by(stride).copied().collect())
         .unwrap_or_default();
     let mut traces = Vec::new();
     for (idx, col) in cols.iter().enumerate().skip(1).take(MAX_DECODED_TRACES) {
@@ -1320,6 +1320,9 @@ fn decode_ltspice_binary_plot(
     let step = decimate_stride(total_points);
     let kept_vars = nvars.saturating_sub(1).min(MAX_DECODED_TRACES);
 
+    // LTspice's compressed transient format can encode negative time stamps.
+    let transient = RawAnalysisKind::classify(&meta.plot_name, meta.is_complex, total_points)
+        == RawAnalysisKind::Transient;
     let mut x_values = Vec::with_capacity(total_points / step + 1);
     let mut reals: Vec<Vec<f64>> = vec![Vec::new(); kept_vars];
     let mut phases: Vec<Vec<f64>> = if meta.is_complex {
@@ -1333,8 +1336,8 @@ fn decode_ltspice_binary_plot(
             check_cancelled(cancelled, "LTspice binary decode cancelled")?;
         }
         let rec = &payload[pt * stride_bytes..(pt + 1) * stride_bytes];
-        let x_val = f64::from_le_bytes(rec[0..8].try_into().unwrap_or([0; 8])).abs();
-        x_values.push(x_val);
+        let x_val = f64::from_le_bytes(rec[0..8].try_into().unwrap_or([0; 8]));
+        x_values.push(if transient { x_val.abs() } else { x_val });
 
         for v in 0..kept_vars {
             let var_idx = v + 1;
@@ -1383,7 +1386,7 @@ fn decode_ltspice_ascii_plot(
         let (x, _) = parse_raw_scalar(tokens.next(), meta.is_complex)?;
         let keep = point.is_multiple_of(step);
         if keep {
-            x_values.push(x.abs());
+            x_values.push(x);
         }
         for var in 0..meta.variables.len() - 1 {
             let (re, im) = parse_raw_scalar(tokens.next(), meta.is_complex)?;
@@ -1850,6 +1853,23 @@ Binary:
 
         let fake_tiff = b"II*\0\x08\0\0\0\x01\0\x00\x01\x03\0\x01\0\0\0";
         assert!(!is_spice_raw_bytes(fake_tiff));
+    }
+
+    #[test]
+    fn dc_sweep_preserves_negative_axis_values() {
+        let header = "Title: Sweep\nPlotname: DC transfer characteristic\nFlags: real\nNo. Variables: 2\nNo. Points: 3\nVariables:\n0 v-sweep voltage\n1 V(out) voltage\n";
+        let cancel = AtomicBool::new(false);
+        let ascii = format!("{header}Values:\n0 -1 -2\n1 0 0\n2 1 2\n");
+        let doc = SpiceRawDocument::parse(ascii.as_bytes(), &cancel).unwrap();
+        assert_eq!(doc.primary().unwrap().x_values, [-1.0, 0.0, 1.0]);
+
+        let mut binary = format!("{header}Binary:\n").into_bytes();
+        for x in [-1.0_f64, 0.0, 1.0] {
+            binary.extend_from_slice(&x.to_le_bytes());
+            binary.extend_from_slice(&(2.0 * x as f32).to_le_bytes());
+        }
+        let doc = SpiceRawDocument::parse(&binary, &cancel).unwrap();
+        assert_eq!(doc.primary().unwrap().x_values, [-1.0, 0.0, 1.0]);
     }
 
     #[test]
