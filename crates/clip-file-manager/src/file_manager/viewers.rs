@@ -143,6 +143,7 @@ pub(super) struct Viewers {
     pad_audio: bool,
     pad_trim: Option<(f32, f32)>,
     audio_return_saving: bool,
+    signal_return_saving: bool,
     audio_result: Option<PathBuf>,
     config: AppConfig,
     gallery: Option<gallery::Collection>,
@@ -554,6 +555,7 @@ impl Viewers {
         self.poll_file_source(ctx);
         self.tick_rename(ctx);
         self.poll_audio_return();
+        self.poll_signal_return();
     }
 
     pub fn ui(
@@ -574,7 +576,10 @@ impl Viewers {
             || self.collection_modal()
             || self.rename.open
             || self.rename.busy();
-        let editor_enabled = !self.confirm_close && !self.audio_return_saving && !blocked;
+        let editor_enabled = !self.confirm_close
+            && !self.audio_return_saving
+            && !self.signal_return_saving
+            && !blocked;
         if self.loading.is_some() {
             ui.spinner();
             ui.label("Opening file…");
@@ -619,6 +624,21 @@ impl Viewers {
         }
     }
 
+    fn poll_signal_return(&mut self) {
+        if self.signal_return_saving
+            && let Some(ViewerSession::Signals(state)) = &self.session
+            && !state.session_write_pending()
+        {
+            self.signal_return_saving = false;
+            if state.save_error().is_some() || state.session_dirty() {
+                self.confirm_close = true;
+            } else {
+                self.clear();
+                self.gallery = None;
+            }
+        }
+    }
+
     fn close_confirmation(&mut self, ui: &mut Ui, palette: &AppPalette) {
         if self.confirm_close {
             egui::Window::new("Unsaved edits")
@@ -631,6 +651,26 @@ impl Viewers {
                     } else {
                         "Save your changes before returning to the folder."
                     });
+                    if let Some(ViewerSession::Signals(state)) = &mut self.session
+                        && state.session_path().is_some()
+                    {
+                        if let Some(error) = state.save_error() {
+                            ui.colored_label(ui.visuals().error_fg_color, error);
+                        }
+                        if ui
+                            .add_enabled(
+                                state.can_save_open_recipe(),
+                                clip_ui::buttons::ButtonRole::Primary
+                                    .button("Save and return", palette),
+                            )
+                            .on_disabled_hover_text("Apply or cancel the equation draft first")
+                            .clicked()
+                            && state.save_open_recipe(ui.ctx())
+                        {
+                            self.signal_return_saving = true;
+                            self.confirm_close = false;
+                        }
+                    }
                     if self.pad_audio
                         && ui
                             .add(
@@ -760,6 +800,7 @@ impl Viewers {
         self.pad_audio = false;
         self.pad_trim = None;
         self.audio_return_saving = false;
+        self.signal_return_saving = false;
         self.video_start_seconds = 0.0;
     }
     fn open_external(&mut self) {

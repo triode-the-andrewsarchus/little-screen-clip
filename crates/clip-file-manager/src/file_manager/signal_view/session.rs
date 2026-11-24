@@ -689,6 +689,33 @@ impl Viewer {
         self.session.poll(ctx);
     }
 
+    pub(in crate::file_manager) fn can_save_open_recipe(&self) -> bool {
+        self.session.file.is_some()
+            && self.session.pending.is_none()
+            && self.session.form.is_none()
+            && !self.derived.has_draft_edits()
+    }
+
+    pub(in crate::file_manager) fn save_open_recipe(&mut self, ctx: &Context) -> bool {
+        if !self.can_save_open_recipe() {
+            return false;
+        }
+        let Some(file) = self.session.file.clone() else {
+            return false;
+        };
+        self.start_save(Target::Replace(file), ctx);
+        true
+    }
+
+    pub(in crate::file_manager) fn save_error(&self) -> Option<&str> {
+        self.session
+            .message
+            .as_ref()?
+            .as_ref()
+            .err()
+            .map(String::as_str)
+    }
+
     pub(super) fn save_buttons(&mut self, ui: &mut Ui) {
         let idle = self.session.pending.is_none();
         let unapplied = self.derived.has_draft_edits();
@@ -697,10 +724,10 @@ impl Viewer {
             .add_enabled(may_save, egui::Button::new("Save analysis"))
             .clicked()
         {
-            if let Some(file) = &self.session.file {
-                self.start_save(Target::Replace(file.clone()), ui.ctx());
-            } else {
+            if self.session.file.is_none() {
                 self.begin_save_as();
+            } else {
+                self.save_open_recipe(ui.ctx());
             }
         }
         if self.session.file.is_some()
