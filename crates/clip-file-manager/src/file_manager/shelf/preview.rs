@@ -63,7 +63,7 @@ pub(in crate::file_manager) enum Source {
     Minecraft(PathBuf, u64),
     Toolpath(PathBuf),
     Embroidery(PathBuf),
-    Eda(PathBuf),
+    Eda(PathBuf, u64),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
     Multisample(PathBuf),
@@ -138,7 +138,7 @@ impl Source {
             super::super::document_format::Format::Geography => Source::Geography(path),
             super::super::document_format::Format::Toolpath => Source::Toolpath(path),
             super::super::document_format::Format::Embroidery => Source::Embroidery(path),
-            super::super::document_format::Format::Eda => Source::Eda(path),
+            super::super::document_format::Format::Eda => Source::Eda(path, revision),
             super::super::document_format::Format::VcvPatch => Source::VcvPatch(path),
             super::super::document_format::Format::Multisample => Source::Multisample(path),
             super::super::document_format::Format::Subtitle => Source::Subtitle(path),
@@ -176,7 +176,7 @@ impl Source {
             | Self::Geography(_)
             | Self::Toolpath(_)
             | Self::Embroidery(_)
-            | Self::Eda(_)
+            | Self::Eda(..)
             | Self::Multisample(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
@@ -300,7 +300,7 @@ impl Source {
             Source::Multisample(path) => super::super::multisample::load(&path, token),
             Source::Toolpath(path) => super::super::gcode::load(&path, token),
             Source::Embroidery(path) => super::super::embroidery::load_strip(&path, token),
-            Source::Eda(path) => super::super::eda::load(&path, token),
+            Source::Eda(path, revision) => super::super::eda::load_listing(&path, revision, token),
             Source::VcvPatch(path) => super::super::vcv_strip::load(&path, token),
             Source::VcvRaster(request) => request.load(token),
             Source::Minecraft(path, revision) => {
