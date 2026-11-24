@@ -22,6 +22,21 @@ pub(super) fn strip_slots(count: usize, capacity: usize) -> Vec<Option<usize>> {
 }
 type EntryRevision = (u64, Option<u64>, Option<u64>);
 
+pub(super) fn with_listing_revision(
+    path: &std::path::Path,
+    revision: u64,
+    icon: crate::icons::Icon,
+    load: impl FnOnce() -> super::media::PreviewData,
+) -> super::media::PreviewData {
+    let check = || super::filesystem::check_revision(path, revision);
+    check()
+        .and_then(|()| {
+            let preview = load();
+            check().map(|()| preview)
+        })
+        .unwrap_or_else(|error| super::media::PreviewData::new(String::new(), error, icon))
+}
+
 fn entry_revision(entry: &Entry) -> EntryRevision {
     (
         entry.revision,

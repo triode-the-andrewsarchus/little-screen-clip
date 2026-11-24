@@ -54,13 +54,7 @@ pub(super) fn icon_for_format(format: EdaFormat) -> Icon {
 }
 
 pub(super) fn load_listing(path: &Path, revision: u64, token: &AtomicBool) -> PreviewData {
-    let check = || super::filesystem::check_revision(path, revision);
-    check()
-        .and_then(|()| {
-            let preview = load(path, token);
-            check().map(|()| preview)
-        })
-        .unwrap_or_else(|error| PreviewData::new(String::new(), error, Icon::Alert))
+    super::previews::with_listing_revision(path, revision, Icon::Alert, || load(path, token))
 }
 
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
