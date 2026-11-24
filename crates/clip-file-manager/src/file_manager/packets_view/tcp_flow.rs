@@ -174,10 +174,10 @@ impl View {
         copies: &mut Copies,
     ) {
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.mode, Mode::Sequence, "TCP sequence").on_hover_text(
+            clip_ui::buttons::choice(ui, &mut self.mode, Mode::Sequence, "TCP sequence").on_hover_text(
                 "Each direction measures sequence bytes from its first observed sequence.",
             );
-            ui.selectable_value(&mut self.mode, Mode::Delay, "ACK delay").on_hover_text(
+            clip_ui::buttons::choice(ui, &mut self.mode, Mode::Delay, "ACK delay").on_hover_text(
                 "Time from a recorded segment to its exact cumulative ACK on the same interface. Overlapping sends retire ambiguous pairs.",
             );
             if last > 64 {

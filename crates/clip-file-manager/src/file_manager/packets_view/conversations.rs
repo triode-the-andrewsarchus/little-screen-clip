@@ -238,8 +238,8 @@ impl Panel {
                 action = Some(Action::SelectedRange);
             }
             let previously_bytes = self.show_bytes;
-            ui.selectable_value(&mut self.show_bytes, false, "Packet counts");
-            ui.selectable_value(&mut self.show_bytes, true, "Captured bytes");
+            clip_ui::buttons::choice(ui, &mut self.show_bytes, false, "Packet counts");
+            clip_ui::buttons::choice(ui, &mut self.show_bytes, true, "Captured bytes");
             if previously_bytes != self.show_bytes && self.order.sort.is_some() {
                 self.reorder();
             }

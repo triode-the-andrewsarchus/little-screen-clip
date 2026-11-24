@@ -99,7 +99,7 @@ impl View {
             if ui.button("Fit").clicked() {
                 self.viewport = 0..self.samples();
             }
-            ui.toggle_value(&mut self.show_samples, "Sample rows");
+            clip_ui::buttons::toggle(ui, &mut self.show_samples, "Sample rows");
             let rows = self
                 .selection
                 .clone()

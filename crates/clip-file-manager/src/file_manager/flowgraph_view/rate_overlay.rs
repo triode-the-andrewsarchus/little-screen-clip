@@ -9,7 +9,7 @@ use little_clip_core::engineering::{
 impl super::Viewer {
     pub(super) fn rate_controls(&mut self, ui: &mut Ui) {
         ui.separator();
-        ui.toggle_value(&mut self.show_rates, "Sample rates")
+        clip_ui::buttons::toggle(ui, &mut self.show_rates, "Sample rates")
             .on_hover_text("Trace nominal rates and rate changes from the saved settings");
         if !self.rates.issues.is_empty()
             && ui

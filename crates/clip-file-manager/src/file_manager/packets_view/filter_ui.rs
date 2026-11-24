@@ -274,9 +274,7 @@ impl Viewer {
             return;
         };
         if conversation.key.protocol() == Protocol::Tcp
-            && ui
-                .toggle_value(&mut self.tcp_flow.open, "TCP graph")
-                .changed()
+            && clip_ui::buttons::toggle(ui, &mut self.tcp_flow.open, "TCP graph").changed()
             && self.tcp_flow.open
         {
             self.conversation_panel.close();

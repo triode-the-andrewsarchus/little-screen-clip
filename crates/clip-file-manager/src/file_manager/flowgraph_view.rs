@@ -163,13 +163,15 @@ impl Viewer {
             }
             ui.separator();
             let last = self.trace_direction;
-            ui.selectable_value(&mut self.trace_direction, None, "Direct links");
-            ui.selectable_value(
+            clip_ui::buttons::choice(ui, &mut self.trace_direction, None, "Direct links");
+            clip_ui::buttons::choice(
+                ui,
                 &mut self.trace_direction,
                 Some(Direction::Upstream),
                 "Upstream",
             );
-            ui.selectable_value(
+            clip_ui::buttons::choice(
+                ui,
                 &mut self.trace_direction,
                 Some(Direction::Downstream),
                 "Downstream",
