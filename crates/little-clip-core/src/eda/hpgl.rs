@@ -477,6 +477,7 @@ impl<'a> Parser<'a> {
 
     fn apply_ip(&mut self) {
         let args = self.read_numbers();
+        let position = self.user_to_mm(self.cursor_u);
         if args.len() >= 4 {
             self.p1_u = [args[0], args[1]];
             self.p2_u = [args[2], args[3]];
@@ -486,10 +487,12 @@ impl<'a> Parser<'a> {
             self.p1_u = [args[0], args[1]];
             self.p2_u = [args[0] + dx, args[1] + dy];
         }
+        self.cursor_u = self.mm_to_user(position);
     }
 
     fn apply_sc(&mut self) {
         let args = self.read_numbers();
+        let position = self.user_to_mm(self.cursor_u);
         if args.len() >= 4 && (args[1] - args[0]).abs() > 1e-9 && (args[3] - args[2]).abs() > 1e-9 {
             self.scaling = Some(Scaling {
                 xmin: args[0],
@@ -500,6 +503,7 @@ impl<'a> Parser<'a> {
         } else if args.is_empty() {
             self.scaling = None;
         }
+        self.cursor_u = self.mm_to_user(position);
     }
 
     fn user_to_mm(&self, pt: [f64; 2]) -> [f64; 2] {
@@ -517,6 +521,26 @@ impl<'a> Parser<'a> {
         [
             plotter[0] * MM_PER_PLOTTER_UNIT,
             plotter[1] * MM_PER_PLOTTER_UNIT,
+        ]
+    }
+
+    fn mm_to_user(&self, position: [f64; 2]) -> [f64; 2] {
+        let plotter = position.map(|coordinate| coordinate / MM_PER_PLOTTER_UNIT);
+        let Some(sc) = self.scaling else {
+            return plotter;
+        };
+        let [px, py] = self.p1_u;
+        let [qx, qy] = self.p2_u;
+        let interpolate = |p, q, v, low, high| {
+            if p == q {
+                low
+            } else {
+                low + (v - p) / (q - p) * (high - low)
+            }
+        };
+        [
+            interpolate(px, qx, plotter[0], sc.xmin, sc.xmax),
+            interpolate(py, qy, plotter[1], sc.ymin, sc.ymax),
         ]
     }
 
@@ -702,6 +726,18 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scaling_changes_preserve_the_physical_pen_position() {
+        let bytes =
+            b"IN;PU400,400;IP0,0,2000,2000;SC0,10,0,10;PD2,2;IP0,0,4000,4000;PR1,1;SC;PR400,400;";
+        let doc = HpglDocument::parse(bytes, &AtomicBool::new(false)).unwrap();
+        let drawn: Vec<_> = doc.segments.iter().filter(|seg| seg.pen_down).collect();
+        assert_eq!(drawn.len(), 3);
+        assert_eq!((drawn[0].from, drawn[0].to), ([10.0, 10.0], [10.0, 10.0]));
+        assert_eq!((drawn[1].from, drawn[1].to), ([10.0, 10.0], [20.0, 20.0]));
+        assert_eq!((drawn[2].from, drawn[2].to), ([20.0, 20.0], [30.0, 30.0]));
+    }
 
     #[test]
     fn hpgl_pens_polylines_arcs_circles_and_labels_render() {
