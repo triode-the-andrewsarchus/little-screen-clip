@@ -9,6 +9,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_GIMP_DIM: u32 = 4096;
 
+/// Returns whether leading bytes carry a valid GIMP `.gbr` binary bitmap brush header.
+pub(super) fn is_gimp_header(bytes: &[u8]) -> bool {
+    let Some(fixed) = bytes.first_chunk::<20>() else {
+        return false;
+    };
+    let words = fixed.as_chunks::<4>().0;
+    let [data_offset, version, width, height, depth] =
+        std::array::from_fn(|index| u32::from_be_bytes(words[index]));
+    let min_header = match version {
+        1 => 20,
+        2 | 3 if bytes.get(20..24) == Some(b"GIMP") => 28,
+        _ => return false,
+    };
+    let valid_depth = matches!((version, depth), (1 | 2, 1 | 4) | (3, 18));
+    valid_depth
+        && (data_offset as usize) >= min_header
+        && (1..=MAX_GIMP_DIM).contains(&width)
+        && (1..=MAX_GIMP_DIM).contains(&height)
+}
+
 pub(super) fn parse_gbr_library(bytes: &[u8], fallback_name: &str) -> Result<BrushLibrary, String> {
     let (preset, _) = parse_gbr_at(bytes, fallback_name)?;
     Ok(BrushLibrary {

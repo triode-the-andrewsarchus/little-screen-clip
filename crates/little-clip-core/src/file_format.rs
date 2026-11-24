@@ -21,6 +21,7 @@ pub enum Format {
     Subtitle,
     Spreadsheet,
     VcvPatch,
+    Eda,
 }
 impl Format {
     /// Returns the shared filename hint without reading or admitting the source.
@@ -47,6 +48,7 @@ impl Format {
                 Some(Self::Multisample)
             }
             "vcv" | "vcvss" => Some(Self::VcvPatch),
+            "ger" | "drl" | "xln" | "pos" | "plt" | "hpgl" => Some(Self::Eda),
             "csv" | "tsv" | "xlsx" | "xls" | "xlsb" | "ods" => Some(Self::Spreadsheet),
             _ => crate::subtitles::is_subtitle_path(path).then_some(Self::Subtitle),
         }
@@ -99,6 +101,12 @@ mod tests {
             ("a.VTT", Format::Subtitle),
             ("a.VCV", Format::VcvPatch),
             ("a.VCVSS", Format::VcvPatch),
+            ("layer.GER", Format::Eda),
+            ("drill.DRL", Format::Eda),
+            ("drill.XLN", Format::Eda),
+            ("pick.POS", Format::Eda),
+            ("plot.PLT", Format::Eda),
+            ("plot.HPGL", Format::Eda),
             ("budget.CSV", Format::Spreadsheet),
             ("budget.TSV", Format::Spreadsheet),
             ("budget.XLS", Format::Spreadsheet),

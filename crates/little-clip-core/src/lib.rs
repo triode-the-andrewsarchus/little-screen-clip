@@ -13,6 +13,7 @@ pub mod config;
 pub mod diagram;
 pub mod document;
 pub mod ebook;
+pub mod eda;
 pub mod email;
 pub mod embroidery;
 pub mod file_format;

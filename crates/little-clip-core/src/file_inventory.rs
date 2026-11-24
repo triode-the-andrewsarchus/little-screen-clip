@@ -74,6 +74,10 @@ impl Entry {
         self.regular_file
             && file_format::Format::for_path(&self.path) == Some(file_format::Format::Toolpath)
     }
+    pub fn is_eda(&self) -> bool {
+        self.regular_file
+            && file_format::Format::for_path(&self.path) == Some(file_format::Format::Eda)
+    }
     pub fn is_minecraft(&self) -> bool {
         self.minecraft_world.is_some()
             || (self.regular_file && crate::minecraft::is_map_file(&self.path))
