@@ -4,6 +4,8 @@
 //! The existing source/structure limits and raster admission policy apply;
 //! no filesystem, network or font-discovery resolver is installed.
 
+pub mod compare;
+
 use super::images;
 use resvg::usvg;
 use std::{
@@ -149,9 +151,7 @@ impl Limits {
             match node {
                 usvg::Node::Group(group) => self.group(group, depth + 1)?,
                 usvg::Node::Path(path) => self.segments += path.data().segments().count(),
-                usvg::Node::Text(_) => {
-                    return Err("Interactive diagram text was not outlined.".into());
-                }
+                usvg::Node::Text(text) => self.group(text.flattened(), depth + 1)?,
                 usvg::Node::Image(_) => {}
             }
             if self.nodes > 32_768 || self.segments > 262_144 {
