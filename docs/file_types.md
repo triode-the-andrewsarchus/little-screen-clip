@@ -550,7 +550,7 @@ Select two to eight ordinary files and choose **File → Compare selected files*
     - [x] `.sog`
     - [x] `.splat`
     - [x] `.spz`
-  - [ ] Electronic Design Automation (EDA), PCB design, and circuit simulation
+  - [ ] Electronic Design Automation (EDA), PCB design, and circuit simulation ([read-only preview coverage and limits](eda_previews.md))
     - [x] `.kicad_pcb` — KiCad PCB layout (S-expression)
       - [x] Board outline dimensions, layer stackup count, footprint/component count, net count, track segment length
     - [x] `.kicad_sch` — KiCad schematic (S-expression)
