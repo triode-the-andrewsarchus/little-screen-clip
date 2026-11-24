@@ -1,14 +1,6 @@
 use super::*;
 
 impl PdfEditorState {
-    pub(super) fn page_render_width(&self, page_num: usize) -> u32 {
-        if !self.source.has_region_detail() && self.viewport.page_num == Some(page_num) {
-            self.viewport.render_width
-        } else {
-            PAGE_RASTER_MAX_DIM
-        }
-    }
-
     /// Upload on demand and evict least recently used pages. The selected page
     /// and any texture already referenced by this frame's paint shapes are
     /// protected, so eviction cannot leave a dangling image in the draw list.
@@ -17,7 +9,6 @@ impl PdfEditorState {
         page_num: usize,
         ctx: &egui::Context,
     ) -> Option<egui::TextureId> {
-        let requested_width = self.page_render_width(page_num);
         let index = page_num.checked_sub(1)?;
         let page = self.pages.get_mut(index)?;
         debug_assert!(
@@ -30,7 +21,7 @@ impl PdfEditorState {
             && page
                 .raster
                 .as_ref()
-                .is_some_and(|raster| raster.needs_render(requested_width));
+                .is_some_and(|raster| raster.needs_render(PAGE_RASTER_MAX_DIM));
         let ready = self.decode_job.as_ref().is_some_and(|job| {
             job.raster.page_num() == page_num && !job.cancelled && job.ready.is_some()
         });
@@ -108,7 +99,6 @@ impl PdfEditorState {
     // Called after painting, when the complete visible demand is known. No
     // pixel work runs here; one job is submitted, selected page first.
     pub(super) fn schedule_page_decode(&mut self, ctx: &egui::Context) {
-        let selected_width = self.selected_page.map(|page| self.page_render_width(page));
         if let Some(job) = &mut self.decode_job {
             let selected_waiting = self.selected_page.is_some_and(|selected| {
                 selected != job.raster.page_num()
@@ -117,10 +107,10 @@ impl PdfEditorState {
                         page.error.is_none()
                             && page.raster.is_some()
                             && (page.texture.is_none()
-                                || page.raster.as_ref().is_some_and(|raster| {
-                                    raster
-                                        .needs_render(selected_width.unwrap_or(PAGE_RASTER_MAX_DIM))
-                                }))
+                                || page
+                                    .raster
+                                    .as_ref()
+                                    .is_some_and(|raster| raster.needs_render(PAGE_RASTER_MAX_DIM)))
                     })
             });
             if !self.decode_requests.contains(&job.raster.page_num()) || selected_waiting {
@@ -144,7 +134,7 @@ impl PdfEditorState {
                                 && (page.texture.is_none()
                                     || (self.selected_page == Some(*page_num)
                                         && page.raster.as_ref().is_some_and(|raster| {
-                                            raster.needs_render(self.page_render_width(*page_num))
+                                            raster.needs_render(PAGE_RASTER_MAX_DIM)
                                         })))
                         })
                 });
@@ -154,10 +144,9 @@ impl PdfEditorState {
                     .as_ref()
                     .expect("decode candidates have cached rasters")
                     .clone();
-                let requested_width = self.page_render_width(page_num);
                 let source = (self.selected_page == Some(page_num)
-                    && raster.needs_render(requested_width))
-                .then(|| (self.path.clone(), requested_width, self.source));
+                    && raster.needs_render(PAGE_RASTER_MAX_DIM))
+                .then(|| (self.path.clone(), PAGE_RASTER_MAX_DIM, self.source));
                 self.decode_job = Some(PdfPageDecodeSlot::start(
                     raster,
                     source,

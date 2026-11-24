@@ -30,6 +30,9 @@ fn main() {
     assert!(notebook::render_page(&path, 0, 320, &cancel).is_err());
     assert!(notebook::render_page(&path, 1, 4097, &cancel).is_err());
     assert!(notebook::inspect(&path, &AtomicBool::new(true)).is_err());
+    assert!(notebook::retain_page(&path, 1, &AtomicBool::new(true)).is_err());
+    assert!(notebook::retain_page(&path, 11, &cancel).is_err());
+    assert_detail_window(&path, 1, [14_040, 18_720], &cancel);
     let note = directory.path().join("clipboard.NOTE");
     std::fs::copy(&path, &note).unwrap();
     let item = little_clip_core::ClipItem::from_text(note.to_string_lossy());
@@ -195,6 +198,21 @@ fn xournal_sources() {
     );
 }
 
+fn assert_detail_window(path: &Path, page: usize, dimensions: [u32; 2], cancel: &AtomicBool) {
+    let scene = notebook::retain_page(path, page, cancel).unwrap();
+    let window = scene
+        .render_region(
+            little_clip_core::page_region::PageRegion {
+                page: dimensions,
+                origin: dimensions.map(|length| length / 2),
+                size: [850, 620],
+            },
+            cancel,
+        )
+        .unwrap();
+    assert_eq!((window.width(), window.height()), (850, 620));
+}
+
 fn remarkable_sources() {
     use little_clip_core::{ClipItem, ClipPayload};
     let root =
@@ -219,6 +237,7 @@ fn remarkable_sources() {
         let (png, width, height) = notebook::render_page(&path, page, 512, &cancel).unwrap();
         assert!(width <= 512 && height <= 512);
         assert_eq!(image::load_from_memory(&png).unwrap().width(), width);
+        assert_detail_window(&path, page, [width * 24, height * 24], &cancel);
         let item = ClipItem::from_text(path.to_string_lossy());
         assert!(
             matches!(&item.payload,ClipPayload::Image { path:Some(original), thumbnail:Some(_), .. } if original == &path),

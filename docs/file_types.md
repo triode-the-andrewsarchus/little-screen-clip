@@ -699,10 +699,12 @@
   - [ ] E-ink and pen-tablet note devices
     - [x] `.note` — Supernote X/X2; native stored-layer ink and PNG templates, bounded page strips and hover, little-screen artwork, and a read-only paged viewer. Real fixtures qualify 20220011/20230015/20260016, landscape orientation and current N5 ink; unsupported structure/version errors remain explicit.
       - [ ] Original ASA decoder qualification with a real licensed fixture
-      - [ ] Native TOTALPATH vector strokes and text recognizer metadata
+      - [x] The full viewer can retain authored TOTALPATH outlines from qualified 20220011, 20230015 and 20260016 layers, including surviving partial-erase contours. It falls back to each layer's native bitmap for missing outlines, recognition-only text, unsupported tools or disagreement with the saved layer. Paper and image layers keep their stored raster detail.
+      - [ ] Recognition metadata and interactive notebook objects
     - [x] `.xopp`, `.xoj` — Read-only Xournal/Xournal++ notebooks: bounded plain/gzipped XML and ZIP packages, pressure/color strokes, layers, transformed text/images, paper styles, and guarded local/embedded PDF backgrounds. Rendered list strips, little-screen previews and paged viewing; text layout approximates Pango and missing backgrounds report errors.
     - [ ] `.mark`
     - [x] `.rm`, `.rmdoc`, `.rmn` — Read-only reMarkable pages and ZIP/plain-TAR notebooks: native v5/v6 ink, authored page order, embedded SVG/PNG paper and redirected PDF backgrounds; list strips, little-screen artwork and a paged viewer. Missing factory paper is disclosed. v3/v4 layouts have synthetic coverage only; unsupported scene operations report compatibility errors, and tablet text/pen rendering is approximate.
+      - [x] The full viewer retains pen geometry, highlight rectangles and outlined v6 text. It uses the existing pressure/tilt pen model, including its approximation of pencil grain. Legacy constant-width brush erases can clear prior ink in their own layer. Unresolved erasers and ambiguous blend/erase combinations use the previous bounded raster preview, whose renderer skips those erase gestures. Paper and PDF backgrounds are prepared separately at a bounded resolution.
     - [ ] `.lines`
   - [ ] NanoVNA
     - [ ] `.s1p`, `.s2p`, `.sNp` — Touchstone N-port network parameter data (S-parameters, RF frequency response plots, and interactive Smith chart rendering)

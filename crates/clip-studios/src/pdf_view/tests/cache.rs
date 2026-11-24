@@ -438,29 +438,6 @@ fn long_document_uploads_visible_thumbnails_and_selected_page_only() {
 }
 
 #[test]
-fn pdf_detail_resolution_tracks_physical_size_and_stays_bounded() {
-    let mut viewport = PdfPageViewport::default();
-    viewport.update_render_width(egui::vec2(300.0, 600.0), 1.0, PAGE_DETAIL_MAX_DIM as usize);
-    assert_eq!(viewport.render_width, 512);
-    viewport.update_render_width(egui::vec2(300.0, 600.0), 2.0, PAGE_DETAIL_MAX_DIM as usize);
-    assert_eq!(viewport.render_width, 1024);
-    viewport.update_render_width(egui::vec2(600.0, 1200.0), 2.0, PAGE_DETAIL_MAX_DIM as usize);
-    assert_eq!(viewport.render_width, 2048);
-    viewport.update_render_width(
-        egui::vec2(8000.0, 16000.0),
-        2.0,
-        PAGE_DETAIL_MAX_DIM as usize,
-    );
-    assert_eq!(viewport.render_width, PAGE_DETAIL_MAX_DIM / 2);
-    viewport.update_render_width(
-        egui::vec2(16000.0, 8000.0),
-        2.0,
-        PAGE_DETAIL_MAX_DIM as usize,
-    );
-    assert_eq!(viewport.render_width, PAGE_DETAIL_MAX_DIM);
-}
-
-#[test]
 fn failed_page_raster_is_reported_instead_of_spinning_forever() {
     let temp = tempfile::tempdir().unwrap();
     let mut state = PdfEditorState::new(temp.path().join("missing.pdf"));

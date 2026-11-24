@@ -324,23 +324,19 @@ impl PdfEditorState {
                     .interaction
                     .prepare(ui, page_rect, layout)
             });
-            let detail_enabled = self.source.has_region_detail();
-            let max_zoom = if detail_enabled { 32.0 } else { 8.0 };
-            let response = self.viewport.show(ui, texture.id(), dimensions, max_zoom);
+            let response = self.viewport.show(ui, texture.id(), dimensions);
             let page_rect = self.viewport.page_rect(response.rect, dimensions);
-            if detail_enabled {
-                self.detail.show(
-                    ui,
-                    response.rect,
-                    page_rect,
-                    texture.size(),
-                    detail::DetailSource {
-                        path: &self.path,
-                        check: &self.read_check,
-                        backend: self.source,
-                    },
-                );
-            }
+            self.detail.show(
+                ui,
+                response.rect,
+                page_rect,
+                texture.size(),
+                detail::DetailSource {
+                    path: &self.path,
+                    check: &self.read_check,
+                    backend: self.source,
+                },
+            );
             if let Some(layout) = layout {
                 if let Some(image) = self.document_tools.interaction.show(
                     ui,

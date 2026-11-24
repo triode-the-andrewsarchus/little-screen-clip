@@ -224,7 +224,9 @@ fn prepare_detail(
         SourceKind::Remarkable => {
             super::remarkable::preview::retain_page(input, page, edge, &AtomicBool::new(false))
         }
-        SourceKind::Supernote => Err("Supernote uses whole-page previews".into()),
+        SourceKind::Supernote => {
+            super::supernote::retain_page(input, page, &AtomicBool::new(false))
+        }
     }
 }
 

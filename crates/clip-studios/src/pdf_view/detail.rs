@@ -70,20 +70,24 @@ impl PageDetail {
     ) {
         let ctx = ui.ctx();
         self.poll(ctx);
+        let use_ink_scene = source.backend == PageSource::Notebook;
         let ppp = ctx.pixels_per_point();
         let visible = page.intersect(canvas).intersect(ui.clip_rect());
-        if self.failed || !visible.is_positive() || page.width() * ppp <= base[0] as f32 {
+        if self.failed
+            || !visible.is_positive()
+            || (!use_ink_scene && page.width() * ppp <= base[0] as f32)
+        {
             self.cancel_crop();
             return;
         }
         let limit = ui.input(|input| input.max_texture_side);
         let (visible, crop) = regions(page, visible, ppp, limit);
-        if visible.page[0] as usize <= base[0] {
+        if !use_ink_scene && visible.page[0] as usize <= base[0] {
             self.cancel_crop();
             return;
         }
         if let Some((region, texture)) = &self.texture
-            && region.page[0] as usize > base[0]
+            && (use_ink_scene || region.page[0] as usize > base[0])
         {
             ui.painter_at(canvas).image(
                 texture.id(),
@@ -157,7 +161,7 @@ impl PageDetail {
         let check = source.check.clone();
         let backend = source.backend;
         let scene = self.scene.clone();
-        let preparing_notebook = backend == PageSource::RetainedNotebook && scene.is_none();
+        let preparing_notebook = backend == PageSource::Notebook && scene.is_none();
         self.job = Some(DetailJob {
             preparing_notebook,
             task: Task::start(&JOBS, Duration::from_secs(25), move |cancel| {
@@ -191,7 +195,7 @@ fn render(
                 little_clip_core::pdf::render_pdf_page_region(path, page_num, region, cancel)?;
             decode_page_png(png, PageRegion::MAX_SIDE)
         }
-        PageSource::RetainedNotebook => {
+        PageSource::Notebook => {
             let scene = scene.ok_or("Notebook page preparation is unavailable")?;
             let raster = scene.render_region(region, cancel)?;
             Ok(ColorImage::from_rgba_premultiplied(
@@ -199,7 +203,6 @@ fn render(
                 raster.data(),
             ))
         }
-        PageSource::Notebook => Err("Notebook format uses whole-page previews".into()),
     }
 }
 

@@ -5,8 +5,10 @@
 //! `vendor/supernote-tool`; local code uses checked offsets and explicit budgets.
 use std::io::{Read, Seek, SeekFrom};
 
+mod contours;
 mod raster;
 pub use raster::render;
+pub(super) use raster::retain_page;
 
 const MAX_SOURCE: u64 = 512 * 1024 * 1024;
 const MAX_METADATA_BLOCK: usize = 1024 * 1024;

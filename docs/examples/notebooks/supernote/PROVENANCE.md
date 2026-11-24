@@ -22,6 +22,12 @@ implementation under test.
 
 - `test-a5x-20220011-old-pen-ids.note`: unmodified from the same pinned upstream, SHA-256 `daaffa741c7e6f818d6cabee3243d74eb9f8cdf426cf1447acdc5ce6e0e31cb5`.
 
+- `erase-n5-20260016-non-rtr-marker-partial.note`: Manta partial-erase fixture
+  from the same revision's `tests/input` directory. SHA-256
+  `f631eb4c3f8923a61f1d776e35b45bef6efb00b2dd2d80dc81b7e9a0e084213c`.
+  Its stored bitmap and replacement contour records show three surviving
+  marker pieces after two eraser sweeps.
+
 Reference qualification for `render-n6-20230015-moonchild-user-bg`:
 supernotelib's current object wrapper assumes five layer records and requires an
 explicit protocol before noticing the custom PNG template. The unmodified file

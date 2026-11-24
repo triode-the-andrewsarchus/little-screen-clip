@@ -263,7 +263,6 @@ fn pdf_zoom_keeps_the_overview_texture_and_shared_raster() {
     let overview = Arc::clone(state.pages[0].raster.as_ref().unwrap());
     state.viewport.select_page(1);
     state.viewport.zoom = 24.0;
-    state.viewport.render_width = PAGE_DETAIL_MAX_DIM;
     assert_eq!(state.ensure_page_texture(1, &ctx), Some(base));
     state.schedule_page_decode(&ctx);
     assert!(state.decode_job.is_none());
@@ -335,7 +334,7 @@ fn pdf_viewport_wheel_zoom_drag_and_double_click_use_constrained_canvas() {
             |ctx| {
                 ctx.root_ui(|ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        rect = view.show(ui, texture.id(), (200, 400), 8.0).rect;
+                        rect = view.show(ui, texture.id(), (200, 400)).rect;
                     })
                 });
             },

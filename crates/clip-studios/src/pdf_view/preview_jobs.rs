@@ -66,13 +66,6 @@ impl PdfEditorState {
             }
         };
         self.source_warnings = info.warnings;
-        if self.source.read_only() {
-            self.source = if info.retained_notebook {
-                PageSource::RetainedNotebook
-            } else {
-                PageSource::Notebook
-            };
-        }
         let info = info.pdf;
         self.page_count = info.page_count;
         self.pages = (1..=self.page_count)

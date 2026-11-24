@@ -327,7 +327,6 @@ struct PdfPageViewport {
     page_num: Option<usize>,
     zoom: f32,
     pan: Vec2,
-    render_width: u32,
     pan_with_primary: bool,
 }
 
@@ -337,7 +336,6 @@ impl Default for PdfPageViewport {
             page_num: None,
             zoom: 1.0,
             pan: Vec2::ZERO,
-            render_width: PAGE_RASTER_MAX_DIM,
             pan_with_primary: true,
         }
     }
@@ -361,28 +359,11 @@ impl PdfPageViewport {
         egui::Rect::from_center_size(viewport.center() + self.pan, size)
     }
 
-    fn update_render_width(
-        &mut self,
-        page_size: Vec2,
-        pixels_per_point: f32,
-        max_texture_side: usize,
-    ) {
-        // Supersample text, then let the GPU reduce it to physical display pixels.
-        // Width buckets avoid launching a renderer for every wheel increment.
-        let aspect = page_size.x / page_size.y.max(1.0);
-        let max_dim = max_texture_side.min(PAGE_DETAIL_MAX_DIM as usize) as f32;
-        let width_limit = (max_dim * aspect.min(1.0)).floor().max(1.0) as u32;
-        let physical_width = page_size.x * pixels_per_point * 1.5;
-        let requested = (physical_width / 256.0).ceil().max(1.0) as u32 * 256;
-        self.render_width = requested.min(width_limit);
-    }
-
     fn show(
         &mut self,
         ui: &mut egui::Ui,
         texture: egui::TextureId,
         dimensions: (u32, u32),
-        max_zoom: f32,
     ) -> egui::Response {
         let (viewport, response) = ui.allocate_exact_size(
             ui.available_size().max(Vec2::splat(1.0)),
@@ -394,7 +375,7 @@ impl PdfPageViewport {
             let scroll = clip_ui::ui_ext::wheel_delta_including_start(ui.ctx()).y;
             if scroll != 0.0 {
                 let old_zoom = self.zoom;
-                self.zoom = (old_zoom * (scroll * 0.002).exp()).clamp(0.25, max_zoom);
+                self.zoom = (old_zoom * (scroll * 0.002).exp()).clamp(0.25, 32.0);
                 if let Some(pointer) = response.hover_pos() {
                     self.pan +=
                         (pointer - viewport.center() - self.pan) * (1.0 - self.zoom / old_zoom);
@@ -411,11 +392,6 @@ impl PdfPageViewport {
             self.pan = Vec2::ZERO;
         }
         let page_rect = self.page_rect(viewport, dimensions);
-        self.update_render_width(
-            page_rect.size(),
-            ui.ctx().pixels_per_point(),
-            ui.input(|input| input.max_texture_side),
-        );
         if page_rect.width() > viewport.width() || page_rect.height() > viewport.height() {
             response.clone().on_hover_cursor(if response.dragged() {
                 egui::CursorIcon::Grabbing

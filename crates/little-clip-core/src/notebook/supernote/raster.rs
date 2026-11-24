@@ -2,14 +2,15 @@
 //!
 //! RATTA_RLE/ASA interpretation is checked against the retained Apache-2.0
 //! supernotelib reference (copyright 2020 jya), not against traced vector ink.
-use super::super::check_cancel;
+use super::super::{check_cancel, vector};
 use super::*;
 use base64::Engine;
-use image::{GrayImage, Rgb, RgbImage};
+use image::{GrayImage, Rgb, RgbImage, Rgba, RgbaImage};
 use std::{io::Cursor, sync::atomic::AtomicBool};
 
 const LAYERS: &[&str] = &["MAINLAYER", "LAYER1", "LAYER2", "LAYER3", "BGLAYER"];
 const MAX_BITMAP: usize = 32 * 1024 * 1024;
+const MAX_TOTALPATH: usize = 32 * 1024 * 1024;
 
 /// Renders one 1-based page, decoding only its referenced layers.
 ///
@@ -28,24 +29,10 @@ pub fn render(
 ) -> Result<(Vec<u8>, u32, u32), String> {
     check_cancel(cancel)?;
     let doc = inspect(input)?;
-    let sheet = page
-        .checked_sub(1)
-        .and_then(|index| doc.pages.get(index))
-        .ok_or("Supernote page is outside the notebook")?;
+    let sheet = select_page(&doc, page)?;
     let mut reader = Reader::new(input)?;
-    let canvas = if scalar(&sheet.properties, "DATA")?.is_some() {
-        let data = reader.block(
-            address(required(&sheet.properties, "DATA")?, "bitmap")?,
-            MAX_BITMAP,
-        )?;
-        decode_layer(
-            &data,
-            required(&sheet.properties, "PROTOCOL")?,
-            sheet,
-            false,
-            false,
-            cancel,
-        )?
+    let canvas = if let Some(data) = scalar(&sheet.properties, "DATA")? {
+        single_bitmap(&mut reader, sheet, data, cancel)?
     } else {
         compose(&mut reader, &doc, sheet, cancel)?
     };
@@ -62,12 +49,139 @@ pub fn render(
     Ok((png.into_inner(), width, height))
 }
 
+pub(in crate::notebook) fn retain_page(
+    input: &mut (impl Read + Seek),
+    page: usize,
+    cancel: &AtomicBool,
+) -> Result<String, String> {
+    let doc = inspect(input)?;
+    let sheet = select_page(&doc, page)?;
+    let mut reader = Reader::new(input)?;
+    let mut svg = vector::page_svg(sheet.width, sheet.height);
+    if let Some(data) = scalar(&sheet.properties, "DATA")? {
+        append_bitmap(&mut svg, single_bitmap(&mut reader, sheet, data, cancel)?)?;
+    } else {
+        let mut contours = page_contours(&mut reader, &doc, sheet);
+        visit_layers(&mut reader, &doc, sheet, cancel, |layer, bitmap| {
+            let slot = LAYERS.iter().position(|name| *name == layer);
+            let outline = slot
+                .and_then(|index| contours.get_mut(index))
+                .and_then(Option::take);
+            append_layer(&mut svg, bitmap, outline, cancel)?;
+            check_scene_size(&svg)
+        })?;
+    }
+    check_cancel(cancel)?;
+    svg.push_str("</svg>");
+    Ok(svg)
+}
+
+fn append_layer(
+    svg: &mut String,
+    bitmap: RgbImage,
+    outline: Option<String>,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    if let Some(paths) = outline.filter(|paths| !paths.is_empty()) {
+        let group = "<g style='isolation:isolate'>".to_owned() + &paths + "</g>";
+        let qualified = super::contours::qualifies(&group, &bitmap, cancel).unwrap_or(false);
+        check_cancel(cancel)?;
+        if qualified {
+            svg.push_str(&group);
+            return Ok(());
+        }
+    }
+    append_bitmap(svg, bitmap)
+}
+
+fn check_scene_size(svg: &str) -> Result<(), String> {
+    if svg.len() > MAX_TOTALPATH {
+        return Err("Supernote page detail exceeds its scene budget".into());
+    }
+    Ok(())
+}
+
+fn select_page(doc: &Document, page: usize) -> Result<&Page, String> {
+    page.checked_sub(1)
+        .and_then(|index| doc.pages.get(index))
+        .ok_or_else(|| "Supernote page is outside the notebook".into())
+}
+
+fn single_bitmap<R: Read + Seek>(
+    reader: &mut Reader<'_, R>,
+    page: &Page,
+    data: &str,
+    cancel: &AtomicBool,
+) -> Result<RgbImage, String> {
+    let data = reader.block(address(data, "bitmap")?, MAX_BITMAP)?;
+    decode_layer(
+        &data,
+        required(&page.properties, "PROTOCOL")?,
+        page,
+        false,
+        false,
+        cancel,
+    )
+}
+
+fn page_contours<R: Read + Seek>(
+    reader: &mut Reader<'_, R>,
+    doc: &Document,
+    page: &Page,
+) -> [Option<String>; 4] {
+    if matches!(doc.version.as_str(), "20220011" | "20230015" | "20260016")
+        && let Ok(Some(pointer)) = scalar(&page.properties, "TOTALPATH")
+        && let Ok(pointer) = address(pointer, "stroke data")
+        && let Ok(data) = reader.block(pointer, MAX_TOTALPATH)
+        && let Ok(paths) = super::contours::decode(&data, doc.version.as_str() >= "20230015")
+    {
+        paths
+    } else {
+        [None, None, None, None]
+    }
+}
+
+fn append_bitmap(svg: &mut String, bitmap: RgbImage) -> Result<(), String> {
+    if bitmap.pixels().all(|pixel| pixel.0 == [255; 3]) {
+        return Ok(());
+    }
+    let (width, height) = bitmap.dimensions();
+    let raster = RgbaImage::from_fn(width, height, |x, y| {
+        let [r, g, b] = bitmap.get_pixel(x, y).0;
+        if [r, g, b] == [255; 3] {
+            Rgba([0; 4])
+        } else {
+            Rgba([r, g, b, 255])
+        }
+    });
+    vector::append_raster(svg, [width, height], raster)
+}
+
 fn compose<R: Read + Seek>(
     reader: &mut Reader<'_, R>,
     doc: &Document,
     page: &Page,
     cancel: &AtomicBool,
 ) -> Result<RgbImage, String> {
+    let mut canvas = RgbImage::from_pixel(page.width, page.height, Rgb([255; 3]));
+    visit_layers(reader, doc, page, cancel, |_, layer| {
+        for (target, source) in canvas.pixels_mut().zip(layer.pixels()) {
+            if source.0 != [255; 3] {
+                *target = *source;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(canvas)
+}
+
+fn visit_layers<R: Read + Seek>(
+    reader: &mut Reader<'_, R>,
+    doc: &Document,
+    page: &Page,
+    cancel: &AtomicBool,
+    mut visit: impl FnMut(&str, RgbImage) -> Result<(), String>,
+) -> Result<(), String> {
     let order = required(&page.properties, "LAYERSEQ")?
         .split(',')
         .collect::<Vec<_>>();
@@ -76,7 +190,6 @@ fn compose<R: Read + Seek>(
     }
     let visibility = layer_visibility(&page.properties)?;
     let mut seen = std::collections::HashSet::new();
-    let mut canvas = RgbImage::from_pixel(page.width, page.height, Rgb([255; 3]));
     let highres = doc.version.as_str() >= "20230015";
     for name in order.into_iter().rev() {
         check_cancel(cancel)?;
@@ -89,13 +202,9 @@ fn compose<R: Read + Seek>(
         let Some(layer) = load_layer(reader, page, name, highres, cancel)? else {
             continue;
         };
-        for (target, source) in canvas.pixels_mut().zip(layer.pixels()) {
-            if source.0 != [255; 3] {
-                *target = *source;
-            }
-        }
+        visit(name, layer)?;
     }
-    Ok(canvas)
+    Ok(())
 }
 
 fn load_layer<R: Read + Seek>(
@@ -346,6 +455,74 @@ fn asa(data: &[u8], page: &Page) -> Result<RgbImage, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_geometry_and_raster_fallback_on_real_pages() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/examples/notebooks/supernote");
+        let cancel = AtomicBool::new(false);
+        for (name, page, has_paths, has_images) in [
+            (
+                "stroke-n5-20260016-isolation-tools-colors-widths",
+                2,
+                true,
+                false,
+            ),
+            ("erase-n5-20260016-non-rtr-marker-partial", 1, true, false),
+            ("demo-a5x-20230015-1to10", 1, true, true),
+            ("layout-n5-20230015-horizontal-1090", 1, true, true),
+            ("test-a5x-20220011-old-pen-ids", 1, true, true),
+            ("render-n6-20230015-moonchild-user-bg", 1, false, true),
+        ] {
+            let source = std::fs::read(root.join(format!("{name}.note"))).unwrap();
+            let svg = retain_page(&mut Cursor::new(source), page, &cancel).unwrap();
+            let paths = svg.matches("<path ").count();
+            let images = svg.matches("<image ").count();
+            eprintln!("{name}/{page}: {paths} paths, {images} images");
+            assert_eq!(paths > 0, has_paths, "{name}/{page}");
+            assert_eq!(images > 0, has_images, "{name}/{page}");
+            if name.starts_with("erase-") {
+                assert_eq!(paths, 3, "only the surviving contours should be drawn");
+            }
+        }
+    }
+
+    #[test]
+    fn raster_only_background_and_ink_keep_native_pixels_in_a_crop() {
+        use crate::{notebook::RetainedPage, page_region::PageRegion};
+
+        let source = include_bytes!(
+            "../../../../../docs/examples/notebooks/supernote/render-n6-20230015-moonchild-user-bg.note"
+        );
+        let cancel = AtomicBool::new(false);
+        let (png, width, height) = render(&mut Cursor::new(source), 1, 4096, &cancel).unwrap();
+        let full = image::load_from_memory(&png).unwrap().to_rgba8();
+        let svg = retain_page(&mut Cursor::new(source), 1, &cancel).unwrap();
+        let scene = RetainedPage::new(&svg, &cancel).unwrap();
+        let region = PageRegion {
+            page: [width, height],
+            origin: [486, 398],
+            size: [620, 490],
+        };
+        let window = scene.render_region(region, &cancel).unwrap();
+        let expected = image::imageops::crop_imm(
+            &full,
+            region.origin[0],
+            region.origin[1],
+            region.size[0],
+            region.size[1],
+        )
+        .to_image();
+        assert!(expected.pixels().any(|p| (1..254).contains(&p.0[0])));
+        let differing = window
+            .data()
+            .iter()
+            .zip(expected.as_raw())
+            .filter(|(actual, saved)| actual != saved)
+            .count();
+        assert_eq!(differing, 0, "the native raster crop changed saved pixels");
+    }
+
     #[test]
     fn rle_short_extended_special_and_tail_runs_are_checked() {
         let cancel = AtomicBool::new(false);
