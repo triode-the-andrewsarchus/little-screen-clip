@@ -276,7 +276,7 @@ pub(super) fn render_gbrjob_details(ui: &mut Ui, job: &GerberJobDocument) {
         ui.label(format!("Board size: {x:.2} × {y:.2} mm"));
     }
     if let Some(layers) = job.layer_count {
-        ui.label(format!("Layers: {layers}"));
+        ui.label(format!("Copper layers: {layers}"));
     }
     if let Some(t) = job.board_thickness_mm {
         ui.label(format!("Thickness: {t:.2} mm"));
@@ -303,9 +303,14 @@ pub(super) fn render_gbrjob_details(ui: &mut Ui, job: &GerberJobDocument) {
                 } else {
                     format!(" [{}]", layer.material)
                 };
+                let color = if layer.color.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · {}", layer.color)
+                };
                 ui.add(
                     egui::Label::new(format!(
-                        "{}: {}{}{thick}",
+                        "{}: {}{}{color}{thick}",
                         layer.name, layer.layer_type, mat
                     ))
                     .wrap(),

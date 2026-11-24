@@ -50,6 +50,9 @@ impl KicadProjectDocument {
         check_cancelled(cancelled, "KiCad project parse cancelled")?;
         let root: Value =
             serde_json::from_slice(bytes).map_err(|e| format!("Invalid .kicad_pro JSON: {e}"))?;
+        if !root.is_object() {
+            return Err("Expected a KiCad project JSON object".into());
+        }
         let fallback_name = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -234,6 +237,9 @@ impl GerberJobDocument {
         check_cancelled(cancelled, "Gerber Job parse cancelled")?;
         let root: Value =
             serde_json::from_slice(bytes).map_err(|e| format!("Invalid .gbrjob JSON: {e}"))?;
+        if !root.is_object() {
+            return Err("Expected a Gerber Job JSON object".into());
+        }
         let fallback_name = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -301,9 +307,12 @@ impl GerberJobDocument {
         let size = self
             .board_size_mm
             .map_or_else(|| "—".into(), |[x, y]| format!("{x:.1}×{y:.1} mm"));
-        let layers = self.layer_count.unwrap_or(self.stackup.len() as u64);
+        let layers = self.layer_count.map_or_else(
+            || format!("{} stackup bands", self.stackup.len()),
+            |count| format!("{count} copper layers"),
+        );
         format!(
-            "Gerber Job {} · {size} · {layers}L · {} · {} files",
+            "Gerber Job {} · {size} · {layers} · {} · {} files",
             self.project_name,
             self.finish,
             self.files.len()
@@ -645,8 +654,11 @@ mod tests {
         assert_eq!(job_doc.board_size_mm, Some([80.5, 42.0]));
         assert_eq!(job_doc.layer_count, Some(4));
         assert_eq!(job_doc.finish, "ENIG-RoHS");
+        assert!(job_doc.summary_line().contains("4 copper layers"));
         assert_eq!(job_doc.files.len(), 2);
         assert_eq!(job_doc.stackup.len(), 5);
+        assert_eq!(job_doc.stackup[1].color, "Green");
+        assert_eq!(job_doc.stackup[1].thickness_mm, Some(0.015));
         let job_thumb = job_doc.render_thumbnail([160, 100], &cancel).unwrap();
         assert!(
             job_thumb
@@ -656,5 +668,19 @@ mod tests {
                 .iter()
                 .any(|px| px[..3] != [PRO_BG_RGBA[0], PRO_BG_RGBA[1], PRO_BG_RGBA[2]])
         );
+    }
+
+    #[test]
+    fn project_and_gerber_job_reject_json_values_without_document_fields() {
+        let cancel = AtomicBool::new(false);
+        assert!(KicadProjectDocument::parse(Path::new("board.kicad_pro"), b"[]", &cancel).is_err());
+        assert!(GerberJobDocument::parse(Path::new("board.gbrjob"), b"null", &cancel).is_err());
+        let partial = GerberJobDocument::parse(
+            Path::new("board.gbrjob"),
+            br#"{"MaterialStackup":[{"Type":"SolderMask"},{"Type":"Copper"}]}"#,
+            &cancel,
+        )
+        .unwrap();
+        assert!(partial.summary_line().contains("2 stackup bands"));
     }
 }
