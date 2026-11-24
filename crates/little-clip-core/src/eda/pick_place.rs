@@ -374,57 +374,29 @@ fn parse_csv_or_tsv(
     default_unit: PositionUnit,
     cancelled: &AtomicBool,
 ) -> Result<Option<(Vec<Placement>, PositionUnit)>, String> {
-    let lines: Vec<(usize, &str)> = text
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| {
-            let trimmed = line.trim();
-            !trimmed.is_empty() && !trimmed.starts_with("##")
-        })
-        .collect();
-    if lines.is_empty() {
-        return Ok(None);
-    }
-
-    let delimiter = if lines[0].1.contains('\t') && !lines[0].1.contains(',') {
-        b'\t'
-    } else if lines[0].1.contains(',') {
-        b','
-    } else {
-        return Ok(None);
-    };
-
-    let mut header_idx = None;
-    let mut columns = None;
-    for (pos, (_, line)) in lines.iter().take(16).enumerate() {
+    let mut lines = text.lines().enumerate().filter(|(_, line)| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && !trimmed.starts_with("##")
+    });
+    let Some((cols, fields, delimiter)) = lines.by_ref().take(16).find_map(|(_, line)| {
+        let delimiter = if line.contains(',') {
+            b','
+        } else if line.contains('\t') {
+            b'\t'
+        } else {
+            return None;
+        };
         let fields = split_delimited_line(line, delimiter);
-        if let Some(map) = ColumnMap::from_headers(fields.iter().map(|s| s.as_str())) {
-            header_idx = Some(pos);
-            let axis_unit = |column: Option<usize>| match fields
-                .get(column?)?
-                .trim_end()
-                .to_ascii_lowercase()
-                .rsplit_once('(')
-            {
-                Some((_, "mil)")) => Some(PositionUnit::Mils),
-                Some((_, "mm)")) => Some(PositionUnit::Millimeters),
-                _ => None,
-            };
-            let (x, y) = (axis_unit(map.x), axis_unit(map.y));
-            if x.is_some() && y.is_some() && x != y {
-                return Err("Pick-and-place coordinate columns use different units".into());
-            }
-            columns = Some((map, x.or(y).unwrap_or(default_unit)));
-            break;
-        }
-    }
-    let (Some(header_idx), Some((cols, unit))) = (header_idx, columns) else {
+        let cols = ColumnMap::from_headers(fields.iter().map(String::as_str))?;
+        Some((cols, fields, delimiter))
+    }) else {
         return Ok(None);
     };
+    let unit = coordinate_unit(&cols, &fields)?.unwrap_or(default_unit);
 
     let scale = unit.scale_to_mm();
     let mut out = Vec::new();
-    for &(line_idx, raw_line) in lines.iter().skip(header_idx + 1) {
+    for (line_idx, raw_line) in lines {
         if out.len() >= MAX_PLACEMENTS {
             break;
         }
@@ -440,6 +412,23 @@ fn parse_csv_or_tsv(
         }
     }
     Ok(Some((out, unit)))
+}
+
+fn coordinate_unit(cols: &ColumnMap, fields: &[String]) -> Result<Option<PositionUnit>, String> {
+    let axis_unit = |column: Option<usize>| {
+        let name = fields.get(column?)?.to_ascii_lowercase();
+        match name.rsplit_once('(')?.1 {
+            "mil)" => Some(PositionUnit::Mils),
+            "mm)" => Some(PositionUnit::Millimeters),
+            _ => None,
+        }
+    };
+    match (axis_unit(cols.x), axis_unit(cols.y)) {
+        (Some(x), Some(y)) if x != y => {
+            Err("Pick-and-place coordinate columns use different units".into())
+        }
+        (x, y) => Ok(x.or(y)),
+    }
 }
 
 fn split_delimited_line(line: &str, delimiter: u8) -> Vec<String> {
@@ -605,6 +594,14 @@ fn parse_coord(raw: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delimited_placement_header_can_follow_a_comment_preamble() {
+        let bytes = b"# Exported placement list\nRef,PosX,PosY,Side\nR1,5,8,bottom\n";
+        let doc = PickAndPlaceDocument::parse(bytes, &AtomicBool::new(false)).unwrap();
+        assert_eq!(doc.placements[0].line, 3);
+        assert_eq!(doc.placements[0].side, PlacementSide::Bottom);
+    }
 
     #[test]
     fn empty_quoted_fields_keep_ascii_placement_columns_aligned() {
