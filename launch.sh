@@ -380,6 +380,21 @@ function run_workbench() {
     "$WORKBENCH_BIN" "$@"
 }
 
+function ensure_sigrok_decoder() {
+    local profile_dir="$1"
+    local helper_dir="$profile_dir/../tools/sigrok-decoder"
+    if [ -n "${LITTLE_CLIP_SIGROK_DECODER:-}" ] ||
+        [ -x "$profile_dir/clip-sigrok-decoder" ] ||
+        [ -x "$helper_dir/clip-sigrok-decoder" ] ||
+        command -v clip-sigrok-decoder >/dev/null 2>&1; then
+        return 0
+    fi
+    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libsigrokdecode; then
+        "$SCRIPT_DIR/scripts/build_sigrok_decoder.sh" "$helper_dir" ||
+            echo 'Optional Sigrok decoder build failed. See scripts/sigrok_decoder/README.md for setup.' >&2
+    fi
+}
+
 function run_file_manager() {
     local file_manager_bin binary_dir
     file_manager_bin=$(workspace_binary clip-file-manager)
@@ -391,10 +406,10 @@ function run_file_manager() {
     fi
     if [ ! -x "$file_manager_bin" ]; then
         cargo build --release -p clip-file-manager -p clip-media-worker
-        "$SCRIPT_DIR/scripts/build_sigrok_decoder.sh" || echo 'Optional Sigrok decoder build failed.' >&2
         file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
     fi
     ensure_media_worker "$file_manager_bin"
+    ensure_sigrok_decoder "$(dirname "$file_manager_bin")"
     "$file_manager_bin" "$@"
 }
 

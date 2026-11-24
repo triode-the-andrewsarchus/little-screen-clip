@@ -224,7 +224,7 @@ fn catalog_controls<'a>(
     };
     let retry = ui
         .horizontal_wrapped(|ui| {
-            ui.weak("Sigrok unavailable").on_hover_text(detail);
+            ui.label(detail);
             ui.button("Retry").clicked()
         })
         .inner;

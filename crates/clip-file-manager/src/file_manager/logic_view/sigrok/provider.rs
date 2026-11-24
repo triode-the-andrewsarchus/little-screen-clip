@@ -1,10 +1,14 @@
 use super::super::protocols::{Source, TraceInput};
 use little_clip_core::{
-    CommandRequest,
+    CommandError, CommandRequest,
     engineering::logic::{Lane, Level, Trace},
 };
-use rustix::process::Resource;
+use rustix::{
+    fs::{Access, access},
+    process::Resource,
+};
 use std::{
+    io::ErrorKind,
     ops::Range,
     path::PathBuf,
     sync::atomic::{AtomicBool, Ordering},
@@ -135,7 +139,9 @@ fn command() -> CommandRequest {
 }
 
 fn program_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("LITTLE_CLIP_SIGROK_DECODER") {
+    if let Some(path) =
+        std::env::var_os("LITTLE_CLIP_SIGROK_DECODER").filter(|path| !path.is_empty())
+    {
         return path.into();
     }
     if let Ok(exe) = std::env::current_exe()
@@ -145,7 +151,7 @@ fn program_path() -> PathBuf {
             profile.join(PROGRAM),
             profile.join("../tools/sigrok-decoder").join(PROGRAM),
         ] {
-            if candidate.is_file() {
+            if candidate.is_file() && access(&candidate, Access::EXEC_OK).is_ok() {
                 return candidate;
             }
         }
@@ -156,7 +162,14 @@ fn program_path() -> PathBuf {
 fn invoke(request: CommandRequest, cancel: &AtomicBool) -> Result<String, String> {
     let result = request
         .run_cancellable(cancel)
-        .map_err(|err| err.to_string())?;
+        .map_err(|error| match error {
+            CommandError::Spawn { source, .. }
+                if matches!(source.kind(), ErrorKind::NotFound | ErrorKind::PermissionDenied) =>
+            {
+                "Could not start the Sigrok helper. Install pkg-config, the libsigrokdecode development package, and its decoder catalog, then run ./launch.sh files. For a separate installation, set LITTLE_CLIP_SIGROK_DECODER to the executable path.".into()
+            }
+            error => error.to_string(),
+        })?;
     if !result.status.success() {
         let stderr = result.stderr_lossy();
         let detail = stderr.lines().rev().find(|line| !line.trim().is_empty());

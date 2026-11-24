@@ -1,9 +1,10 @@
 # Saved logic decoder
 
 Files can use this optional standalone libsigrokdecode adapter for saved logic
-captures. Build it with `scripts/build_sigrok_decoder.sh` on a system with
-libsigrokdecode development headers and pkg-config. Install the matching decoder
-catalog with the runtime library. Files discovers the adapter in the workspace
+captures. Install pkg-config, the libsigrokdecode development package, and the
+matching decoder catalog. The next `./launch.sh files` builds a missing helper
+alongside the existing Files build. You can also run `scripts/build_sigrok_decoder.sh`
+directly. Files discovers the adapter in the workspace
 target directory, next to the application executable, or on PATH. For a separate
 installation, set `LITTLE_CLIP_SIGROK_DECODER` to its executable. An operator can
 choose a trusted decoder directory with `LITTLE_CLIP_SIGROK_DECODERS`.
