@@ -288,6 +288,14 @@ impl SpiceRawDocument {
             && !raw.plots.is_empty()
             && !raw.plots.iter().all(|p| p.data.num_points() == 0)
         {
+            // dune-raw accepts unknown flags and assumes interleaved records.
+            if raw
+                .warnings
+                .iter()
+                .any(|warning| warning.eq_ignore_ascii_case("unknown flag fastaccess"))
+            {
+                return Err("LTspice FastAccess binary layout is unsupported".into());
+            }
             return convert_dune_rawfile(raw, cancelled);
         }
         parse_ltspice_raw(bytes, cancelled)
@@ -1855,6 +1863,18 @@ Binary:
 
         let fake_tiff = b"II*\0\x08\0\0\0\x01\0\x00\x01\x03\0\x01\0\0\0";
         assert!(!is_spice_raw_bytes(fake_tiff));
+    }
+
+    #[test]
+    fn fast_access_layout_is_rejected_even_when_record_sizes_match() {
+        let mut bytes = b"Title: FastAccess demo\nPlotname: Transient Analysis\nFlags: real double FastAccess\nNo. Variables: 2\nNo. Points: 2\nVariables:\n0 time time\n1 V(out) voltage\nBinary:\n".to_vec();
+        for column in [[0.0_f64, 1.0], [5.0, 7.0]] {
+            for value in column {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let error = SpiceRawDocument::parse(&bytes, &AtomicBool::new(false)).unwrap_err();
+        assert!(error.contains("FastAccess"));
     }
 
     #[test]
