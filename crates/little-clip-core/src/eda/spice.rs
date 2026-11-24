@@ -1653,9 +1653,18 @@ fn apply_pane_line(pane: &mut LtspicePane, line: &str) {
 }
 
 fn extract_quoted_or_csv_traces(raw: &str) -> Vec<String> {
+    // Native LTspice entries start with a count and store quoted trace names.
+    // An empty native pane still has a count and braces.
+    let count = raw
+        .trim_start()
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == '{')
+        .next()
+        .and_then(|token| token.parse::<usize>().ok());
     let mut out = Vec::new();
     let mut rest = raw;
-    while let Some(start) = rest.find('"') {
+    while out.len() < count.unwrap_or(usize::MAX)
+        && let Some(start) = rest.find('"')
+    {
         let after = &rest[start + 1..];
         let Some(end) = after.find('"') else {
             break;
@@ -1666,7 +1675,7 @@ fn extract_quoted_or_csv_traces(raw: &str) -> Vec<String> {
         }
         rest = &after[end + 1..];
     }
-    if out.is_empty() {
+    if out.is_empty() && count.is_none() {
         for tok in raw.trim_matches(['{', '}']).split(',') {
             let clean = tok.trim();
             if !clean.is_empty() {
@@ -2196,5 +2205,15 @@ Binary:
         assert_eq!(doc.sections[1].panes[0].traces, ["V(gain)", "I(V1)"]);
         assert!(doc.sections[1].panes[0].log_x);
         assert!(doc.summary_line().contains("2 analyses"));
+    }
+
+    #[test]
+    fn ltspice_empty_panes_have_no_configured_trace_names() {
+        let source = b"[Transient Analysis]\n{\nNpanes: 1\n{\ntraces: 0 { }\n}\n}\n";
+        let doc = LtspicePlotDocument::parse(source, &AtomicBool::new(false)).unwrap();
+        assert_eq!(doc.pane_count(), 1);
+        assert_eq!(doc.trace_count, 0);
+        assert!(doc.sections[0].panes[0].traces.is_empty());
+        assert!(doc.strip_summary().specs.contains("No traces configured"));
     }
 }
