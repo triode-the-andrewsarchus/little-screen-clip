@@ -277,7 +277,10 @@ impl KicadPcbDocument {
             .unwrap_or("")
             .to_string();
 
-        let mut acc = PcbAccum::default();
+        let mut acc = PcbAccum {
+            has_inner_copper: copper_layer_count > 2,
+            ..PcbAccum::default()
+        };
         walk_pcb_children(&root, &mut acc, cancelled)?;
 
         let outline_mm = acc
@@ -425,7 +428,8 @@ impl KicadFootprintDocument {
         for child in &root.children {
             match child.tag() {
                 Some("pad") => {
-                    if let Some(info) = collect_pad(child, [0.0, 0.0, 0.0], &mut primitives) {
+                    if let Some(info) = collect_pad(child, [0.0, 0.0, 0.0], false, &mut primitives)
+                    {
                         pads.push(info);
                     }
                 }
@@ -505,6 +509,7 @@ impl KicadFootprintDocument {
 
 #[derive(Default)]
 struct PcbAccum {
+    has_inner_copper: bool,
     footprint_count: usize,
     footprints: Vec<PcbFootprintSummary>,
     track_segment_count: usize,
@@ -669,13 +674,29 @@ fn record_via(node: &SExp, acc: &mut PcbAccum) {
     acc.via_count += 1;
     let size = node.child_f64("size").unwrap_or(0.6).max(0.2);
     let drill = node.child_f64("drill").unwrap_or(0.3).max(0.1);
-    acc.push_prim(PcbPrim::Circle {
-        layer: PcbLayerBucket::FrontCopper,
-        center: [x, y],
-        radius: size * 0.5,
-        fill: true,
-        stroke: 0.0,
-    });
+    let endpoints = node.get("layers");
+    let ends = [
+        endpoints
+            .and_then(|layers| layers.string_at(0))
+            .unwrap_or("F.Cu"),
+        endpoints
+            .and_then(|layers| layers.string_at(1))
+            .unwrap_or("B.Cu"),
+    ];
+    let layers = if ends.contains(&"F.Cu") && ends.contains(&"B.Cu") {
+        &["*.Cu"][..]
+    } else {
+        &ends
+    };
+    for layer in copper_buckets(layers, acc.has_inner_copper) {
+        acc.push_prim(PcbPrim::Circle {
+            layer,
+            center: [x, y],
+            radius: size * 0.5,
+            fill: true,
+            stroke: 0.0,
+        });
+    }
     acc.push_prim(PcbPrim::Circle {
         layer: PcbLayerBucket::Drills,
         center: [x, y],
@@ -719,7 +740,7 @@ fn record_footprint(node: &SExp, acc: &mut PcbAccum) {
         match child.tag() {
             Some("pad") => {
                 pad_count += 1;
-                let _ = collect_pad(child, xf, &mut local_prims);
+                let _ = collect_pad(child, xf, acc.has_inner_copper, &mut local_prims);
             }
             Some(tag) if tag.starts_with("fp_") => {
                 collect_graphic_node(child, tag, xf, &mut local_prims);
@@ -772,14 +793,26 @@ fn transform_point(xf: [f64; 3], local: [f64; 2]) -> [f64; 2] {
     ]
 }
 
-fn pad_layer_bucket(layers: &[&str]) -> PcbLayerBucket {
-    let has_f = layers.iter().any(|l| *l == "F.Cu" || *l == "*.Cu");
-    let has_b = layers.iter().any(|l| *l == "B.Cu" || *l == "*.Cu");
-    if has_f || (!has_f && !has_b) {
-        PcbLayerBucket::FrontCopper
-    } else {
-        PcbLayerBucket::BackCopper
-    }
+fn copper_buckets(layers: &[&str], has_inner_copper: bool) -> impl Iterator<Item = PcbLayerBucket> {
+    let all = layers.contains(&"*.Cu");
+    let outer = all || layers.contains(&"F&B.Cu");
+    let inner = (all && has_inner_copper)
+        || layers
+            .iter()
+            .any(|name| name.starts_with("In") && name.ends_with(".Cu"));
+    [
+        (
+            outer || layers.contains(&"F.Cu"),
+            PcbLayerBucket::FrontCopper,
+        ),
+        (
+            outer || layers.contains(&"B.Cu"),
+            PcbLayerBucket::BackCopper,
+        ),
+        (inner, PcbLayerBucket::InnerCopper),
+    ]
+    .into_iter()
+    .filter_map(|(included, layer)| included.then_some(layer))
 }
 
 fn parse_pad_drill(node: &SExp) -> Option<[f64; 2]> {
@@ -795,7 +828,12 @@ fn parse_pad_drill(node: &SExp) -> Option<[f64; 2]> {
     }
 }
 
-fn collect_pad(node: &SExp, fp_xf: [f64; 3], out: &mut Vec<PcbPrim>) -> Option<PcbPadInfo> {
+fn collect_pad(
+    node: &SExp,
+    fp_xf: [f64; 3],
+    has_inner_copper: bool,
+    out: &mut Vec<PcbPrim>,
+) -> Option<PcbPadInfo> {
     let number = node.string_at(0).unwrap_or("").to_string();
     let pad_type = node.string_at(1).unwrap_or("smd").to_string();
     let shape = node.string_at(2).unwrap_or("rect").to_string();
@@ -818,31 +856,36 @@ fn collect_pad(node: &SExp, fp_xf: [f64; 3], out: &mut Vec<PcbPrim>) -> Option<P
         .unwrap_or_default();
 
     if pad_type != "np_thru_hole" {
-        let bucket = pad_layer_bucket(&layers_vec);
-        let prim = match shape.as_str() {
-            "circle" => PcbPrim::Circle {
-                layer: bucket,
-                center: copper_center,
-                radius: size[0].max(size[1]) * 0.5,
-                fill: true,
-                stroke: 0.0,
-            },
-            "oval" => PcbPrim::Obround {
-                layer: bucket,
-                center: copper_center,
-                size,
-                rot_deg,
-            },
-            _ => PcbPrim::Rect {
-                layer: bucket,
-                center: copper_center,
-                size,
-                rot_deg,
-                fill: true,
-                stroke: 0.0,
-            },
+        let layers = if layers_vec.is_empty() {
+            &["F.Cu"][..]
+        } else {
+            &layers_vec
         };
-        out.push(prim);
+        out.extend(
+            copper_buckets(layers, has_inner_copper).map(|bucket| match shape.as_str() {
+                "circle" => PcbPrim::Circle {
+                    layer: bucket,
+                    center: copper_center,
+                    radius: size[0].max(size[1]) * 0.5,
+                    fill: true,
+                    stroke: 0.0,
+                },
+                "oval" => PcbPrim::Obround {
+                    layer: bucket,
+                    center: copper_center,
+                    size,
+                    rot_deg,
+                },
+                _ => PcbPrim::Rect {
+                    layer: bucket,
+                    center: copper_center,
+                    size,
+                    rot_deg,
+                    fill: true,
+                    stroke: 0.0,
+                },
+            }),
+        );
     }
     if let Some(size) = drill.filter(|size| size.iter().all(|x| x.is_finite() && *x > 0.0)) {
         out.push(PcbPrim::Obround {
@@ -1258,6 +1301,14 @@ mod tests {
         // and routes the 1 mm drill from (9.134, -18.5) to (10.866, -17.5).
         let cancel = AtomicBool::new(false);
         let doc = KicadPcbDocument::parse(board, &cancel).unwrap();
+        let front_and_drills = [PcbLayerBucket::FrontCopper, PcbLayerBucket::Drills]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let shown: Vec<_> = doc
+            .primitives
+            .iter()
+            .filter(|prim| front_and_drills.contains(&prim.layer()))
+            .collect();
         let [
             PcbPrim::Obround {
                 center: copper,
@@ -1270,7 +1321,7 @@ mod tests {
                 size,
                 rot_deg,
             },
-        ] = doc.primitives.as_slice()
+        ] = shown.as_slice()
         else {
             panic!("expected copper and drill obrounds");
         };
@@ -1289,11 +1340,51 @@ mod tests {
         let without_drill = doc
             .render_layers([150, 150], &copper_layers, &cancel)
             .unwrap();
-        let with_drill = doc.render_thumbnail([150, 150], &cancel).unwrap();
+        let with_drill = doc
+            .render_layers([150, 150], &front_and_drills, &cancel)
+            .unwrap();
         assert_ne!(
             with_drill.premultiplied_rgba,
             without_drill.premultiplied_rgba
         );
+    }
+
+    #[test]
+    fn through_hole_pads_and_blind_vias_use_their_copper_buckets() {
+        let board = br#"(kicad_pcb
+          (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal)
+                  (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+          (footprint "Inspection"
+            (pad "1" thru_hole circle (at 2 2) (size 1.5 1.5) (drill 0.6) (layers "*.Cu"))
+            (pad "2" smd circle (at 4 4) (size 1.5 1.5) (layers "B.Cu" "B.Mask")))
+          (via (at 5 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu"))
+          (via blind (at 6 6) (size 0.6) (drill 0.3) (layers "In2.Cu" "B.Cu")))"#;
+        let doc = KicadPcbDocument::parse(board, &AtomicBool::new(false)).unwrap();
+        let copper = |coordinate| {
+            doc.primitives
+                .iter()
+                .filter_map(|prim| match prim {
+                    PcbPrim::Circle { layer, center, .. }
+                        if *center == [coordinate, coordinate]
+                            && *layer != PcbLayerBucket::Drills =>
+                    {
+                        Some(*layer)
+                    }
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        use PcbLayerBucket::{BackCopper, FrontCopper, InnerCopper};
+        assert_eq!(
+            copper(2.0),
+            BTreeSet::from([FrontCopper, BackCopper, InnerCopper])
+        );
+        assert_eq!(copper(4.0), BTreeSet::from([BackCopper]));
+        assert_eq!(
+            copper(5.0),
+            BTreeSet::from([FrontCopper, BackCopper, InnerCopper])
+        );
+        assert_eq!(copper(6.0), BTreeSet::from([BackCopper, InnerCopper]));
     }
 
     #[test]
