@@ -92,17 +92,18 @@ impl PickAndPlaceDocument {
             .map_err(|_| "Pick-and-place file is not valid UTF-8".to_string())?;
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
 
-        let inches_input = detect_inches(text);
-        let units = if inches_input {
-            "Inches (converted to mm)".to_string()
+        let default_unit = if detect_inches(text) {
+            PositionUnit::Inches
         } else {
-            "Millimeters (mm)".to_string()
+            PositionUnit::Millimeters
         };
-
-        let mut placements = parse_csv_or_tsv(text, inches_input, cancelled)?;
-        if placements.is_empty() {
-            placements = parse_kicad_ascii(text, inches_input, cancelled)?;
-        }
+        let (placements, unit) = match parse_csv_or_tsv(text, default_unit, cancelled)? {
+            Some(parsed) => parsed,
+            None => (
+                parse_kicad_ascii(text, default_unit.scale_to_mm(), cancelled)?,
+                default_unit,
+            ),
+        };
         if placements.is_empty() {
             return Err("No component placements found in .pos file".into());
         }
@@ -125,8 +126,8 @@ impl PickAndPlaceDocument {
         }
 
         Ok(Self {
-            units,
-            inches_input,
+            units: unit.label().into(),
+            inches_input: unit == PositionUnit::Inches,
             top_count,
             bottom_count,
             unique_packages: packages.len(),
@@ -238,6 +239,31 @@ fn detect_inches(text: &str) -> bool {
     false
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PositionUnit {
+    Millimeters,
+    Inches,
+    Mils,
+}
+
+impl PositionUnit {
+    fn scale_to_mm(self) -> f64 {
+        match self {
+            Self::Millimeters => 1.0,
+            Self::Inches => 25.4,
+            Self::Mils => 0.0254,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Millimeters => "Millimeters (mm)",
+            Self::Inches => "Inches (converted to mm)",
+            Self::Mils => "Mils (converted to mm)",
+        }
+    }
+}
+
 #[derive(Default, Debug)]
 struct ColumnMap {
     ref_des: Option<usize>,
@@ -345,9 +371,9 @@ impl ColumnMap {
 
 fn parse_csv_or_tsv(
     text: &str,
-    inches_input: bool,
+    default_unit: PositionUnit,
     cancelled: &AtomicBool,
-) -> Result<Vec<Placement>, String> {
+) -> Result<Option<(Vec<Placement>, PositionUnit)>, String> {
     let lines: Vec<(usize, &str)> = text
         .lines()
         .enumerate()
@@ -357,7 +383,7 @@ fn parse_csv_or_tsv(
         })
         .collect();
     if lines.is_empty() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
     let delimiter = if lines[0].1.contains('\t') && !lines[0].1.contains(',') {
@@ -365,7 +391,7 @@ fn parse_csv_or_tsv(
     } else if lines[0].1.contains(',') {
         b','
     } else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
 
     let mut header_idx = None;
@@ -374,15 +400,29 @@ fn parse_csv_or_tsv(
         let fields = split_delimited_line(line, delimiter);
         if let Some(map) = ColumnMap::from_headers(fields.iter().map(|s| s.as_str())) {
             header_idx = Some(pos);
-            columns = Some(map);
+            let axis_unit = |column: Option<usize>| match fields
+                .get(column?)?
+                .trim_end()
+                .to_ascii_lowercase()
+                .rsplit_once('(')
+            {
+                Some((_, "mil)")) => Some(PositionUnit::Mils),
+                Some((_, "mm)")) => Some(PositionUnit::Millimeters),
+                _ => None,
+            };
+            let (x, y) = (axis_unit(map.x), axis_unit(map.y));
+            if x.is_some() && y.is_some() && x != y {
+                return Err("Pick-and-place coordinate columns use different units".into());
+            }
+            columns = Some((map, x.or(y).unwrap_or(default_unit)));
             break;
         }
     }
-    let (Some(header_idx), Some(cols)) = (header_idx, columns) else {
-        return Ok(Vec::new());
+    let (Some(header_idx), Some((cols, unit))) = (header_idx, columns) else {
+        return Ok(None);
     };
 
-    let scale = if inches_input { 25.4 } else { 1.0 };
+    let scale = unit.scale_to_mm();
     let mut out = Vec::new();
     for &(line_idx, raw_line) in lines.iter().skip(header_idx + 1) {
         if out.len() >= MAX_PLACEMENTS {
@@ -399,7 +439,7 @@ fn parse_csv_or_tsv(
             out.push(placement);
         }
     }
-    Ok(out)
+    Ok(Some((out, unit)))
 }
 
 fn split_delimited_line(line: &str, delimiter: u8) -> Vec<String> {
@@ -417,10 +457,9 @@ fn split_delimited_line(line: &str, delimiter: u8) -> Vec<String> {
 
 fn parse_kicad_ascii(
     text: &str,
-    inches_input: bool,
+    scale: f64,
     cancelled: &AtomicBool,
 ) -> Result<Vec<Placement>, String> {
-    let scale = if inches_input { 25.4 } else { 1.0 };
     let mut cols: Option<ColumnMap> = None;
     let mut out = Vec::new();
 
@@ -559,6 +598,16 @@ fn parse_coord(raw: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn centroid_headers_convert_mils_to_millimeters() {
+        let bytes = b"Designator,Center-X(mil),Center-Y(mil),Layer\nR1,1000,-500,Top\n";
+        let doc = PickAndPlaceDocument::parse(bytes, &AtomicBool::new(false)).unwrap();
+        assert_eq!(doc.units, "Mils (converted to mm)");
+        let part = &doc.placements[0];
+        assert!((part.x_mm - 25.4).abs() < 1e-9);
+        assert!((part.y_mm + 12.7).abs() < 1e-9);
+    }
 
     #[test]
     fn kicad_ascii_and_csv_pick_and_place_files_extract_all_fields() {
