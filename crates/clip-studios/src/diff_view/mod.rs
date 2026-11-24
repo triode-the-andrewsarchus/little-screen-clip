@@ -1,11 +1,12 @@
 //! Text and image differential inspection workbench view.
 //!
 //! Provides side-by-side, unified, and inline word diffs for text, and 3-up/overlay/mask
-//! pixel diffs for bitmap images.
+//! pixel diffs for bitmap images, and retained vector comparisons for SVG.
 
 mod handoff;
 mod image_view;
 mod studio;
+mod svg_view;
 mod text;
 
 use crate::ansi::ansi_to_layout_job;
@@ -19,6 +20,7 @@ use little_clip_core::jobs::task::Task;
 use little_clip_core::{BackgroundJobs, JobTicket};
 use little_clip_ops::diff::{DiffDisplayMode, DiffResult, DiffTarget, compute_diff};
 use little_clip_ops::image_diff::{ImageDiffOptions, ImageDiffResult};
+use svg_view::SvgView;
 
 enum DiffHandoffTarget {
     Existing(std::path::PathBuf),
@@ -76,7 +78,18 @@ impl DiffHandoffTarget {
                         content, ext_hint, ..
                     } => (content.as_bytes(), ext_hint.as_deref().unwrap_or("txt")),
                     DiffTarget::Image { bytes, mime, .. } => {
-                        (bytes, if mime.contains("png") { "png" } else { "jpg" })
+                        let extension = if svg_view::is_svg(&target) {
+                            if bytes.starts_with(&[0x1f, 0x8b]) {
+                                "svgz"
+                            } else {
+                                "svg"
+                            }
+                        } else if mime.contains("png") {
+                            "png"
+                        } else {
+                            "jpg"
+                        };
+                        (bytes, extension)
                     }
                     _ => unreachable!(),
                 };
@@ -145,6 +158,8 @@ pub struct DiffViewerState {
     pub layout_job: egui::text::LayoutJob,
     // Image diff state
     pub image_result: Option<std::sync::Arc<ImageDiffResult>>,
+    svg: SvgView,
+    is_svg: bool,
     copy_job: Option<crate::desktop_ipc::PendingRequest>,
     pub image_options: ImageDiffOptions,
     pub image_mode: ImageDiffViewMode,
@@ -172,10 +187,11 @@ impl Drop for DiffViewerState {
 
 enum DiffComputation {
     Image(ImageDiffResult),
+    Svg(little_clip_render::diagram::retained::compare::Comparison),
     Text(DiffResult, egui::text::LayoutJob),
 }
 
-fn spawn_image_diff_worker(
+fn spawn_graphical_diff_worker(
     lhs: &std::sync::Arc<DiffTarget>,
     rhs: &std::sync::Arc<DiffTarget>,
     options: ImageDiffOptions,
@@ -199,10 +215,22 @@ fn spawn_image_diff_worker(
 
         let lhs = std::sync::Arc::clone(lhs);
         let rhs = std::sync::Arc::clone(rhs);
-        let job = Task::start_unbounded(jobs, move |_| {
+        let job = Task::start_unbounded(jobs, move |cancelled| {
             let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) else {
                 return Err("Failed to obtain image bytes from comparison targets".to_string());
             };
+            match (svg_view::is_svg(&lhs), svg_view::is_svg(&rhs)) {
+                (true, true) => {
+                    return little_clip_render::diagram::retained::compare::compare(
+                        b1, b2, cancelled,
+                    )
+                    .map(DiffComputation::Svg);
+                }
+                (true, false) | (false, true) => {
+                    return Err("SVG comparison requires two SVG or SVGZ operands.".into());
+                }
+                (false, false) => {}
+            }
             little_clip_ops::image_diff::compare_image_bytes_with_mime(
                 b1,
                 lhs.image_mime(),
@@ -252,9 +280,10 @@ impl DiffViewerState {
         let rhs = std::sync::Arc::new(rhs);
         let is_img = lhs.is_image() && rhs.is_image();
         let image_options = ImageDiffOptions::default();
+        let is_svg = is_img && (svg_view::is_svg(&lhs) || svg_view::is_svg(&rhs));
 
         let (compute_job, decode_error) = if is_img {
-            match spawn_image_diff_worker(&lhs, &rhs, image_options.clone(), jobs) {
+            match spawn_graphical_diff_worker(&lhs, &rhs, image_options.clone(), jobs) {
                 Ok(job) => (Some(job), None),
                 Err(error) => (None, Some(error)),
             }
@@ -285,6 +314,8 @@ impl DiffViewerState {
             result,
             layout_job,
             image_result: None,
+            svg: SvgView::default(),
+            is_svg,
             copy_job: None,
             image_options,
             image_mode: ImageDiffViewMode::ThreeUp,
@@ -319,6 +350,11 @@ impl DiffViewerState {
         self.lhs.is_image() && self.rhs.is_image()
     }
 
+    /// Returns whether this graphical comparison has an SVG operand.
+    pub fn is_svg(&self) -> bool {
+        self.is_svg
+    }
+
     pub fn is_computing(&self) -> bool {
         self.compute_job.is_some()
     }
@@ -335,6 +371,10 @@ impl DiffViewerState {
             Ok(DiffComputation::Image(result)) => {
                 self.image_result = Some(std::sync::Arc::new(result));
                 self.textures_loaded = false;
+                self.decode_error = None;
+            }
+            Ok(DiffComputation::Svg(result)) => {
+                self.svg.result = Some(result);
                 self.decode_error = None;
             }
             Ok(DiffComputation::Text(result, layout_job)) => {
@@ -355,7 +395,8 @@ impl DiffViewerState {
         // Retire the old read before starting its replacement. Task owns cancellation.
         self.compute_job = None;
         if self.is_image() {
-            match spawn_image_diff_worker(
+            self.svg.clear_result();
+            match spawn_graphical_diff_worker(
                 &self.lhs,
                 &self.rhs,
                 self.image_options.clone(),
@@ -386,7 +427,9 @@ impl DiffViewerState {
     }
 
     pub fn toggle_mode(&mut self) {
-        if self.is_image() {
+        if self.is_svg() {
+            self.svg.toggle();
+        } else if self.is_image() {
             self.image_mode = match self.image_mode {
                 ImageDiffViewMode::ThreeUp => ImageDiffViewMode::Overlay,
                 ImageDiffViewMode::Overlay => ImageDiffViewMode::MaskOnly,
