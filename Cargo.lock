@@ -1635,6 +1635,7 @@ dependencies = [
  "uuid",
  "wayland-client",
  "wuff",
+ "x11rb",
  "xz2",
  "zip 9.8.0",
  "zstd",
@@ -1767,6 +1768,7 @@ dependencies = [
  "tracing",
  "uuid",
  "webpx",
+ "x11rb",
 ]
 
 [[package]]
@@ -4790,6 +4792,7 @@ dependencies = [
  "cgl",
  "dispatch2",
  "glutin_egl_sys",
+ "glutin_glx_sys",
  "glutin_wgl_sys",
  "libloading 0.8.9",
  "objc2 0.6.5",
@@ -4800,6 +4803,7 @@ dependencies = [
  "raw-window-handle",
  "wayland-sys",
  "windows-sys 0.52.0",
+ "x11-dl",
 ]
 
 [[package]]
@@ -4822,6 +4826,16 @@ checksum = "4c4680ba6195f424febdc3ba46e7a42a0e58743f2edb115297b86d7f8ecc02d2"
 dependencies = [
  "gl_generator",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "glutin_glx_sys"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a7bb2938045a88b612499fbcba375a77198e01306f52272e692f8c1f3751185"
+dependencies = [
+ "gl_generator",
+ "x11-dl",
 ]
 
 [[package]]
@@ -6813,6 +6827,7 @@ dependencies = [
  "url",
  "uuid",
  "wait-timeout",
+ "x11rb",
  "zip 9.8.0",
  "zstd",
 ]
@@ -6960,6 +6975,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols-wlr",
  "wayland-server",
+ "x11rb",
  "zbus 6.3.0",
 ]
 
