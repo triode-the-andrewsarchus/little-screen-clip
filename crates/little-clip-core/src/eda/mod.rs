@@ -304,6 +304,14 @@ pub fn is_gerber_gbr_path(path: &Path) -> bool {
 
 /// Reads and parses an EDA file through core's guarded `FileSource` snapshot helper.
 pub fn read_document(path: &Path, cancelled: &AtomicBool) -> Result<Document, String> {
+    read_document_with_source(path, cancelled).map(|(document, _)| document)
+}
+
+/// Returns the parsed document and the identity of the guarded snapshot it came from.
+pub fn read_document_with_source(
+    path: &Path,
+    cancelled: &AtomicBool,
+) -> Result<(Document, crate::file_source::FileSource), String> {
     check_cancelled(cancelled, "EDA read cancelled")?;
     let (bytes, source) =
         read_file_snapshot_with_source(path, MAX_BYTES).map_err(|error| error.to_string())?;
@@ -311,7 +319,7 @@ pub fn read_document(path: &Path, cancelled: &AtomicBool) -> Result<Document, St
     let doc = parse_bytes(path, &bytes, cancelled)?;
     source.check()?;
     check_cancelled(cancelled, "EDA read cancelled")?;
-    Ok(doc)
+    Ok((doc, source))
 }
 
 /// Parses an in-memory buffer according to path extension and content disambiguation.

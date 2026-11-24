@@ -334,6 +334,51 @@ pub(super) fn render_gbrjob_details(ui: &mut Ui, job: &GerberJobDocument) {
     }
 }
 
+#[derive(Clone)]
+pub(in crate::file_manager) struct ProjectLink {
+    pub format: little_clip_core::eda::EdaFormat,
+    pub source: crate::file_source::FileSource,
+}
+
+pub(super) fn project_links(source: &crate::file_source::FileSource) -> Vec<ProjectLink> {
+    use little_clip_core::eda::EdaFormat;
+    [
+        ("kicad_pcb", EdaFormat::KicadPcb),
+        ("kicad_sch", EdaFormat::KicadSchematic),
+    ]
+    .into_iter()
+    .filter_map(|(extension, format)| {
+        let path = source.path().with_extension(extension);
+        let file = crate::file_source::open_regular_file(&path, false).ok()?;
+        let sibling = crate::file_source::FileSource::capture_file(&file).ok()?;
+        (sibling.path() == path).then_some(ProjectLink {
+            format,
+            source: sibling,
+        })
+    })
+    .collect()
+}
+
+pub(super) fn paint_project_links(ui: &mut Ui, links: &[ProjectLink]) -> Option<ProjectLink> {
+    ui.strong("Project files");
+    if links.is_empty() {
+        ui.label("No matching local board or schematic found.");
+    }
+    let mut requested = None;
+    for link in links {
+        let path = link.source.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if ui
+            .link(format!("{} · {name}", link.format.label()))
+            .clicked()
+        {
+            requested = Some(link.clone());
+        }
+    }
+    ui.separator();
+    requested
+}
+
 pub(super) fn render_project_details(ui: &mut Ui, proj: &KicadProjectDocument) {
     ui.strong(format!("KiCad Project · {}", proj.project_name));
     if let Some(v) = proj.meta_version {
@@ -347,6 +392,16 @@ pub(super) fn render_project_details(ui: &mut Ui, proj: &KicadProjectDocument) {
     }
     if let Some(v) = proj.min_via_diameter_mm {
         ui.label(format!("Min via diameter: {v:.3} mm"));
+    }
+    if let Some(edge) = proj.copper_edge_clearance_mm {
+        ui.label(format!("Copper to edge: {edge:.3} mm"));
+    }
+    if !proj.design_rules.is_empty() {
+        ui.collapsing("All board rules", |ui| {
+            for (name, value) in &proj.design_rules {
+                ui.label(format!("{name} = {value}"));
+            }
+        });
     }
     ui.label(format!(
         "Pinned libraries: {} symbol, {} footprint",
@@ -366,7 +421,13 @@ pub(super) fn render_project_details(ui: &mut Ui, proj: &KicadProjectDocument) {
             let via = nc
                 .via_diameter_mm
                 .map_or_else(|| "—".into(), |v| format!("{v:.3}"));
-            ui.label(format!("{}: clr {clr} · trk {trk} · via {via} mm", nc.name));
+            let drill = nc
+                .via_drill_mm
+                .map_or_else(|| "—".into(), |v| format!("{v:.3}"));
+            ui.label(format!(
+                "{} · clearance {clr} · track {trk} · via {via} · drill {drill} mm",
+                nc.name
+            ));
         }
     }
 

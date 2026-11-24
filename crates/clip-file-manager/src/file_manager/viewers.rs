@@ -107,6 +107,7 @@ enum ViewerSession {
     Video(video::Video),
 }
 struct Loading {
+    related: bool,
     response_deadline: Option<std::time::Instant>,
     ticket: JobTicket,
     path: PathBuf,
@@ -301,6 +302,21 @@ impl Viewers {
         if self.active() {
             return;
         }
+        self.start_job(path, system, false, load);
+    }
+
+    fn start_job(
+        &mut self,
+        path: PathBuf,
+        system: bool,
+        related: bool,
+        load: impl FnOnce(
+            &Path,
+            &std::sync::atomic::AtomicBool,
+        ) -> Result<(Loaded, Option<FileSource>), String>
+        + Send
+        + 'static,
+    ) {
         self.video_start_seconds = 0.0;
         self.document_start = None;
         let source = path.clone();
@@ -314,6 +330,7 @@ impl Viewers {
         let (ticket, receiver) =
             executor.submit(Duration::from_secs(120), move || load(&source, &worker));
         self.loading = Some(Loading {
+            related,
             response_deadline: system
                 .then(|| std::time::Instant::now() + super::system::RESPONSE_DEADLINE),
             cancelled,
@@ -321,6 +338,29 @@ impl Viewers {
             path,
             receiver,
         });
+    }
+
+    fn open_requested_project_link(&mut self) {
+        if self.loading.is_some() || self.source_guard.is_some() || self.archive_location.is_some()
+        {
+            return;
+        }
+        let Some(ViewerSession::Eda(viewer)) = &mut self.session else {
+            return;
+        };
+        let Some((origin, link)) = viewer.take_project_link() else {
+            return;
+        };
+        self.error = None;
+        self.start_job(
+            link.source.path().to_path_buf(),
+            false,
+            true,
+            move |_, cancel| {
+                super::eda::Viewer::follow_project_link(origin, link, cancel)
+                    .map(|(viewer, source)| (Loaded::Eda(Box::new(viewer)), Some(source)))
+            },
+        );
     }
     pub fn open_video_at(&mut self, path: PathBuf, seconds: f64) {
         if self.active() {
@@ -348,7 +388,14 @@ impl Viewers {
             ctx.request_repaint_after(Duration::from_millis(40));
             return;
         };
-        let path = self.loading.take().unwrap().path.clone();
+        let loading = self.loading.take().unwrap();
+        if loading.related
+            && let Err(error) = result
+        {
+            self.error = Some(error);
+            return;
+        }
+        let path = loading.path.clone();
         self.path = Some(path.clone());
         let result = result.map(|(loaded, source)| {
             self.source = source;
@@ -392,6 +439,11 @@ impl Viewers {
                         }
                         _ => {}
                     }
+                }
+                if let ViewerSession::Eda(viewer) = &mut opened {
+                    viewer.enable_project_links(
+                        self.source_guard.is_none() && self.archive_location.is_none(),
+                    );
                 }
                 self.session = Some(opened);
             }
@@ -507,6 +559,7 @@ impl Viewers {
 
     pub(super) fn tick(&mut self, ctx: &Context) {
         self.poll(ctx);
+        self.open_requested_project_link();
         match self.session.as_mut() {
             Some(ViewerSession::Archive(state)) => state.tick(ctx),
             Some(ViewerSession::System(state)) => state.poll(ctx),

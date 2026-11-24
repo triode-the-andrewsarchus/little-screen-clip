@@ -10,6 +10,7 @@ use super::{
     table_body::{TableBody, paint_cell},
 };
 use crate::{
+    file_source::FileSource,
     icons::Icon,
     shell::{StudioPanelLayout, StudioShell},
     ui_appearance::WorkbenchColors,
@@ -218,11 +219,21 @@ impl ViewerState {
 pub(super) struct Viewer {
     doc: Arc<Document>,
     state: ViewerState,
+    source: FileSource,
+    related: Vec<kicad::ProjectLink>,
+    requested: Option<kicad::ProjectLink>,
+    show_project_source: bool,
+    links_enabled: bool,
 }
 
 impl Viewer {
     pub fn load(path: &Path, cancelled: &AtomicBool) -> Result<Self, String> {
-        let doc = read_document(path, cancelled)?;
+        let (doc, source) = little_clip_core::eda::read_document_with_source(path, cancelled)?;
+        let related = if matches!(doc, Document::KicadProject(_)) {
+            kicad::project_links(&source)
+        } else {
+            Vec::new()
+        };
         let source_lines = index_source_lines(source_text_for(&doc));
         let mut state = ViewerState::new(source_lines);
         if let Document::PickAndPlace(placements) = &doc {
@@ -238,7 +249,45 @@ impl Viewer {
         Ok(Self {
             doc: Arc::new(doc),
             state,
+            source,
+            related,
+            requested: None,
+            show_project_source: false,
+            links_enabled: true,
         })
+    }
+
+    pub(super) fn enable_project_links(&mut self, enabled: bool) {
+        self.links_enabled = enabled;
+    }
+
+    pub(super) fn take_project_link(&mut self) -> Option<(FileSource, kicad::ProjectLink)> {
+        self.requested
+            .take()
+            .map(|link| (self.source.clone(), link))
+    }
+
+    pub(super) fn follow_project_link(
+        origin: FileSource,
+        link: kicad::ProjectLink,
+        cancelled: &AtomicBool,
+    ) -> Result<(Self, FileSource), String> {
+        origin.check()?;
+        link.source.check()?;
+        let mut viewer = Self::load(link.source.path(), cancelled)?;
+        if viewer.source != link.source {
+            return Err(
+                "The project file changed. Reopen the project to refresh its links.".into(),
+            );
+        }
+        origin.check()?;
+        if link.format != EdaFormat::KicadProject {
+            viewer.related.push(kicad::ProjectLink {
+                format: EdaFormat::KicadProject,
+                source: origin,
+            });
+        }
+        Ok((viewer, link.source))
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
@@ -248,14 +297,44 @@ impl Viewer {
         StudioShell::new(format.label(), icon_for_format(format), palette, close).render_header(
             ui,
             |ui| {
-                if ui
-                    .add(ButtonRole::Secondary.button("Fit view", palette))
-                    .clicked()
+                if format != EdaFormat::KicadProject
+                    && ui
+                        .add(ButtonRole::Secondary.button("Fit view", palette))
+                        .clicked()
                 {
                     reset_view = true;
                 }
             },
         );
+        if self.links_enabled
+            && format != EdaFormat::KicadProject
+            && let Some(link) = self.related.first()
+            && ui.button("Back to project").clicked()
+        {
+            self.requested = Some(link.clone());
+        }
+        if let Document::KicadProject(project) = self.doc.as_ref() {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.show_project_source, false, "Overview");
+                ui.selectable_value(&mut self.show_project_source, true, "Source JSON");
+            });
+            ui.separator();
+            if self.show_project_source {
+                render_source_rows(ui, &project.source_excerpt, &mut self.state);
+            } else {
+                egui::ScrollArea::vertical()
+                    .id_salt("project-overview")
+                    .show(ui, |ui| {
+                        if self.links_enabled
+                            && let Some(link) = kicad::paint_project_links(ui, &self.related)
+                        {
+                            self.requested = Some(link);
+                        }
+                        kicad::render_project_details(ui, project);
+                    });
+            }
+            return;
+        }
         if reset_view {
             self.state.zoom = 1.0;
             self.state.pan = Vec2::ZERO;
@@ -291,7 +370,7 @@ fn render_left_panel(
         Document::KicadFootprint(fp) => kicad::render_footprint_details(ui, fp),
         Document::KicadSymbolLib(lib) => kicad::render_symbol_lib_details(ui, lib, state),
         Document::GerberJob(job) => kicad::render_gbrjob_details(ui, job),
-        Document::KicadProject(proj) => kicad::render_project_details(ui, proj),
+        Document::KicadProject(_) => {}
         Document::SpiceNetlist(net) => spice::render_netlist_details(ui, net, state),
         Document::SpiceRaw(raw) => spice::render_raw_details(ui, raw, state),
         Document::LtspicePlot(plt) => spice::render_plt_details(ui, plt),
@@ -308,7 +387,6 @@ fn render_left_panel(
 
 fn text_only_heading(doc: &Document) -> Option<&'static str> {
     match doc {
-        Document::KicadProject(_) => Some("Configuration JSON"),
         Document::SpiceNetlist(_) => Some("SPICE Netlist Deck"),
         _ => None,
     }
@@ -1247,6 +1325,54 @@ mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable};
     use little_clip_core::config::WorkbenchAppearance;
+
+    #[test]
+    fn project_overview_opens_a_local_board_and_keeps_json_secondary() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("demo.kicad_pro");
+        let board = dir.path().join("demo.kicad_pcb");
+        std::fs::write(
+            &project,
+            r#"{"board":{"design_settings":{"rules":{"min_track_width":0.2}}}}"#,
+        )
+        .unwrap();
+        std::fs::write(&board, "(kicad_pcb (version 20240108) (gr_rect (start 0 0) (end 40 30) (layer \"Edge.Cuts\")))").unwrap();
+        let other = dir.path().join("other.kicad_sch");
+        std::fs::write(&other, "(kicad_sch (version 20231120))").unwrap();
+        std::os::unix::fs::symlink(&other, dir.path().join("demo.kicad_sch")).unwrap();
+        let cancel = AtomicBool::new(false);
+        let viewer = Viewer::load(&project, &cancel).unwrap();
+        let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
+        let mut harness = Harness::builder()
+            .with_size(vec2(780.0, 460.0))
+            .build_ui_state(
+                move |ui, viewer: &mut Viewer| viewer.ui(ui, &mut false, &palette),
+                viewer,
+            );
+        harness.run();
+        assert!(!harness.state().show_project_source);
+        assert!(
+            harness
+                .query_by_label("Min track width: 0.200 mm")
+                .is_some()
+        );
+        assert_eq!(harness.state().related.len(), 1);
+        harness.get_by_label("Source JSON").click();
+        harness.run();
+        assert!(harness.state().show_project_source);
+        harness.get_by_label("Overview").click();
+        harness.run();
+        harness.get_by_label_contains("demo.kicad_pcb").click();
+        harness.run();
+        let (origin, link) = harness.state_mut().take_project_link().unwrap();
+        let (child, _) =
+            Viewer::follow_project_link(origin.clone(), link.clone(), &cancel).unwrap();
+        assert_eq!(child.doc.format(), EdaFormat::KicadPcb);
+        assert_eq!(child.related[0].source, origin);
+        std::fs::write(&board, "(kicad_pcb)").unwrap();
+        assert!(Viewer::follow_project_link(origin, link, &cancel).is_err());
+    }
 
     fn render_single_frame(viewer: &mut Viewer, palette: &AppPalette) {
         let ctx = egui::Context::default();
