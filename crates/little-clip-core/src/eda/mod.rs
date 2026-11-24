@@ -397,13 +397,7 @@ pub(crate) fn allocate_canvas_with_y_flip(
 ) -> Option<(Pixmap, Transform, f32)> {
     let max_w = max_size[0].clamp(16, 2048);
     let max_h = max_size[1].clamp(16, 2048);
-    let span_x = (bounds[2] - bounds[0]).abs();
-    let span_y = (bounds[3] - bounds[1]).abs();
-    let (span_x, span_y) = if span_x < 1e-6 && span_y < 1e-6 {
-        (10.0, 10.0)
-    } else {
-        (span_x.max(0.01), span_y.max(0.01))
-    };
+    let (span_x, span_y) = canvas_spans(bounds)?;
     let aspect = span_x / span_y;
     let target_aspect = f64::from(max_w) / f64::from(max_h);
     let (pw, ph) = if aspect >= target_aspect {
@@ -417,8 +411,16 @@ pub(crate) fn allocate_canvas_with_y_flip(
             max_h,
         )
     };
+    let transform = raster_transform(bounds, [pw, ph], y_down)?;
     let mut pixmap = Pixmap::new(pw, ph)?;
     pixmap.fill(bg);
+    Some((pixmap, transform, transform.sx))
+}
+
+/// Returns the world-to-pixel transform used by EDA geometry renders at the actual raster size.
+pub fn raster_transform(bounds: [f64; 4], size: [u32; 2], y_down: bool) -> Option<Transform> {
+    let [pw, ph] = size;
+    let (span_x, span_y) = canvas_spans(bounds)?;
     let pad = (pw.min(ph) as f64 * 0.08).clamp(3.0, 18.0);
     let avail_w = (f64::from(pw) - 2.0 * pad).max(1.0);
     let avail_h = (f64::from(ph) - 2.0 * pad).max(1.0);
@@ -432,7 +434,20 @@ pub(crate) fn allocate_canvas_with_y_flip(
         (-(scale as f32), (f64::from(ph) * 0.5 + cy * scale) as f32)
     };
     let transform = Transform::from_row(scale as f32, 0.0, 0.0, sy, tx, ty);
-    Some((pixmap, transform, scale as f32))
+    transform.is_valid().then_some(transform)
+}
+
+fn canvas_spans([left, top, right, bottom]: [f64; 4]) -> Option<(f64, f64)> {
+    let width = right - left;
+    let height = bottom - top;
+    if !width.is_finite() || !height.is_finite() || width < 0.0 || height < 0.0 {
+        return None;
+    }
+    Some(if width < 1e-6 && height < 1e-6 {
+        (10.0, 10.0)
+    } else {
+        (width.max(0.01), height.max(0.01))
+    })
 }
 
 pub(crate) fn pixmap_to_thumbnail(pixmap: Pixmap) -> ImageThumbnail {

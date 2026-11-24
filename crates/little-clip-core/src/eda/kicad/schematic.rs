@@ -4,7 +4,7 @@ use super::super::{
     StripSummary, allocate_canvas_with_y_flip, bounded_source_text, check_cancelled,
     pixmap_to_thumbnail, update_bounds,
 };
-use super::scene_render::render_scene_thumbnail;
+use super::scene_render::{render_scene_thumbnail, resolve_scene_bounds};
 use crate::ImageThumbnail;
 use eda_view::kicad::schema::library::{SymbolLibrary, parse_unit_index, resolve_extends};
 use eda_view::kicad::schema::schematic::Schematic;
@@ -153,15 +153,8 @@ impl KicadSchematicDocument {
 
         let bounds_mm = scene
             .as_deref()
-            .filter(|sc| !sc.bbox.is_empty())
-            .map(|sc| {
-                [
-                    sc.bbox.min[0],
-                    sc.bbox.min[1],
-                    sc.bbox.max[0],
-                    sc.bbox.max[1],
-                ]
-            })
+            .filter(|sc| !sc.items.is_empty())
+            .map(resolve_scene_bounds)
             .unwrap_or_else(|| compute_wire_bounds(&fallback_wires, &symbols));
 
         Ok(Self {

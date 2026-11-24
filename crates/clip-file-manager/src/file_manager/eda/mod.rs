@@ -17,7 +17,7 @@ use little_clip_core::eda::{
     hpgl::{HpglDocument, pen_rgb},
     kicad::PcbLayerBucket,
     pick_place::{PickAndPlaceDocument, PlacementSide},
-    read_document,
+    raster_transform, read_document,
 };
 use little_clip_core::jobs::{BackgroundJobs, JobError, task::Task};
 use little_clip_core::palette::AppPalette;
@@ -308,17 +308,20 @@ fn paint_canvas_document(
         }
         Document::Hpgl(hpgl) => paint_hpgl_canvas(ui, rect, response, hpgl, state, colors),
         Document::KicadPcb(pcb) => {
-            paint_raster_canvas(ui, rect, pcb.bounds_mm, true, state, colors)
+            paint_raster_canvas(ui, rect, Some((pcb.bounds_mm, true)), state)
         }
         Document::KicadSchematic(sch) => {
-            paint_raster_canvas(ui, rect, sch.bounds_mm, true, state, colors)
+            let y_down = sch
+                .scene
+                .as_ref()
+                .is_none_or(|scene| scene.items.is_empty() || scene.y_down);
+            paint_raster_canvas(ui, rect, Some((sch.bounds_mm, y_down)), state)
         }
         Document::KicadFootprint(fp) => {
-            paint_raster_canvas(ui, rect, fp.bounds_mm, true, state, colors)
+            paint_raster_canvas(ui, rect, Some((fp.bounds_mm, true)), state)
         }
         Document::KicadSymbolLib(_) | Document::GerberJob(_) | Document::LtspicePlot(_) => {
-            paint_raster_canvas(ui, rect, [0.0, 0.0, 0.0, 0.0], true, state, colors);
-            None
+            paint_raster_canvas(ui, rect, None, state)
         }
         Document::SpiceRaw(raw) => {
             raw_readout = Some(spice::paint_raw_center(ui, rect, raw, state, colors));
@@ -543,56 +546,79 @@ impl ViewerRaster {
     }
 }
 
+struct RasterMapping {
+    origin: Pos2,
+    points_per_mm: [f64; 2],
+}
+
+impl RasterMapping {
+    fn new(drawn: Rect, size: [u32; 2], bounds: [f64; 4], y_down: bool) -> Option<Self> {
+        let transform = raster_transform(bounds, size, y_down)?;
+        let scale = drawn.width() / size[0] as f32;
+        Some(Self {
+            origin: drawn.min + vec2(transform.tx, transform.ty) * scale,
+            points_per_mm: [
+                f64::from(transform.sx * scale),
+                f64::from(transform.sy * scale),
+            ],
+        })
+    }
+
+    fn screen(&self, [x, y]: [f64; 2]) -> Pos2 {
+        self.origin
+            + vec2(
+                (x * self.points_per_mm[0]) as f32,
+                (y * self.points_per_mm[1]) as f32,
+            )
+    }
+
+    fn world(&self, pos: Pos2) -> [f64; 2] {
+        let delta = pos - self.origin;
+        [
+            f64::from(delta.x) / self.points_per_mm[0],
+            f64::from(delta.y) / self.points_per_mm[1],
+        ]
+    }
+}
+
 fn paint_raster_canvas(
     ui: &egui::Ui,
     rect: Rect,
-    bounds: [f64; 4],
-    y_down: bool,
+    geometry: Option<([f64; 4], bool)>,
     state: &ViewerState,
-    _colors: WorkbenchColors,
 ) -> Option<[f64; 2]> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-    painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 22, 26));
-    if let Some(tex) = state.raster.texture() {
-        let tex_size = tex.size_vec2();
-        if tex_size.x > 0.0 && tex_size.y > 0.0 {
-            let scale = ((rect.width() - 32.0).max(1.0) / tex_size.x)
-                .min((rect.height() - 32.0).max(1.0) / tex_size.y)
-                * state.zoom;
-            let drawn = Rect::from_center_size(rect.center() + state.pan, tex_size * scale);
-            painter.image(
-                tex.id(),
-                drawn,
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
-        }
-    }
-    let cursor_rect = if rect.width() > 40.0 && rect.height() > 40.0 {
-        rect.shrink(4.0)
-    } else {
-        rect
-    };
-    cursor_coords(ui, cursor_rect, bounds, state.zoom, state.pan, y_down)
+    paint_raster(&painter, rect, geometry, state)
+        .and_then(|mapping| raster_cursor(ui, rect, &mapping))
 }
 
-fn gerber_texture_draw_rect(board_rect: Rect, bounds: [f64; 4], tex_size: Vec2) -> Rect {
-    let span_x = (bounds[2] - bounds[0]).abs();
-    let span_y = (bounds[3] - bounds[1]).abs();
-    let (span_x, span_y) = if span_x < 1e-6 && span_y < 1e-6 {
-        (10.0, 10.0)
-    } else {
-        (span_x.max(0.01), span_y.max(0.01))
-    };
-    let pw = f64::from(tex_size.x).max(1.0);
-    let ph = f64::from(tex_size.y).max(1.0);
-    let pad = (pw.min(ph) * 0.08).clamp(3.0, 18.0);
-    let tex_scale = ((pw - 2.0 * pad).max(1.0) / span_x).min((ph - 2.0 * pad).max(1.0) / span_y);
-    let board_tex_w = (span_x * tex_scale).max(1.0);
-    let board_tex_h = (span_y * tex_scale).max(1.0);
-    let draw_w = board_rect.width().max(1.0) * (pw / board_tex_w) as f32;
-    let draw_h = board_rect.height().max(1.0) * (ph / board_tex_h) as f32;
-    Rect::from_center_size(board_rect.center(), vec2(draw_w, draw_h))
+fn paint_raster(
+    painter: &egui::Painter,
+    rect: Rect,
+    geometry: Option<([f64; 4], bool)>,
+    state: &ViewerState,
+) -> Option<RasterMapping> {
+    painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 22, 26));
+    let texture = state.raster.texture()?;
+    let size = texture.size_vec2();
+    let available = eda_fit_rect(rect).size().max(Vec2::splat(1.0));
+    let scale = (available.x / size.x).min(available.y / size.y) * state.zoom;
+    let drawn = Rect::from_center_size(rect.center() + state.pan, size * scale);
+    painter.image(
+        texture.id(),
+        drawn,
+        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+        Color32::WHITE,
+    );
+    let (bounds, y_down) = geometry?;
+    RasterMapping::new(drawn, texture.size().map(|dim| dim as u32), bounds, y_down)
+}
+
+fn raster_cursor(ui: &egui::Ui, rect: Rect, mapping: &RasterMapping) -> Option<[f64; 2]> {
+    super::ui::preview_hovered(ui, rect)
+        .then(|| ui.input(|i| i.pointer.hover_pos()))
+        .flatten()
+        .map(|pos| mapping.world(pos))
 }
 
 fn paint_gerber_canvas(
@@ -603,45 +629,16 @@ fn paint_gerber_canvas(
     colors: WorkbenchColors,
 ) -> Option<[f64; 2]> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-    painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 22, 26));
-
-    let fit_rect = eda_fit_rect(rect);
-    let bounds = gerber.bounds_mm;
-    let lo = crate::ui_ext::fit_cartesian_point(
-        fit_rect,
-        bounds,
-        [bounds[0], bounds[3]],
-        state.zoom,
-        state.pan,
-    );
-    let hi = crate::ui_ext::fit_cartesian_point(
-        fit_rect,
-        bounds,
-        [bounds[2], bounds[1]],
-        state.zoom,
-        state.pan,
-    );
-
-    if let Some(tex) = state.raster.texture() {
-        let board_rect = Rect::from_min_max(lo, hi);
-        let draw_rect = gerber_texture_draw_rect(board_rect, bounds, tex.size_vec2());
-        painter.image(
-            tex.id(),
-            draw_rect,
-            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-            Color32::WHITE,
-        );
-    }
+    let mapping = paint_raster(&painter, rect, Some((gerber.bounds_mm, false)), state)?;
 
     if state.show_vector_overlay
         || state.selected_aperture.is_some()
         || state.selected_tool.is_some()
     {
-        paint_gerber_overlays(&painter, fit_rect, gerber, state, colors);
+        paint_gerber_overlays(&painter, &mapping, gerber, state, colors);
     }
-
-    paint_origin_crosshair(&painter, fit_rect, rect, bounds, state.zoom, state.pan);
-    cursor_coords(ui, fit_rect, bounds, state.zoom, state.pan, false)
+    paint_crosshair(&painter, rect, mapping.screen([0.0, 0.0]));
+    raster_cursor(ui, rect, &mapping)
 }
 
 fn is_poly_selected(
@@ -657,12 +654,11 @@ fn is_poly_selected(
 
 fn paint_gerber_overlays(
     painter: &egui::Painter,
-    rect: Rect,
+    mapping: &RasterMapping,
     gerber: &GerberDocument,
     state: &ViewerState,
     colors: WorkbenchColors,
 ) {
-    let bounds = gerber.bounds_mm;
     for poly in &gerber.polylines {
         let selected_match = is_poly_selected(state, poly);
         if !state.show_vector_overlay && !selected_match {
@@ -679,7 +675,7 @@ fn paint_gerber_overlays(
         let screen_pts: Vec<Pos2> = poly
             .points
             .iter()
-            .map(|p| crate::ui_ext::fit_cartesian_point(rect, bounds, *p, state.zoom, state.pan))
+            .map(|&point| mapping.screen(point))
             .collect();
         for seg in screen_pts.windows(2) {
             painter.line_segment([seg[0], seg[1]], stroke);
@@ -1142,7 +1138,11 @@ fn paint_origin_crosshair(
     pan: Vec2,
 ) {
     let origin = crate::ui_ext::fit_cartesian_point(fit_rect, bounds, [0.0, 0.0], zoom, pan);
-    if clip_rect.contains(origin) {
+    paint_crosshair(painter, clip_rect, origin);
+}
+
+fn paint_crosshair(painter: &egui::Painter, rect: Rect, origin: Pos2) {
+    if rect.contains(origin) {
         let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 145, 175, 110));
         painter.line_segment([origin - vec2(8.0, 0.0), origin + vec2(8.0, 0.0)], stroke);
         painter.line_segment([origin - vec2(0.0, 8.0), origin + vec2(0.0, 8.0)], stroke);
@@ -1390,28 +1390,14 @@ mod tests {
 
     #[test]
     fn narrow_canvas_fits_gerber_and_wheel_zooms_below_100_percent() {
-        // Reproduce mobo-Edge_Cuts.gbr (149x95 mm) in a narrow half-screen canvas.
-        let canvas = Rect::from_min_size(pos2(260.0, 60.0), vec2(480.0, 920.0));
-        let fit = eda_fit_rect(canvas);
-        let bounds = [66.6, -145.0, 215.6, -50.0];
-        let lo = crate::ui_ext::fit_cartesian_point(
-            fit,
-            bounds,
-            [bounds[0], bounds[3]],
-            1.0,
-            Vec2::ZERO,
-        );
-        let hi = crate::ui_ext::fit_cartesian_point(
-            fit,
-            bounds,
-            [bounds[2], bounds[1]],
-            1.0,
-            Vec2::ZERO,
-        );
-        let board_rect = Rect::from_min_max(lo, hi);
-        let draw_rect = gerber_texture_draw_rect(board_rect, bounds, vec2(1024.0, 653.0));
-        assert!(canvas.contains_rect(board_rect));
-        assert!(canvas.contains_rect(draw_rect));
+        // Check the physical transform for a letterboxed single-axis layer.
+        let draw_rect = Rect::from_min_size(pos2(260.0, 60.0), vec2(512.0, 8.0));
+        let bounds = [75.0, 20.0, 125.0, 20.0];
+        let transform = RasterMapping::new(draw_rect, [1024, 16], bounds, false).unwrap();
+        let world = transform.world(draw_rect.center());
+        assert!((world[0] - 100.0).abs() < 1e-4);
+        assert!((world[1] - 20.0).abs() < 1e-4);
+        assert!((transform.screen([125.0, 20.0]).x - (draw_rect.right() - 1.5)).abs() < 1e-3);
 
         // Scroll out below 100% and back in above 100% in an interactive viewer frame.
         let dir = tempfile::tempdir().unwrap();

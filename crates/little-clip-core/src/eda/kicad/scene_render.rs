@@ -48,7 +48,7 @@ pub fn render_scene_thumbnail(
     Ok(pixmap_to_thumbnail(pixmap))
 }
 
-fn resolve_scene_bounds(scene: &Scene) -> [f64; 4] {
+pub(super) fn resolve_scene_bounds(scene: &Scene) -> [f64; 4] {
     if !scene.bbox.is_empty()
         && scene.bbox.min[0].is_finite()
         && scene.bbox.min[1].is_finite()
