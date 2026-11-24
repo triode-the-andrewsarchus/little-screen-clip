@@ -190,6 +190,7 @@ struct ViewerState {
     show_vector_overlay: bool,
     pcb_layers: BTreeSet<PcbLayerBucket>,
     filter_query: String,
+    show_spice_source: bool,
     selected_symbol: usize,
     selected_unit: i64,
     selected_plot: usize,
@@ -298,10 +299,12 @@ impl Viewer {
         StudioShell::new(format.label(), icon_for_format(format), palette, close).render_header(
             ui,
             |ui| {
-                if format != EdaFormat::KicadProject
-                    && ui
-                        .add(ButtonRole::Secondary.button("Fit view", palette))
-                        .clicked()
+                if !matches!(
+                    format,
+                    EdaFormat::KicadProject | EdaFormat::SpiceNetlist | EdaFormat::LtspicePlot
+                ) && ui
+                    .add(ButtonRole::Secondary.button("Fit view", palette))
+                    .clicked()
                 {
                     reset_view = true;
                 }
@@ -333,6 +336,15 @@ impl Viewer {
                         }
                         kicad::render_project_details(ui, project);
                     });
+            }
+            return;
+        }
+        if let Document::LtspicePlot(settings) = self.doc.as_ref() {
+            spice_tabs(ui, &mut self.state, "Plot settings");
+            if self.state.show_spice_source {
+                render_source_rows(ui, &settings.source_excerpt, &mut self.state);
+            } else {
+                egui::ScrollArea::vertical().show(ui, |ui| spice::render_plt_details(ui, settings));
             }
             return;
         }
@@ -372,9 +384,9 @@ fn render_left_panel(
         Document::KicadSymbolLib(lib) => kicad::render_symbol_lib_details(ui, lib, state),
         Document::GerberJob(job) => kicad::render_gbrjob_details(ui, job),
         Document::KicadProject(_) => {}
-        Document::SpiceNetlist(net) => spice::render_netlist_details(ui, net, state),
+        Document::SpiceNetlist(net) => spice::render_netlist_details(ui, net),
         Document::SpiceRaw(raw) => spice::render_raw_details(ui, raw, state),
-        Document::LtspicePlot(plt) => spice::render_plt_details(ui, plt),
+        Document::LtspicePlot(_) => {}
         Document::LtspiceSchematic(sch) => {
             ui.label(sch.summary_line());
             if !sch.unresolved.is_empty() {
@@ -395,13 +407,6 @@ fn render_left_panel(
             .id_salt("eda-details")
             .auto_shrink([false, false])
             .show(ui, render);
-    }
-}
-
-fn text_only_heading(doc: &Document) -> Option<&'static str> {
-    match doc {
-        Document::SpiceNetlist(_) => Some("SPICE Netlist Deck"),
-        _ => None,
     }
 }
 
@@ -426,14 +431,14 @@ fn paint_canvas_document(
         | Document::LtspiceSchematic(_) => {
             paint_raster_canvas(ui, rect, detail_geometry(doc), state)
         }
-        Document::KicadSymbolLib(_) | Document::GerberJob(_) | Document::LtspicePlot(_) => {
+        Document::KicadSymbolLib(_) | Document::GerberJob(_) => {
             paint_raster_canvas(ui, rect, None, state)
         }
         Document::SpiceRaw(raw) => {
             raw_readout = Some(spice::paint_raw_center(ui, rect, raw, state, colors));
             None
         }
-        Document::KicadProject(_) | Document::SpiceNetlist(_) => None,
+        Document::KicadProject(_) | Document::SpiceNetlist(_) | Document::LtspicePlot(_) => None,
     };
 
     let zoom_pct = (state.zoom * 100.0).round() as i32;
@@ -514,15 +519,17 @@ fn render_center_panel(
     state: &mut ViewerState,
     colors: WorkbenchColors,
 ) {
-    if let Some(heading) = text_only_heading(doc) {
-        ui.strong(heading);
-        ui.separator();
-        render_source_rows(ui, source_text_for(doc), state);
+    if let Document::SpiceNetlist(net) = doc.as_ref() {
+        spice_tabs(ui, state, "Connectivity");
+        if state.show_spice_source {
+            render_source_rows(ui, &net.source_excerpt, state);
+        } else {
+            spice::render_connectivity(ui, net, state);
+        }
         return;
     }
 
-    let has_source = matches!(doc.as_ref(), Document::Hpgl(_) | Document::LtspicePlot(_))
-        && !state.source_lines.is_empty();
+    let has_source = matches!(doc.as_ref(), Document::Hpgl(_)) && !state.source_lines.is_empty();
     let canvas_h = if has_source {
         (ui.available_height() - 160.0).max(120.0)
     } else {
@@ -580,6 +587,14 @@ fn render_center_panel(
     }
 }
 
+fn spice_tabs(ui: &mut egui::Ui, state: &mut ViewerState, primary: &str) {
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut state.show_spice_source, false, primary);
+        ui.selectable_value(&mut state.show_spice_source, true, "Source");
+    });
+    ui.separator();
+}
+
 #[derive(Clone, PartialEq)]
 enum RasterRequest {
     Fixed([u32; 2]),
@@ -598,7 +613,6 @@ impl RasterRequest {
                 Self::Fixed([1400, 1000])
             }
             Document::GerberJob(_) => Self::Fixed([1024, 700]),
-            Document::LtspicePlot(_) => Self::Fixed([1024, 520]),
             _ => return None,
         })
     }
@@ -1556,6 +1570,46 @@ mod tests {
                 );
             assert!(from_tile.distance(mapping.screen(anchor)) < 0.001);
         }
+    }
+
+    #[test]
+    fn netlist_view_defaults_to_connectivity_and_keeps_the_deck_available() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("divider.cir");
+        std::fs::write(
+            &path,
+            "Divider
+V1 in 0 12
+R1 in out 1k
+R2 out 0 1k
+.op
+.end
+",
+        )
+        .unwrap();
+        let viewer = Viewer::load(&path, &AtomicBool::new(false)).unwrap();
+        let palette = crate::ui_appearance::palette(WorkbenchAppearance::Dark);
+        let mut harness = Harness::builder()
+            .with_size(vec2(780.0, 460.0))
+            .build_ui_state(
+                move |ui, viewer: &mut Viewer| viewer.ui(ui, &mut false, &palette),
+                viewer,
+            );
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("Top-level netlist connectivity")
+                .is_some()
+        );
+        assert!(harness.query_by_label("in · out").is_some());
+        harness.get_by_label("Source").click();
+        harness.run();
+        assert!(harness.state().state.show_spice_source);
+        assert!(
+            harness
+                .query_by_label("Top-level netlist connectivity")
+                .is_none()
+        );
     }
 
     fn render_single_frame(viewer: &mut Viewer, palette: &AppPalette) {

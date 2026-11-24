@@ -5,16 +5,13 @@ use super::ViewerState;
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::PlotAxis;
 use egui::{Align2, Color32, FontId, Rect, Stroke, Ui, pos2, vec2};
+use egui_extras::{Column, TableBuilder};
 use little_clip_core::eda::spice::{
     LtspicePlotDocument, RawAnalysisKind, SpiceNetlistDocument, SpicePreviewSample,
     SpiceRawDocument, SpiceRawPlot, TRACE_PALETTE,
 };
 
-pub(super) fn render_netlist_details(
-    ui: &mut Ui,
-    net: &SpiceNetlistDocument,
-    state: &mut ViewerState,
-) {
+pub(super) fn render_netlist_details(ui: &mut Ui, net: &SpiceNetlistDocument) {
     ui.strong(&net.title);
     ui.label(format!(
         "Nodes: {} · Components: {}",
@@ -69,27 +66,64 @@ pub(super) fn render_netlist_details(
             ui.add(egui::Label::new(inc).wrap());
         }
     }
+}
 
-    ui.separator();
-    ui.horizontal(|ui| {
-        ui.label("Filter:");
-        ui.text_edit_singleline(&mut state.filter_query);
-    });
-    let q = state.filter_query.trim().to_ascii_lowercase();
-    for comp in net.components.iter().take(200) {
-        if !q.is_empty()
-            && !comp.name.to_ascii_lowercase().contains(&q)
-            && !comp.kind.to_ascii_lowercase().contains(&q)
-        {
-            continue;
-        }
-        ui.label(format!(
-            "{} [{}] ({})",
-            comp.name,
-            comp.kind,
-            comp.nodes.join(", ")
+pub(super) fn render_connectivity(
+    ui: &mut Ui,
+    net: &SpiceNetlistDocument,
+    state: &mut ViewerState,
+) {
+    ui.label("Top-level netlist connectivity");
+    if net.components.len() < net.component_count {
+        ui.weak(format!(
+            "{} of {} element records retained",
+            net.components.len(),
+            net.component_count
         ));
     }
+    ui.add(
+        egui::TextEdit::singleline(&mut state.filter_query)
+            .hint_text("Filter by element, type or node"),
+    );
+    let filter = state.filter_query.trim().to_ascii_lowercase();
+    let rows: Vec<_> = net
+        .components
+        .iter()
+        .filter(|element| {
+            filter.is_empty()
+                || element.name.to_ascii_lowercase().contains(&filter)
+                || element.kind.to_ascii_lowercase().contains(&filter)
+                || element
+                    .nodes
+                    .iter()
+                    .any(|node| node.to_ascii_lowercase().contains(&filter))
+        })
+        .collect();
+    let height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+    TableBuilder::new(ui)
+        .id_salt("netlist connectivity")
+        .striped(true)
+        .columns(Column::auto().clip(true), 2)
+        .column(Column::remainder().clip(true))
+        .header(height, |mut row| {
+            for title in ["Element", "Type", "Nodes in card order"] {
+                row.col(|ui| {
+                    ui.strong(title);
+                });
+            }
+        })
+        .body(|body| {
+            body.rows(height, rows.len(), |mut row| {
+                let element = rows[row.index()];
+                let nodes = element.nodes.join(" · ");
+                for value in [&element.name, element.kind, &nodes] {
+                    row.col(|ui| {
+                        ui.add(egui::Label::new(value).truncate())
+                            .on_hover_text(value);
+                    });
+                }
+            });
+        });
 }
 
 pub(super) fn render_raw_details(ui: &mut Ui, raw: &SpiceRawDocument, state: &mut ViewerState) {
@@ -163,7 +197,6 @@ pub(super) fn render_raw_details(ui: &mut Ui, raw: &SpiceRawDocument, state: &mu
 }
 
 pub(super) fn render_plt_details(ui: &mut Ui, plt: &LtspicePlotDocument) {
-    ui.strong("LTspice Plot Settings");
     ui.label("Waveform samples are stored in the .raw file.");
     ui.label(format!(
         "Panes: {} · Traces: {}",

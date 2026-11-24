@@ -1481,6 +1481,49 @@ mod tests {
     }
 
     #[test]
+    fn ltspice_asc_viewer_requires_a_schematic_header() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("sample.asc");
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        std::fs::write(
+            &path,
+            "Version 4
+SHEET 1 880 680
+WIRE 0 0 32 32
+",
+        )
+        .unwrap();
+        assert!(matches!(
+            load(&path, &AppConfig::default(), &cancel).unwrap(),
+            Loaded::Eda(_)
+        ));
+        std::fs::write(
+            &path,
+            "-----BEGIN PGP SIGNATURE-----
+Version: GnuPG
+",
+        )
+        .unwrap();
+        assert!(!matches!(
+            load(&path, &AppConfig::default(), &cancel),
+            Ok(Loaded::Eda(_))
+        ));
+        std::fs::write(
+            &path,
+            "date Fri Sep 15 12:50:18.871 2023
+base hex timestamps absolute
+internal events logged
+ 0.001000 1 123 Rx d 2 01 02
+",
+        )
+        .unwrap();
+        assert!(matches!(
+            load(&path, &AppConfig::default(), &cancel).unwrap(),
+            Loaded::CanCapture(_)
+        ));
+    }
+
+    #[test]
     fn spice_raw_opens_in_eda_viewer_while_camera_raw_does_not() {
         let dir = tempfile::tempdir().unwrap();
         let spice_raw = dir.path().join("wave.raw");
