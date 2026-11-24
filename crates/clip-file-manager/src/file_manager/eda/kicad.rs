@@ -20,12 +20,15 @@ pub(super) fn render_pcb_details(ui: &mut Ui, pcb: &KicadPcbDocument, state: &mu
         ui.label(format!("Thickness: {t:.2} mm"));
     }
     ui.label(format!(
-        "Layers: {} stackup ({} total / {} Cu)",
-        pcb.stackup_layer_count, pcb.layer_count, pcb.copper_layer_count
+        "Layers: {} ({} Cu)",
+        pcb.layer_count, pcb.copper_layer_count
     ));
+    if let Some(count) = pcb.stackup_layer_count {
+        ui.label(format!("Stackup: {count} layers"));
+    }
     ui.label(format!(
         "Footprints: {} · Nets: {} · Vias: {} · Zones: {}",
-        pcb.footprint_count, pcb.named_net_count, pcb.via_count, pcb.zone_count
+        pcb.footprint_count, pcb.net_count, pcb.via_count, pcb.zone_count
     ));
     ui.label(format!(
         "Tracks: {} segs + {} arcs ({:.2} mm)",
@@ -74,12 +77,18 @@ pub(super) fn render_pcb_details(ui: &mut Ui, pcb: &KicadPcbDocument, state: &mu
     }
 
     ui.separator();
-    ui.strong(format!("Nets ({})", pcb.named_net_count));
-    for net in pcb.nets.iter().filter(|n| !n.name.is_empty()).take(150) {
-        if !q.is_empty() && !net.name.to_ascii_lowercase().contains(&q) {
-            continue;
+    ui.strong(format!("Nets ({})", pcb.net_count));
+    for net in pcb
+        .nets
+        .iter()
+        .filter(|net| q.is_empty() || net.name.to_ascii_lowercase().contains(&q))
+        .take(150)
+    {
+        if let Some(id) = net.id {
+            ui.label(format!("#{id}  {}", net.name));
+        } else {
+            ui.label(&net.name);
         }
-        ui.label(format!("#{}  {}", net.id, net.name));
     }
 }
 

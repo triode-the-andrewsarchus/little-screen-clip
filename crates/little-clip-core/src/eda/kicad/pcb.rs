@@ -7,7 +7,7 @@ use super::super::{
 use super::scene_render::append_arc_points;
 use crate::ImageThumbnail;
 use eda_view::kicad::sexp::{SExp, Value, parse as parse_sexp};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::PI;
 use std::sync::atomic::AtomicBool;
 use tiny_skia::{
@@ -181,7 +181,7 @@ pub struct PcbLayerInfo {
 
 #[derive(Clone, Debug)]
 pub struct PcbNetInfo {
-    pub id: i64,
+    pub id: Option<i64>,
     pub name: String,
 }
 
@@ -218,12 +218,11 @@ pub struct KicadPcbDocument {
     pub bounds_mm: [f64; 4],
     pub layer_count: usize,
     pub copper_layer_count: usize,
-    pub stackup_layer_count: usize,
+    pub stackup_layer_count: Option<usize>,
     pub layers: Vec<PcbLayerInfo>,
     pub footprint_count: usize,
     pub footprints: Vec<PcbFootprintSummary>,
     pub net_count: usize,
-    pub named_net_count: usize,
     pub nets: Vec<PcbNetInfo>,
     pub track_segment_count: usize,
     pub track_arc_count: usize,
@@ -247,9 +246,11 @@ impl KicadPcbDocument {
 
         let layers = collect_pcb_layers(&root);
         let copper_layer_count = layers.iter().filter(|l| l.name.ends_with(".Cu")).count();
-        let stackup_layer_count = count_stackup_layers(&root).max(layers.len());
-        let nets = collect_nets(&root);
-        let named_net_count = nets.iter().filter(|n| !n.name.is_empty()).count();
+        let stackup_layer_count = root
+            .get("setup")
+            .and_then(|setup| setup.get("stackup"))
+            .map(|stackup| stackup.children_named("layer").count());
+        let (net_count, nets) = collect_nets(&root);
         let title = root
             .get("title_block")
             .and_then(|tb| tb.child_str("title"))
@@ -280,8 +281,7 @@ impl KicadPcbDocument {
             layers,
             footprint_count: acc.footprint_count,
             footprints: acc.footprints,
-            net_count: nets.len(),
-            named_net_count,
+            net_count,
             nets,
             track_segment_count: acc.track_segment_count,
             track_arc_count: acc.track_arc_count,
@@ -302,10 +302,10 @@ impl KicadPcbDocument {
             "KiCad PCB · {:.1}×{:.1} mm · {} layers ({} Cu) · {} footprints · {} nets · {:.1} mm tracks",
             dims[0],
             dims[1],
-            self.stackup_layer_count,
+            self.layer_count,
             self.copper_layer_count,
             self.footprint_count,
-            self.named_net_count,
+            self.net_count,
             self.track_length_mm
         )
     }
@@ -319,12 +319,12 @@ impl KicadPcbDocument {
             format: super::super::EdaFormat::KicadPcb,
             headline: format!(
                 "KiCad PCB · {:.1}×{:.1} mm · {} layers ({} Cu)",
-                dims[0], dims[1], self.stackup_layer_count, self.copper_layer_count
+                dims[0], dims[1], self.layer_count, self.copper_layer_count
             ),
             specs: format!(
                 "{} footprints · {} nets · {} tracks ({:.1} mm) · {} vias",
                 self.footprint_count,
-                self.named_net_count,
+                self.net_count,
                 self.track_segment_count + self.track_arc_count,
                 self.track_length_mm,
                 self.via_count
@@ -525,21 +525,44 @@ fn collect_pcb_layers(root: &SExp) -> Vec<PcbLayerInfo> {
         .collect()
 }
 
-fn count_stackup_layers(root: &SExp) -> usize {
-    root.get("setup")
-        .and_then(|s| s.get("stackup"))
-        .map_or(0, |st| st.children_named("layer").count())
-}
+fn collect_nets(root: &SExp) -> (usize, Vec<PcbNetInfo>) {
+    let mut names: BTreeMap<&str, Option<i64>> = root
+        .children_named("net")
+        .filter_map(|net| Some((net.string_at(1)?, Some(net.int_at(0)?))))
+        .filter(|(name, id)| !name.is_empty() && *id != Some(0))
+        .collect();
 
-fn collect_nets(root: &SExp) -> Vec<PcbNetInfo> {
-    let mut nets = Vec::new();
-    for node in root.children_named("net").take(MAX_NET_LIST) {
-        if let Some(id) = node.int_at(0) {
-            let name = node.string_at(1).unwrap_or("").to_string();
-            nets.push(PcbNetInfo { id, name });
-        }
+    // KiCad 10 stores named nets on board items without a declaration table.
+    let board_items = root.children.iter().filter(|item| {
+        let tag = item.tag().unwrap_or("");
+        matches!(tag, "segment" | "arc" | "via" | "zone") || tag.starts_with("gr_")
+    });
+    let footprint_items = root
+        .children
+        .iter()
+        .filter(|item| matches!(item.tag(), Some("footprint" | "module")))
+        .flat_map(|footprint| &footprint.children)
+        .filter(|item| {
+            let tag = item.tag().unwrap_or("");
+            matches!(tag, "pad" | "zone") || tag.starts_with("fp_")
+        });
+    for name in board_items
+        .chain(footprint_items)
+        .filter_map(|item| item.child_str("net"))
+        .filter(|name| !name.is_empty())
+    {
+        names.entry(name).or_insert(None);
     }
-    nets
+    let count = names.len();
+    let sample = names
+        .into_iter()
+        .take(MAX_NET_LIST)
+        .map(|(name, id)| PcbNetInfo {
+            id,
+            name: name.to_owned(),
+        })
+        .collect();
+    (count, sample)
 }
 
 fn walk_pcb_children(
@@ -1115,6 +1138,46 @@ mod tests {
     }
 
     #[test]
+    fn kicad_ten_counts_item_nets_and_declared_stackup_independently() {
+        let pcb = br#"(kicad_pcb (version 20260206) (generator "pcbnew")
+          (layers (0 "F.Cu" signal) (2 "B.Cu" signal)
+                  (25 "Edge.Cuts" user) (27 "Margin" user))
+          (setup (stackup (layer "F.Cu") (layer "dielectric 1") (layer "B.Cu")))
+          (footprint "Inspection:Connector"
+            (pad "1" thru_hole oval (net "SIG"))
+            (pad "2" thru_hole circle (net "GND"))
+            (pad "3" thru_hole circle (net "")))
+          (segment (start 10 18) (end 15 18) (layer "F.Cu") (net "SIG")))"#;
+        let doc = KicadPcbDocument::parse(pcb, &AtomicBool::new(false)).unwrap();
+        assert_eq!(doc.layer_count, 4);
+        assert_eq!(doc.stackup_layer_count, Some(3));
+        assert_eq!(doc.net_count, 2);
+        assert_eq!(
+            doc.nets
+                .iter()
+                .map(|net| (net.name.as_str(), net.id))
+                .collect::<Vec<_>>(),
+            [("GND", None), ("SIG", None)]
+        );
+    }
+
+    #[test]
+    fn legacy_net_count_includes_declarations_beyond_the_list_limit() {
+        use std::fmt::Write;
+
+        let mut board = String::from("(kicad_pcb (net 0 \"\")");
+        for id in 1..=MAX_NET_LIST + 1 {
+            write!(board, " (net {id} \"N{id}\")").unwrap();
+        }
+        board.push(')');
+        let doc = KicadPcbDocument::parse(board.as_bytes(), &AtomicBool::new(false)).unwrap();
+        assert_eq!(doc.stackup_layer_count, None);
+        assert_eq!(doc.net_count, MAX_NET_LIST + 1);
+        assert_eq!(doc.nets.len(), MAX_NET_LIST);
+        assert_eq!(doc.nets[0].id, Some(1));
+    }
+
+    #[test]
     fn board_pad_center_and_angle_use_their_respective_coordinate_frames() {
         let pcb = br#"(kicad_pcb
             (footprint "Test:Pad" (at 10 20 90)
@@ -1173,9 +1236,9 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let pcb_doc = KicadPcbDocument::parse(pcb.as_bytes(), &cancel).unwrap();
         assert_eq!(pcb_doc.copper_layer_count, 3);
-        assert_eq!(pcb_doc.stackup_layer_count, 4);
+        assert_eq!(pcb_doc.stackup_layer_count, Some(4));
         assert_eq!(pcb_doc.footprint_count, 1);
-        assert_eq!(pcb_doc.named_net_count, 2);
+        assert_eq!(pcb_doc.net_count, 2);
         assert_eq!(pcb_doc.track_segment_count, 1);
         assert_eq!(pcb_doc.track_arc_count, 1);
         assert_eq!(pcb_doc.via_count, 1);
