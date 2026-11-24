@@ -84,9 +84,14 @@ impl DiffViewerState {
             .with_icon(Icon::Diff);
 
         let mut shell = if is_img {
-            let mut s = StudioShell::new("Picture Diff Comparison", Icon::Diff, palette, close_requested)
-                .with_escape_hatch(hatch)
-                .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Mask");
+            let mut s = StudioShell::new(
+                "Picture Diff Comparison",
+                Icon::Diff,
+                palette,
+                close_requested,
+            )
+            .with_escape_hatch(hatch)
+            .with_footer_hints("Esc Close · Tab View · S Swap · Ctrl+C Copy mask");
 
             if self.is_computing() {
                 let elapsed = self.compute_start_time.elapsed().as_secs_f32();
@@ -115,7 +120,7 @@ impl DiffViewerState {
             let mut s = StudioShell::new("Diff Comparison", Icon::Diff, palette, close_requested)
                 .with_badge(self.result.engine_name.to_string(), Some(accent))
                 .with_escape_hatch(hatch)
-                .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Diff");
+                .with_footer_hints("Esc Close · Tab View · S Swap · Ctrl+C Copy diff");
 
             if self.result.is_identical {
                 s = s.with_badge("Identical", Some(success_color));

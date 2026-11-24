@@ -1,5 +1,13 @@
 use super::*;
 
+fn column_image_size(ui: &egui::Ui, aspect: f32, columns: u32) -> Vec2 {
+    let gaps = (columns - 1) as f32 * crate::ui_ext::SPACE_MD;
+    let viewport = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+    let width = ((viewport.width() - gaps - 6.0) / columns as f32 - 6.0).max(1.0);
+    let height = (ui.available_height() - 40.0).max(1.0).min(width / aspect);
+    Vec2::new(height * aspect, height)
+}
+
 impl DiffViewerState {
     pub(super) fn ensure_image_textures(&mut self, ctx: &egui::Context) {
         if self.textures_loaded || self.is_computing() {
@@ -77,7 +85,7 @@ impl DiffViewerState {
             .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
             .show(ui, |ui| {
                 ui.set_min_height(CONTROL_HEIGHT);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let tabs: Vec<_> = [
                         ImageDiffViewMode::ThreeUp,
                         ImageDiffViewMode::Overlay,
@@ -88,10 +96,8 @@ impl DiffViewerState {
                         self.image_mode = mode;
                     }
 
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-                    ui.separator();
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-
+                });
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         egui::RichText::new("Tolerance:")
                             .size(BODY_FONT_SIZE)
@@ -140,19 +146,9 @@ impl DiffViewerState {
 
             match self.image_mode {
                 ImageDiffViewMode::ThreeUp => {
-                    let avail_w = ui.available_width() - 32.0;
-                    let col_w = ((avail_w - 24.0) / 3.0).max(180.0);
-                    let avail_h = (ui.available_height() - 40.0).max(200.0);
-
-                    let mut img_w = col_w;
-                    let mut img_h = img_w / aspect;
-                    if img_h > avail_h {
-                        img_h = avail_h;
-                        img_w = img_h * aspect;
-                    }
-
-                    ui.horizontal(|ui| {
-                        ui.add_space(crate::ui_ext::SPACE_MD);
+                    let Vec2 { x: img_w, y: img_h } = column_image_size(ui, aspect, 3);
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = crate::ui_ext::SPACE_MD;
 
                         // Column 1: Base
                         self.render_image_column(
@@ -166,8 +162,6 @@ impl DiffViewerState {
                             img_h,
                         );
 
-                        ui.add_space(crate::ui_ext::SPACE_MD);
-
                         // Column 2: Comparison
                         self.render_image_column(
                             ui,
@@ -179,8 +173,6 @@ impl DiffViewerState {
                             img_w,
                             img_h,
                         );
-
-                        ui.add_space(crate::ui_ext::SPACE_MD);
 
                         // Column 3: Diff
                         let diff_sub = format!(
@@ -200,16 +192,7 @@ impl DiffViewerState {
                     });
                 }
                 ImageDiffViewMode::Overlay => {
-                    let avail_w = ui.available_width() - 32.0;
-                    let avail_h = (ui.available_height() - 40.0).max(200.0);
-
-                    let mut img_w = avail_w;
-                    let mut img_h = img_w / aspect;
-                    if img_h > avail_h {
-                        img_h = avail_h;
-                        img_w = img_h * aspect;
-                    }
-
+                    let Vec2 { x: img_w, y: img_h } = column_image_size(ui, aspect, 1);
                     ui.vertical_centered(|ui| {
                         ui.label(
                             egui::RichText::new("Diff Overlay (Dimmed Base + Glowing Difference)")
@@ -236,16 +219,7 @@ impl DiffViewerState {
                     });
                 }
                 ImageDiffViewMode::MaskOnly => {
-                    let avail_w = ui.available_width() - 32.0;
-                    let avail_h = (ui.available_height() - 40.0).max(200.0);
-
-                    let mut img_w = avail_w;
-                    let mut img_h = img_w / aspect;
-                    if img_h > avail_h {
-                        img_h = avail_h;
-                        img_w = img_h * aspect;
-                    }
-
+                    let Vec2 { x: img_w, y: img_h } = column_image_size(ui, aspect, 1);
                     ui.vertical_centered(|ui| {
                         ui.label(
                             egui::RichText::new("Diff Mask (Dark Canvas + Glowing Difference)")
@@ -272,19 +246,9 @@ impl DiffViewerState {
                     });
                 }
                 ImageDiffViewMode::Split => {
-                    let avail_w = ui.available_width() - 32.0;
-                    let col_w = ((avail_w - 16.0) / 2.0).max(240.0);
-                    let avail_h = (ui.available_height() - 40.0).max(200.0);
-
-                    let mut img_w = col_w;
-                    let mut img_h = img_w / aspect;
-                    if img_h > avail_h {
-                        img_h = avail_h;
-                        img_w = img_h * aspect;
-                    }
-
-                    ui.horizontal(|ui| {
-                        ui.add_space(crate::ui_ext::SPACE_MD);
+                    let Vec2 { x: img_w, y: img_h } = column_image_size(ui, aspect, 2);
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = crate::ui_ext::SPACE_MD;
 
                         self.render_image_column(
                             ui,
@@ -296,8 +260,6 @@ impl DiffViewerState {
                             img_w,
                             img_h,
                         );
-
-                        ui.add_space(16.0);
 
                         let diff_sub = format!(
                             "{} diff pixels ({:.2}%)",
@@ -359,42 +321,48 @@ impl DiffViewerState {
         let f_low = crate::hex_to_c32(&palette.colors.text_muted);
         let surface = ui.visuals().panel_fill;
 
-        ui.vertical(|ui| {
-            ui.set_width(w);
-
-            // Column Header
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(title).strong().color(
-                    crate::ui_ext::contrast_text_c32_on(
-                        surface,
-                        surface,
-                        Some(title_color),
-                        palette,
-                    ),
-                ));
-                ui.label(
-                    egui::RichText::new(format!("• {}", subtitle))
-                        .size(BODY_FONT_SIZE)
-                        .color(f_low),
-                );
-            });
-
-            ui.add_space(crate::ui_ext::SPACE_XS);
-
-            // Image Frame Box
-            egui::Frame::NONE
-                .fill(b_low)
-                .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
-                .stroke(Stroke::new(1.0_f32, b_med))
-                .inner_margin(egui::Margin::same(2))
-                .show(ui, |ui| {
-                    if let Some(tex) = texture {
-                        ui.image(egui::load::SizedTexture::new(tex.id(), Vec2::new(w, h)));
-                    } else {
-                        ui.allocate_space(Vec2::new(w, h));
-                    }
+        ui.allocate_ui_with_layout(
+            Vec2::new(w + 6.0, 0.0),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                // Column Header
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(title).strong().color(
+                        crate::ui_ext::contrast_text_c32_on(
+                            surface,
+                            surface,
+                            Some(title_color),
+                            palette,
+                        ),
+                    ));
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(subtitle)
+                                .size(BODY_FONT_SIZE)
+                                .color(f_low),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(subtitle);
                 });
-        });
+
+                ui.add_space(crate::ui_ext::SPACE_XS);
+
+                // Image Frame Box
+                egui::Frame::NONE
+                    .fill(b_low)
+                    .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
+                    .stroke(Stroke::new(1.0_f32, b_med))
+                    .inner_margin(egui::Margin::same(2))
+                    .show(ui, |ui| {
+                        if let Some(tex) = texture {
+                            ui.image(egui::load::SizedTexture::new(tex.id(), Vec2::new(w, h)));
+                        } else {
+                            ui.allocate_space(Vec2::new(w, h));
+                        }
+                    });
+            },
+        );
     }
 
     pub(super) fn copy_image_diff_to_clipboard(&mut self) {
