@@ -556,14 +556,53 @@ impl FileManager {
 
     fn toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
         ui.horizontal(|ui| {
-            if nav_button(ui, Icon::ArrowLeft, "Back [Alt+Left]", self.index.is_some_and(|i| i > 0), palette) { self.history_step(false); }
-            if nav_button(ui, Icon::ArrowRight, "Forward [Alt+Right]", self.index.is_some_and(|i| i + 1 < self.history.len()), palette) { self.history_step(true); }
-            if nav_button(ui, Icon::ArrowUp, "Parent folder [Alt+Up]", self.path().parent().is_some(), palette) { self.parent(); }
+            if nav_button(
+                ui,
+                Icon::ArrowLeft,
+                "Back [Alt+Left]",
+                self.index.is_some_and(|i| i > 0),
+                palette,
+            ) {
+                self.history_step(false);
+            }
+            if nav_button(
+                ui,
+                Icon::ArrowRight,
+                "Forward [Alt+Right]",
+                self.index.is_some_and(|i| i + 1 < self.history.len()),
+                palette,
+            ) {
+                self.history_step(true);
+            }
+            if nav_button(
+                ui,
+                Icon::ArrowUp,
+                "Parent folder [Alt+Up]",
+                self.path().parent().is_some(),
+                palette,
+            ) {
+                self.parent();
+            }
             let address_width = (ui.available_width() - 235.0).max(80.0);
             self.address_ui(ui, address_width);
             self.index_ui(ui);
-            if nav_button(ui, Icon::Repeat, "Refresh [F5]", true, palette) { self.refresh(); }
-            if ui.add(clip_ui::buttons::ButtonRole::Secondary.button(if self.show_hidden { "Hidden: on" } else { "Hidden: off" }, palette)).on_hover_text("Show hidden files [Ctrl+H]").clicked() { self.toggle_hidden(); }
+            if nav_button(ui, Icon::Repeat, "Refresh [F5]", true, palette) {
+                self.refresh();
+            }
+            if ui
+                .add(clip_ui::buttons::ButtonRole::Secondary.button(
+                    if self.show_hidden {
+                        "Hidden: on"
+                    } else {
+                        "Hidden: off"
+                    },
+                    palette,
+                ))
+                .on_hover_text("Show hidden files [Ctrl+H]")
+                .clicked()
+            {
+                self.toggle_hidden();
+            }
         });
     }
 

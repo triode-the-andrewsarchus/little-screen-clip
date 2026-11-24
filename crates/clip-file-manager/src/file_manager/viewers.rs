@@ -39,6 +39,7 @@ enum Loaded {
     Minecraft(Box<super::minecraft::Viewer>),
     Toolpath(super::gcode::Viewer),
     Embroidery(Box<super::embroidery::Viewer>),
+    Eda(Box<super::eda::Viewer>),
     VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(Box<super::multisample::Viewer>),
     Image(DecodedImageData, FileSource),
@@ -70,6 +71,7 @@ enum ViewerSession {
     Minecraft(Box<super::minecraft::Viewer>),
     Toolpath(super::gcode::Viewer),
     Embroidery(Box<super::embroidery::Viewer>),
+    Eda(Box<super::eda::Viewer>),
     VcvPatch(Box<super::vcv_strip::Viewer>),
     Multisample(super::multisample::Viewer),
     Image(Box<ImagePreviewState>),
@@ -424,6 +426,7 @@ impl Viewers {
                 | ViewerSession::Minecraft(_)
                 | ViewerSession::Toolpath(_)
                 | ViewerSession::Embroidery(_)
+                | ViewerSession::Eda(_)
                 | ViewerSession::Sheet(_),
             )
             | None => {}
@@ -825,6 +828,9 @@ fn load(
         Kind::Document(Format::Embroidery) => super::embroidery::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Embroidery),
+        Kind::Document(Format::Eda) => super::eda::Viewer::load(path, cancelled)
+            .map(Box::new)
+            .map(Loaded::Eda),
         Kind::Document(Format::Toolpath) => super::gcode::Viewer::load(path).map(Loaded::Toolpath),
         Kind::Document(Format::VcvPatch) => super::vcv_strip::Viewer::load(path, cancelled)
             .map(|viewer| Loaded::VcvPatch(Box::new(viewer))),
@@ -909,6 +915,12 @@ fn identify_special_file(
         return super::geography::Viewer::from_trajectory(trajectory)
             .map(|viewer| Some(Loaded::Geography(Box::new(viewer))));
     }
+    if super::eda::is_gerber_gbr_file(path) {
+        return super::eda::Viewer::load(path, cancelled)
+            .map(Box::new)
+            .map(Loaded::Eda)
+            .map(Some);
+    }
     Ok(None)
 }
 
@@ -931,6 +943,7 @@ fn session(
         Loaded::Book(viewer) => ViewerSession::Book(viewer),
         Loaded::Multisample(viewer) => ViewerSession::Multisample(*viewer),
         Loaded::Embroidery(viewer) => ViewerSession::Embroidery(viewer),
+        Loaded::Eda(viewer) => ViewerSession::Eda(viewer),
         Loaded::Toolpath(viewer) => ViewerSession::Toolpath(viewer),
         Loaded::VcvPatch(viewer) => ViewerSession::VcvPatch(viewer),
         Loaded::Geography(viewer) => ViewerSession::Geography(*viewer),
@@ -1014,6 +1027,7 @@ fn render(
         ViewerSession::Book(state) => state.ui(ui, close, palette),
         ViewerSession::Multisample(state) => state.ui(ui, close, palette),
         ViewerSession::Embroidery(state) => state.ui(ui, close, palette),
+        ViewerSession::Eda(state) => state.ui(ui, close, palette),
         ViewerSession::Toolpath(state) => state.ui(ui, close, palette),
         ViewerSession::VcvPatch(state) => state.ui(ui, close, palette),
         ViewerSession::Geography(state) => state.ui(ui, close, palette),
@@ -1113,6 +1127,12 @@ mod tests {
             ("missing.VCV", Format::VcvPatch),
             ("missing.VCVSS", Format::VcvPatch),
             ("missing.OTF", Format::Font),
+            ("missing.GER", Format::Eda),
+            ("missing.DRL", Format::Eda),
+            ("missing.XLN", Format::Eda),
+            ("missing.POS", Format::Eda),
+            ("missing.PLT", Format::Eda),
+            ("missing.HPGL", Format::Eda),
         ] {
             let path = Path::new(name);
             assert_eq!(Format::for_path(path), Some(format));

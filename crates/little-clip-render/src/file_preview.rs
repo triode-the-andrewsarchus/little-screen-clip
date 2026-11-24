@@ -49,6 +49,7 @@ enum Kind {
     Midi,
     Brush,
     Embroidery,
+    Eda,
     Geography,
     Trajectory,
     Text,
@@ -280,6 +281,8 @@ fn file_kind(path: &Path, documents: bool, extension: Option<&str>) -> Option<Ki
         Kind::Geography
     } else if Format::for_path(path) == Some(Format::Embroidery) {
         Kind::Embroidery
+    } else if Format::for_path(path) == Some(Format::Eda) {
+        Kind::Eda
     } else if spreadsheet::is_spreadsheet_file(path) {
         Kind::Spreadsheet
     } else if extension.is_some_and(|value| {
@@ -316,6 +319,16 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
                 thumbnail,
             }))
         }
+        Kind::Eda => {
+            let cancelled = AtomicBool::new(false);
+            let thumbnail =
+                little_clip_core::eda::render_thumbnail(path, [320, 220], &cancelled).ok()?;
+            Some(Preview::Page(Page {
+                width: 0,
+                height: 0,
+                thumbnail,
+            }))
+        }
         Kind::Pdf | Kind::Office => load_page(path, kind == Kind::Office).map(Preview::Page),
         Kind::Spreadsheet => {
             let data = spreadsheet::load_spreadsheet_preview(
@@ -342,6 +355,16 @@ fn load(path: &Path, kind: Kind, extension: Option<&str>) -> Option<Preview> {
         }
         Kind::Brush => {
             let cancelled = std::sync::atomic::AtomicBool::new(false);
+            if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("gbr"))
+                && let Ok(thumbnail) =
+                    little_clip_core::eda::render_thumbnail(path, [320, 220], &cancelled)
+            {
+                return Some(Preview::Page(Page {
+                    width: 0,
+                    height: 0,
+                    thumbnail,
+                }));
+            }
             little_clip_core::brushes::load_brush_library(path, 6, &cancelled)
                 .ok()
                 .map(Preview::Brush)

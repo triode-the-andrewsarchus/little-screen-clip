@@ -452,6 +452,9 @@ impl EntryPreviews {
         } else if entry.document_format() == Some(super::document_format::Format::Embroidery) {
             super::embroidery::show_strip(ui, row, entry, columns, self.listing(entry), colors);
             None
+        } else if entry.is_eda() {
+            super::eda::show_list(ui, row, entry, Some(columns), self.listing(entry), colors);
+            None
         } else if entry.is_toolpath() {
             super::gcode::show_list(ui, row, entry, columns, self.listing(entry), colors)
                 .map(super::DocumentPosition::ToolpathLine)
@@ -535,8 +538,13 @@ impl EntryPreviews {
         } else if entry.is_blend() {
             super::blend_preview::show(ui, row, entry, columns, self.cache.get(id), colors);
         } else if entry.is_brush() {
-            self.brushes
-                .show(ui, row, entry, columns, id, self.cache.get(id), colors);
+            let ready = self.cache.get(id);
+            if ready.is_some_and(|r| r.data.eda.is_some()) {
+                super::eda::show_list(ui, row, entry, columns, ready, colors);
+            } else {
+                self.brushes
+                    .show(ui, row, entry, columns, id, ready, colors);
+            }
         } else if entry.is_material() {
             self.materials
                 .show(ui, row, entry, columns, id, self.cache.get(id), colors);

@@ -590,3 +590,61 @@ fn embroidery_cards_render_embedded_thread_colors_and_follow_replacements() {
     std::fs::rename(replacement, path).unwrap();
     assert!(renderer.file_preview(&item).is_none());
 }
+
+#[test]
+fn eda_cards_render_stage1_pcb_files_and_preserve_gimp_brushes() {
+    let dir = tempfile::tempdir().unwrap();
+    let gerber_path = dir.path().join("top-F_Cu.gbr");
+    std::fs::write(
+        &gerber_path,
+        "%TF.FileFunction,Copper,L1,Top*%\n%MOMM*%\n%FSLAX46Y46*%\n%ADD10C,0.500000*%\nD10*\nX0Y0D02*\nX10000000Y10000000D01*\nM02*\n",
+    )
+    .unwrap();
+    let drl_path = dir.path().join("holes.drl");
+    std::fs::write(
+        &drl_path,
+        "M48\nMETRIC,TZ\nT1C1.000\n%\nT1\nX10.0Y10.0\nM30\n",
+    )
+    .unwrap();
+    let pos_path = dir.path().join("board.pos");
+    std::fs::write(
+        &pos_path,
+        "Ref,Val,Package,PosX,PosY,Rot,Side\nU1,MCU,QFN-32,12.5,8.0,90.0,top\n",
+    )
+    .unwrap();
+    let plt_path = dir.path().join("outline.plt");
+    std::fs::write(&plt_path, "IN;SP1;PU0,0;PD1000,0,1000,1000,0,1000,0,0;").unwrap();
+
+    let mut gimp = Vec::new();
+    gimp.extend_from_slice(&34_u32.to_be_bytes());
+    gimp.extend_from_slice(&2_u32.to_be_bytes());
+    gimp.extend_from_slice(&4_u32.to_be_bytes());
+    gimp.extend_from_slice(&4_u32.to_be_bytes());
+    gimp.extend_from_slice(&1_u32.to_be_bytes());
+    gimp.extend_from_slice(b"GIMP");
+    gimp.extend_from_slice(&20_u32.to_be_bytes());
+    gimp.extend_from_slice(b"Tip\0\0\0");
+    gimp.extend_from_slice(&[240_u8; 16]);
+    let brush_path = dir.path().join("stamp.gbr");
+    std::fs::write(&brush_path, gimp).unwrap();
+
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    for eda_path in [&gerber_path, &drl_path, &pos_path, &plt_path] {
+        let item = ClipItem::from_single_file(eda_path);
+        let preview = renderer
+            .file_preview(&item)
+            .unwrap_or_else(|| panic!("missing preview for {}", eda_path.display()));
+        assert!(matches!(
+            preview.as_ref(),
+            Preview::Page(page) if page.width == 0 && page.height == 0
+        ));
+        let mut state = SlotManager::default();
+        state.push_left(item);
+        let image = renderer.render_pixmap(&state).unwrap();
+        assert!(image.pixels().iter().any(|p| p.alpha() > 0));
+    }
+
+    let brush_item = ClipItem::from_single_file(&brush_path);
+    let brush_preview = renderer.file_preview(&brush_item).expect("gimp brush card");
+    assert!(matches!(brush_preview.as_ref(), Preview::Brush(_)));
+}
