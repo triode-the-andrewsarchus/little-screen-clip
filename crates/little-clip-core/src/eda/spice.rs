@@ -360,19 +360,23 @@ impl SpiceRawDocument {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct LtspicePane {
-    pub index: usize,
     pub log_x: bool,
     pub log_y: bool,
     pub traces: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct LtspiceSection {
+    pub analysis: String,
+    pub panes: Vec<LtspicePane>,
+}
+
 /// Decoded LTspice `.plt` plot settings document.
 #[derive(Clone, Debug)]
 pub struct LtspicePlotDocument {
-    pub analysis: String,
-    pub panes: Vec<LtspicePane>,
+    pub sections: Vec<LtspiceSection>,
     pub trace_count: usize,
     pub source_excerpt: String,
 }
@@ -381,85 +385,84 @@ impl LtspicePlotDocument {
     pub fn parse(bytes: &[u8], cancelled: &AtomicBool) -> Result<Self, String> {
         check_cancelled(cancelled, "LTspice .plt parse cancelled")?;
         let text = decode_spice_text(bytes);
-        let mut analysis = "LTspice Plot Settings".to_string();
-        let mut pane_traces: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-        let mut pane_logs: BTreeMap<usize, (bool, bool)> = BTreeMap::new();
-        let mut current_pane = 0_usize;
-        let mut next_pane = 0_usize;
+        let mut sections = Vec::new();
         let mut brace_depth = 0_usize;
 
-        for raw in text.lines().take(4096) {
+        for (index, raw) in text.lines().enumerate() {
+            if index >= 4096 {
+                return Err("LTspice plot settings exceed the preview line limit".into());
+            }
+            if index.is_multiple_of(512) {
+                check_cancelled(cancelled, "LTspice .plt parse cancelled")?;
+            }
             let line = raw.trim();
-            if line.starts_with('[') && line.ends_with(']') {
-                analysis = line.trim_matches(['[', ']']).to_string();
+            if let Some(analysis) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                sections.push(LtspiceSection {
+                    analysis: analysis.to_owned(),
+                    panes: Vec::new(),
+                });
                 brace_depth = 0;
                 continue;
             }
+            let Some(section) = sections.last_mut() else {
+                continue;
+            };
             if line.starts_with('{') && brace_depth == 1 {
-                current_pane = next_pane;
-                next_pane += 1;
-                pane_traces.entry(current_pane).or_default();
-            }
-            if let Some(rest) = strip_key_eq_or_colon(line, "log") {
-                let vals: Vec<i32> = rest
-                    .split_whitespace()
-                    .filter_map(|t| t.parse::<i32>().ok())
-                    .collect();
-                let lx = vals.first().copied().unwrap_or(0) != 0;
-                let ly = vals.get(1).copied().unwrap_or(0) != 0;
-                pane_logs.insert(current_pane, (lx, ly));
-            } else if let Some(rest) = strip_key_eq_or_colon(line, "traces") {
-                let list = extract_quoted_or_csv_traces(rest);
-                pane_traces.entry(current_pane).or_default().extend(list);
-            } else if line.starts_with('{')
-                && let Some(pane) = extract_ltspice_pane(line)
+                section
+                    .panes
+                    .push(extract_ltspice_pane(line).unwrap_or_default());
+            } else if brace_depth >= 2
+                && let Some(pane) = section.panes.last_mut()
             {
-                pane_traces
-                    .entry(current_pane)
-                    .or_default()
-                    .extend(pane.traces);
-                pane_logs
-                    .entry(current_pane)
-                    .or_insert((pane.log_x, pane.log_y));
+                apply_pane_line(pane, line);
             }
             brace_depth = advance_brace_depth(brace_depth, line);
         }
 
-        let panes: Vec<LtspicePane> = pane_traces
-            .into_iter()
-            .map(|(index, traces)| {
-                let (log_x, log_y) = pane_logs.get(&index).copied().unwrap_or((false, false));
-                LtspicePane {
-                    index,
-                    log_x,
-                    log_y,
-                    traces,
-                }
-            })
-            .collect();
-        let trace_count: usize = panes.iter().map(|p| p.traces.len()).sum();
+        if sections.is_empty() {
+            return Err("No LTspice plot analysis sections found".into());
+        }
+        let trace_count = sections
+            .iter()
+            .flat_map(|section| &section.panes)
+            .map(|pane| pane.traces.len())
+            .sum();
 
         Ok(Self {
-            analysis,
-            panes,
+            sections,
             trace_count,
             source_excerpt: bounded_source_excerpt(&text),
         })
     }
 
+    pub fn pane_count(&self) -> usize {
+        self.sections
+            .iter()
+            .map(|section| section.panes.len())
+            .sum()
+    }
+
+    fn analysis_label(&self) -> String {
+        match self.sections.as_slice() {
+            [section] => section.analysis.clone(),
+            sections => format!("{} analyses", sections.len()),
+        }
+    }
+
     pub fn summary_line(&self) -> String {
         format!(
             "LTspice Plot · {} · {} panes · {} traces",
-            self.analysis,
-            self.panes.len(),
+            self.analysis_label(),
+            self.pane_count(),
             self.trace_count
         )
     }
 
     pub fn strip_summary(&self) -> StripSummary {
         let preview_traces: Vec<&str> = self
-            .panes
+            .sections
             .iter()
+            .flat_map(|section| &section.panes)
             .flat_map(|p| p.traces.iter().map(String::as_str))
             .take(4)
             .collect();
@@ -470,10 +473,10 @@ impl LtspicePlotDocument {
         };
         StripSummary {
             format: super::EdaFormat::LtspicePlot,
-            headline: format!("LTspice Plot · {}", self.analysis),
+            headline: format!("LTspice Plot · {}", self.analysis_label()),
             specs: format!(
                 "{} panes · {} traces · {list}",
-                self.panes.len(),
+                self.pane_count(),
                 self.trace_count
             ),
             detail: self.summary_line(),
@@ -1208,7 +1211,7 @@ fn reduce_dune_columns<T: Copy>(
 }
 
 fn advance_brace_depth(mut depth: usize, line: &str) -> usize {
-    for ch in line.chars() {
+    for ch in line.split('"').step_by(2).flat_map(str::chars) {
         match ch {
             '{' => depth = depth.saturating_add(1),
             '}' => depth = depth.saturating_sub(1),
@@ -1701,11 +1704,22 @@ fn extract_ltspice_pane(line: &str) -> Option<LtspicePane> {
     let log_x = lower.contains("log_x: 1") || lower.contains("log: 1");
     let log_y = lower.contains("log_y: 1");
     (!traces.is_empty()).then_some(LtspicePane {
-        index: 0,
         log_x,
         log_y,
         traces,
     })
+}
+
+fn apply_pane_line(pane: &mut LtspicePane, line: &str) {
+    if let Some(rest) = strip_key_eq_or_colon(line, "log") {
+        let mut flags = rest
+            .split_whitespace()
+            .map(|token| token.parse::<i32>().is_ok_and(|flag| flag != 0));
+        pane.log_x = flags.next().unwrap_or(false);
+        pane.log_y = flags.next().unwrap_or(false);
+    } else if let Some(rest) = strip_key_eq_or_colon(line, "traces") {
+        pane.traces.extend(extract_quoted_or_csv_traces(rest));
+    }
 }
 
 fn extract_quoted_or_csv_traces(raw: &str) -> Vec<String> {
@@ -1736,9 +1750,16 @@ fn extract_quoted_or_csv_traces(raw: &str) -> Vec<String> {
 fn draw_ltspice_plt_panes(pixmap: &mut Pixmap, doc: &LtspicePlotDocument) {
     let w = pixmap.width() as f32;
     let h = pixmap.height() as f32;
-    let panes = doc.panes.len().min(4);
-    for (index, pane) in doc.panes.iter().take(panes).enumerate() {
-        let height = h / panes as f32;
+    let Some(section) = doc
+        .sections
+        .iter()
+        .find(|section| !section.panes.is_empty())
+    else {
+        return;
+    };
+    let count = section.panes.len().min(4);
+    for (index, pane) in section.panes.iter().take(count).enumerate() {
+        let height = h / count as f32;
         let top = index as f32 * height;
         let mut paint = Paint::default();
         paint.set_color_rgba8(38, 46, 58, 255);
@@ -2170,11 +2191,41 @@ Binary:
         assert!(looks_like_ltspice_plt(lt_plt.as_bytes()));
         let cancel = AtomicBool::new(false);
         let doc = LtspicePlotDocument::parse(lt_plt.as_bytes(), &cancel).unwrap();
-        assert_eq!(doc.analysis, "Transient Analysis");
-        assert_eq!(doc.panes.len(), 2);
+        assert_eq!(doc.sections[0].analysis, "Transient Analysis");
+        assert_eq!(doc.pane_count(), 2);
         assert_eq!(doc.trace_count, 3);
 
         let hpgl = "IN;SP1;PU0,0;PD1000,0,1000,1000;LB[AC Analysis]\x03;SP0;";
         assert!(!looks_like_ltspice_plt(hpgl.as_bytes()));
+    }
+
+    #[test]
+    fn ltspice_settings_keep_panes_under_their_own_analysis() {
+        let source = br#"[Transient Analysis]
+{
+  Npanes: 1
+  {
+    traces: 1 { (1,0,"V(out)") }
+    Log: 0 0 0
+  }
+}
+[AC Analysis]
+{
+  Npanes: 1
+  {
+    traces: 2 { (1,0,"V(gain)") (2,0,"I(V1)") }
+    Log: 1 1 0
+  }
+}"#;
+        let doc = LtspicePlotDocument::parse(source, &AtomicBool::new(false)).unwrap();
+        assert_eq!(doc.pane_count(), 2);
+        assert_eq!(doc.trace_count, 3);
+        assert_eq!(doc.sections[0].analysis, "Transient Analysis");
+        assert_eq!(doc.sections[0].panes[0].traces, ["V(out)"]);
+        assert!(!doc.sections[0].panes[0].log_x);
+        assert_eq!(doc.sections[1].analysis, "AC Analysis");
+        assert_eq!(doc.sections[1].panes[0].traces, ["V(gain)", "I(V1)"]);
+        assert!(doc.sections[1].panes[0].log_x);
+        assert!(doc.summary_line().contains("2 analyses"));
     }
 }

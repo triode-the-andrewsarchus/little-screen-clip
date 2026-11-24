@@ -165,22 +165,24 @@ pub(super) fn render_raw_details(ui: &mut Ui, raw: &SpiceRawDocument, state: &mu
 pub(super) fn render_plt_details(ui: &mut Ui, plt: &LtspicePlotDocument) {
     ui.strong("LTspice Plot Settings");
     ui.label("Waveform samples are stored in the .raw file.");
-    ui.label(format!("Analysis: {}", plt.analysis));
     ui.label(format!(
         "Panes: {} · Traces: {}",
-        plt.panes.len(),
+        plt.pane_count(),
         plt.trace_count
     ));
-    for (idx, pane) in plt.panes.iter().enumerate() {
+    for section in &plt.sections {
         ui.separator();
-        ui.strong(format!(
-            "Pane {} (log X: {}, log Y: {})",
-            idx + 1,
-            pane.log_x,
-            pane.log_y
-        ));
-        for tr in &pane.traces {
-            ui.label(tr);
+        ui.strong(&section.analysis);
+        for (idx, pane) in section.panes.iter().enumerate() {
+            ui.label(format!(
+                "Pane {} (log X: {}, log Y: {})",
+                idx + 1,
+                pane.log_x,
+                pane.log_y
+            ));
+            for tr in &pane.traces {
+                ui.label(tr);
+            }
         }
     }
 }
