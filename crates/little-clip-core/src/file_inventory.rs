@@ -307,7 +307,8 @@ fn format_hint(path: &Path, cancelled: &AtomicBool) -> Option<FormatHint> {
             sigmf_pair_revision: crate::engineering::iq::pair_revision(path, cancelled).ok(),
         });
     }
-    let format = file_format::recognize_engineering(path, cancelled)?;
+    let format = file_format::recognize_engineering(path, cancelled)
+        .or_else(|| crate::eda::ltspice::is_schematic_path(path).then_some(Format::Eda))?;
     Some(FormatHint {
         format,
         sigmf_pair_revision: None,

@@ -1,7 +1,6 @@
 //! EDA / PCB fabrication, Excellon drill, centroid, HPGL, and KiCad strips and viewers.
 
 mod kicad;
-use little_clip_core::eda::RasterRegion;
 mod spice;
 
 use super::{
@@ -19,7 +18,7 @@ use crate::{
 use clip_ui::buttons::ButtonRole;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, TextureHandle, Vec2, pos2, vec2};
 use little_clip_core::eda::{
-    Document, EdaFormat, StripSummary,
+    Document, EdaFormat, RasterRegion, StripSummary,
     gerber::GerberDocument,
     hpgl::{HpglDocument, pen_rgb},
     kicad::PcbLayerBucket,
@@ -56,7 +55,7 @@ pub(super) fn icon_for_format(format: EdaFormat) -> Icon {
         EdaFormat::KicadSchematic | EdaFormat::KicadSymbolLib => Icon::NodeTree,
         EdaFormat::KicadProject | EdaFormat::SpiceNetlist => Icon::Code,
         EdaFormat::SpiceRaw => Icon::Waves,
-        EdaFormat::LtspicePlot => Icon::Zap,
+        EdaFormat::LtspicePlot | EdaFormat::LtspiceSchematic => Icon::Zap,
     }
 }
 
@@ -376,6 +375,18 @@ fn render_left_panel(
         Document::SpiceNetlist(net) => spice::render_netlist_details(ui, net, state),
         Document::SpiceRaw(raw) => spice::render_raw_details(ui, raw, state),
         Document::LtspicePlot(plt) => spice::render_plt_details(ui, plt),
+        Document::LtspiceSchematic(sch) => {
+            ui.label(sch.summary_line());
+            if !sch.unresolved.is_empty() {
+                ui.strong("Unresolved local symbol definitions");
+                for name in &sch.unresolved {
+                    ui.label(name);
+                }
+            }
+            if sch.limited {
+                ui.label("Drawing reached the preview limits.");
+            }
+        }
     };
     if matches!(doc, Document::PickAndPlace(_)) {
         render(ui);
@@ -409,7 +420,10 @@ fn paint_canvas_document(
             paint_pick_place_canvas(ui, rect, response, pos_doc, state, colors)
         }
         Document::Hpgl(hpgl) => paint_hpgl_canvas(ui, rect, response, hpgl, state, colors),
-        Document::KicadPcb(_) | Document::KicadSchematic(_) | Document::KicadFootprint(_) => {
+        Document::KicadPcb(_)
+        | Document::KicadSchematic(_)
+        | Document::KicadFootprint(_)
+        | Document::LtspiceSchematic(_) => {
             paint_raster_canvas(ui, rect, detail_geometry(doc), state)
         }
         Document::KicadSymbolLib(_) | Document::GerberJob(_) | Document::LtspicePlot(_) => {
@@ -423,11 +437,16 @@ fn paint_canvas_document(
     };
 
     let zoom_pct = (state.zoom * 100.0).round() as i32;
+    let units = if matches!(doc, Document::LtspiceSchematic(_)) {
+        "sheet units"
+    } else {
+        "mm"
+    };
     raw_readout.unwrap_or_else(|| {
         cursor_mm
             .map(|[x, y]| {
                 format!(
-                    "Cursor {x:.3}, {y:.3} mm · {zoom_pct}% · drag to pan · scroll to zoom · double-click to fit"
+                    "Cursor {x:.3}, {y:.3} {units} · {zoom_pct}% · drag to pan · scroll to zoom · double-click to fit"
                 )
             })
             .unwrap_or_else(|| {
@@ -575,7 +594,9 @@ impl RasterRequest {
             Document::KicadPcb(_) => Self::Pcb(state.pcb_layers.clone()),
             Document::KicadSymbolLib(_) => Self::Symbol(state.selected_symbol, state.selected_unit),
             Document::Gerber(_) | Document::KicadFootprint(_) => Self::Fixed([1024, 1024]),
-            Document::KicadSchematic(_) => Self::Fixed([1400, 1000]),
+            Document::KicadSchematic(_) | Document::LtspiceSchematic(_) => {
+                Self::Fixed([1400, 1000])
+            }
             Document::GerberJob(_) => Self::Fixed([1024, 700]),
             Document::LtspicePlot(_) => Self::Fixed([1024, 520]),
             _ => return None,
@@ -606,6 +627,9 @@ impl RasterRequest {
             }
             (Self::Detail(region, None), Document::KicadFootprint(fp)) => {
                 fp.render_region(region, cancelled)
+            }
+            (Self::Detail(region, None), Document::LtspiceSchematic(sch)) => {
+                sch.render_region(region, cancelled)
             }
             _ => return Err("Invalid EDA raster request".into()),
         }?;
@@ -803,6 +827,7 @@ impl<'a> RasterView<'a> {
 
 fn detail_geometry(doc: &Document) -> Option<([f64; 4], bool)> {
     match doc {
+        Document::LtspiceSchematic(sch) => Some((sch.bounds, true)),
         Document::KicadPcb(pcb) => Some((pcb.bounds_mm, true)),
         Document::KicadFootprint(fp) => Some((fp.bounds_mm, true)),
         Document::KicadSchematic(sch) => Some((
@@ -1387,6 +1412,7 @@ fn source_text_for(doc: &Document) -> &str {
         Document::SpiceNetlist(n) => &n.source_excerpt,
         Document::SpiceRaw(_) => "",
         Document::LtspicePlot(p) => &p.source_excerpt,
+        Document::LtspiceSchematic(sch) => &sch.source_excerpt,
     }
 }
 

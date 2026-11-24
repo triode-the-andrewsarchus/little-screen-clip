@@ -997,6 +997,7 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
     } else if super::super::document_format::Format::for_path(path)
         == Some(super::super::document_format::Format::Eda)
         || super::super::eda::is_spice_raw_file(path)
+        || little_clip_core::eda::ltspice::is_schematic_path(path)
     {
         let loaded = super::super::eda::load(path, &AtomicBool::new(false));
         data.icon = loaded.icon;

@@ -6738,6 +6738,7 @@ dependencies = [
  "dune-netlist",
  "dune-raw",
  "eda-view",
+ "encoding_rs",
  "excalidraw-document",
  "fearless_simd 1.2.0",
  "fearless_simd_macros",

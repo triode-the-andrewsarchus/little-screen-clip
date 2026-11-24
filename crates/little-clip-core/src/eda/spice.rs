@@ -594,6 +594,21 @@ fn looks_like_camera_raw_magic(bytes: &[u8]) -> bool {
     bytes.len() >= 12 && &bytes[4..8] == b"ftyp"
 }
 
+pub(super) fn decode_ltspice_drawing(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xff, 0xfe])
+        || bytes.starts_with(&[0xfe, 0xff])
+        || bytes.starts_with(&[0xef, 0xbb, 0xbf])
+        || is_likely_utf16_le(bytes)
+    {
+        decode_spice_text(bytes)
+    } else {
+        encoding_rs::WINDOWS_1252
+            .decode_without_bom_handling(bytes)
+            .0
+            .into_owned()
+    }
+}
+
 fn decode_spice_text(bytes: &[u8]) -> String {
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
         return decode_utf16_le(rest);

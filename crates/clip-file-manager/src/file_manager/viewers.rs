@@ -1183,7 +1183,10 @@ fn identify_special_file(
         return super::geography::Viewer::from_trajectory(trajectory)
             .map(|viewer| Some(Loaded::Geography(Box::new(viewer))));
     }
-    if super::eda::is_gerber_gbr_file(path) || super::eda::is_spice_raw_file(path) {
+    if super::eda::is_gerber_gbr_file(path)
+        || super::eda::is_spice_raw_file(path)
+        || little_clip_core::eda::ltspice::is_schematic_path(path)
+    {
         return super::eda::Viewer::load(path, cancelled)
             .map(Box::new)
             .map(Loaded::Eda)

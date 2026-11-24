@@ -3,6 +3,7 @@
 pub mod gerber;
 pub mod hpgl;
 pub mod kicad;
+pub mod ltspice;
 pub mod pick_place;
 mod region;
 pub use region::RasterRegion;
@@ -36,6 +37,7 @@ pub enum EdaFormat {
     SpiceNetlist,
     SpiceRaw,
     LtspicePlot,
+    LtspiceSchematic,
 }
 
 const UNIFIED_EXT_MAP: &[(&str, EdaFormat)] = &[
@@ -79,6 +81,7 @@ impl EdaFormat {
             Self::SpiceNetlist => "SPICE Netlist",
             Self::SpiceRaw => "SPICE Waveforms",
             Self::LtspicePlot => "LTspice Plot Settings",
+            Self::LtspiceSchematic => "LTspice Schematic",
         }
     }
 
@@ -109,6 +112,7 @@ pub enum Document {
     SpiceNetlist(Box<spice::SpiceNetlistDocument>),
     SpiceRaw(Box<spice::SpiceRawDocument>),
     LtspicePlot(Box<spice::LtspicePlotDocument>),
+    LtspiceSchematic(Box<ltspice::Schematic>),
 }
 
 impl Document {
@@ -127,6 +131,7 @@ impl Document {
             Self::SpiceNetlist(_) => EdaFormat::SpiceNetlist,
             Self::SpiceRaw(_) => EdaFormat::SpiceRaw,
             Self::LtspicePlot(_) => EdaFormat::LtspicePlot,
+            Self::LtspiceSchematic(_) => EdaFormat::LtspiceSchematic,
         }
     }
 
@@ -145,6 +150,7 @@ impl Document {
             Self::SpiceNetlist(doc) => doc.summary_line(),
             Self::SpiceRaw(doc) => doc.summary_line(),
             Self::LtspicePlot(doc) => doc.summary_line(),
+            Self::LtspiceSchematic(doc) => doc.summary_line(),
         }
     }
 
@@ -167,6 +173,7 @@ impl Document {
             Self::SpiceNetlist(doc) => doc.render_thumbnail(max_size, cancelled),
             Self::SpiceRaw(doc) => doc.render_thumbnail(max_size, cancelled),
             Self::LtspicePlot(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::LtspiceSchematic(doc) => doc.render_thumbnail(max_size, cancelled),
         }
     }
 
@@ -187,6 +194,7 @@ impl Document {
             Self::SpiceNetlist(doc) => doc.strip_summary(),
             Self::SpiceRaw(doc) => doc.strip_summary(),
             Self::LtspicePlot(doc) => doc.strip_summary(),
+            Self::LtspiceSchematic(doc) => doc.strip_summary(),
         }
     }
 }
@@ -318,7 +326,7 @@ pub fn read_document_with_source(
     let (bytes, source) =
         read_file_snapshot_with_source(path, MAX_BYTES).map_err(|error| error.to_string())?;
     check_cancelled(cancelled, "EDA read cancelled")?;
-    let doc = parse_bytes(path, &bytes, cancelled)?;
+    let doc = parse_with_companions(path, &bytes, source.path().parent(), cancelled)?;
     source.check()?;
     check_cancelled(cancelled, "EDA read cancelled")?;
     Ok((doc, source))
@@ -326,6 +334,15 @@ pub fn read_document_with_source(
 
 /// Parses an in-memory buffer according to path extension and content disambiguation.
 pub fn parse_bytes(path: &Path, bytes: &[u8], cancelled: &AtomicBool) -> Result<Document, String> {
+    parse_with_companions(path, bytes, None, cancelled)
+}
+
+fn parse_with_companions(
+    path: &Path,
+    bytes: &[u8],
+    companion_dir: Option<&Path>,
+    cancelled: &AtomicBool,
+) -> Result<Document, String> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -357,6 +374,8 @@ pub fn parse_bytes(path: &Path, bytes: &[u8], cancelled: &AtomicBool) -> Result<
         "hpgl" => hpgl::HpglDocument::parse(bytes, cancelled).map(Document::Hpgl),
         "cir" | "sp" | "spice" => spice::SpiceNetlistDocument::parse(path, bytes, cancelled)
             .map(|doc| Document::SpiceNetlist(Box::new(doc))),
+        "asc" => ltspice::Schematic::parse(bytes, companion_dir, cancelled)
+            .map(|doc| Document::LtspiceSchematic(Box::new(doc))),
         "raw" => spice::SpiceRawDocument::parse(bytes, cancelled)
             .map(|doc| Document::SpiceRaw(Box::new(doc))),
         ext @ ("kicad_pcb" | "kicad_mod" | "kicad_sch" | "kicad_sym" | "kicad_pro" | "gbrjob") => {
