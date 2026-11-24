@@ -29,12 +29,7 @@ pub(super) struct Analysis {
 
 pub(super) fn load(path: &Path, revision: u64, cancelled: &AtomicBool) -> PreviewData {
     if super::eda::is_spice_raw_file(path) {
-        return super::filesystem::check_revision(path, revision)
-            .and_then(|()| {
-                let preview = super::eda::load(path, cancelled);
-                super::filesystem::check_revision(path, revision).map(|()| preview)
-            })
-            .unwrap_or_else(|error| PreviewData::new(String::new(), error, Icon::Waves));
+        return super::eda::load_listing(path, revision, cancelled);
     }
     let mut data = PreviewData::new(
         super::display_path(path),

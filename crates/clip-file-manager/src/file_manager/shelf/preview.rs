@@ -64,7 +64,7 @@ pub(in crate::file_manager) enum Source {
     Toolpath(PathBuf),
     Engineering(super::super::document_format::Format, PathBuf),
     Embroidery(PathBuf),
-    Eda(PathBuf),
+    Eda(PathBuf, u64),
     VcvPatch(PathBuf),
     VcvRaster(super::super::vcv_strip::RasterRequest),
     Multisample(PathBuf),
@@ -171,7 +171,7 @@ impl Source {
             Format::VcvPatch => Source::VcvPatch(path),
             Format::Multisample => Source::Multisample(path),
             Format::Subtitle => Source::Subtitle(path),
-            Format::Eda => Source::Eda(path),
+            Format::Eda => Source::Eda(path, revision),
             format => Source::Engineering(format, path),
         }
     }
@@ -208,7 +208,7 @@ impl Source {
             | Self::Toolpath(_)
             | Self::Engineering(..)
             | Self::Embroidery(_)
-            | Self::Eda(_)
+            | Self::Eda(..)
             | Self::Multisample(_)
             | Self::Mail(_)
             | Self::FontRaster { .. }
@@ -333,7 +333,7 @@ impl Source {
             Source::Multisample(path) => super::super::multisample::load(&path, token),
             Source::Toolpath(path) => super::super::gcode::load(&path, token),
             Source::Embroidery(path) => super::super::embroidery::load_strip(&path, token),
-            Source::Eda(path) => super::super::eda::load(&path, token),
+            Source::Eda(path, revision) => super::super::eda::load_listing(&path, revision, token),
             Source::VcvPatch(path) => super::super::vcv_strip::load(&path, token),
             Source::VcvRaster(request) => request.load(token),
             Source::Minecraft(path, revision) => {

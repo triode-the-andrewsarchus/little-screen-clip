@@ -53,6 +53,16 @@ pub(super) fn icon_for_format(format: EdaFormat) -> Icon {
     }
 }
 
+pub(super) fn load_listing(path: &Path, revision: u64, token: &AtomicBool) -> PreviewData {
+    let check = || super::filesystem::check_revision(path, revision);
+    check()
+        .and_then(|()| {
+            let preview = load(path, token);
+            check().map(|()| preview)
+        })
+        .unwrap_or_else(|error| PreviewData::new(String::new(), error, Icon::Alert))
+}
+
 pub(super) fn load(path: &Path, token: &AtomicBool) -> PreviewData {
     let mut data = PreviewData::new(String::new(), "EDA / PCB".into(), Icon::Layers);
     match read_document(path, token) {
@@ -1352,6 +1362,22 @@ mod tests {
             let mut viewer = Viewer::load(path, &cancel).unwrap();
             render_single_frame(&mut viewer, &palette);
         }
+    }
+
+    #[test]
+    fn listing_preview_rejects_a_replaced_source_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plot.hpgl");
+        let cancel = AtomicBool::new(false);
+        std::fs::write(&path, "IN;PD300,500;").unwrap();
+        let listing = super::super::filesystem::read_directory(dir.path(), &cancel).unwrap();
+        let revision = listing.entries[0].revision;
+        assert!(load_listing(&path, revision, &cancel).eda.is_some());
+
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, "IN;PD600,1000;").unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        assert!(load_listing(&path, revision, &cancel).eda.is_none());
     }
 
     #[test]
