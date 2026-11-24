@@ -1,5 +1,76 @@
 use super::*;
 
+fn render_studio_keys(
+    ctx: &egui::Context,
+    state: &mut PdfEditorState,
+    palette: &little_clip_core::palette::AppPalette,
+    keys: impl IntoIterator<Item = (egui::Key, egui::Modifiers)>,
+) -> egui::FullOutput {
+    clip_ui::test_support::run_frame(
+        ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            events: keys
+                .into_iter()
+                .map(|(key, modifiers)| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                })
+                .collect(),
+            ..Default::default()
+        },
+        |ctx| {
+            ctx.root_ui(|ui| {
+                egui::CentralPanel::default()
+                    .show(ui, |ui| state.render_ui(ui, ctx, palette, &mut false));
+            });
+        },
+    )
+}
+
+#[test]
+fn paged_view_shortcuts_work_on_open_and_respect_text_focus() {
+    use egui::Key;
+
+    for source in [PageSource::Pdf, PageSource::Notebook] {
+        let ctx = egui::Context::default();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut state = raster_state(4, 16);
+        state.source = source;
+        let mut frame = |key, modifiers, expected| {
+            render_studio_keys(&ctx, &mut state, &palette, [(key, modifiers)]);
+            assert_eq!(state.selected_page, Some(expected), "{key:?}");
+        };
+        for (key, page) in [
+            (Key::ArrowDown, 2),
+            (Key::ArrowRight, 3),
+            (Key::ArrowUp, 2),
+            (Key::ArrowLeft, 1),
+            (Key::ArrowLeft, 1),
+            (Key::End, 4),
+            (Key::ArrowDown, 4),
+            (Key::Home, 1),
+        ] {
+            frame(key, egui::Modifiers::NONE, page);
+        }
+        frame(Key::End, egui::Modifiers::SHIFT, 1);
+
+        if source == PageSource::Pdf {
+            frame(Key::F, egui::Modifiers::CTRL, 1);
+            assert!(ctx.egui_wants_keyboard_input());
+            frame(Key::End, egui::Modifiers::NONE, 1);
+            frame(Key::ArrowDown, egui::Modifiers::NONE, 1);
+        }
+    }
+}
+
 #[test]
 fn notebook_view_omits_pdf_tools_and_ignores_their_shortcuts_in_both_themes() {
     for appearance in [
@@ -10,37 +81,13 @@ fn notebook_view_omits_pdf_tools_and_ignores_their_shortcuts_in_both_themes() {
         let palette = crate::ui_appearance::palette(appearance);
         let mut state = raster_state(2, 16);
         state.source = PageSource::Notebook;
-        let events = [egui::Key::R, egui::Key::Delete, egui::Key::T, egui::Key::F]
-            .into_iter()
-            .map(|key| egui::Event::Key {
-                key,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: if key == egui::Key::F {
-                    egui::Modifiers::CTRL
-                } else {
-                    egui::Modifiers::NONE
-                },
-            })
-            .collect();
-        let output = clip_ui::test_support::run_frame(
-            &ctx,
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1200.0, 800.0),
-                )),
-                events,
-                ..Default::default()
-            },
-            |ctx| {
-                ctx.root_ui(|ui| {
-                    egui::CentralPanel::default()
-                        .show(ui, |ui| state.render_ui(ui, ctx, &palette, &mut false))
-                });
-            },
-        );
+        let keys = [
+            (egui::Key::R, egui::Modifiers::NONE),
+            (egui::Key::Delete, egui::Modifiers::NONE),
+            (egui::Key::T, egui::Modifiers::NONE),
+            (egui::Key::F, egui::Modifiers::CTRL),
+        ];
+        let output = render_studio_keys(&ctx, &mut state, &palette, keys);
         let labels = output
             .shapes
             .iter()

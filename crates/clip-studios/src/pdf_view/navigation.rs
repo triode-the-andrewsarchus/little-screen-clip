@@ -26,6 +26,7 @@ type IndexWorker = (JobTicket, Receiver<Result<Result<(), String>, JobError>>);
 pub(super) struct PdfNavigation {
     pub left: LeftTab,
     pub right: Option<RightTab>,
+    pub reveal_selected_page: bool,
     pub query: String,
     contents_query: String,
     focus_find: bool,
@@ -384,6 +385,48 @@ impl PdfEditorState {
             return true;
         }
         false
+    }
+
+    pub(super) fn page_shortcuts(&mut self, ctx: &egui::Context) {
+        let Some(selected) = self.selected_page.filter(|_| self.page_count > 0) else {
+            return;
+        };
+        let text_focused = ctx
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
+        if text_focused || self.navigation.focus_find || self.navigation.focus_contents {
+            return;
+        }
+
+        let mut destination = None;
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                    ..
+                } = event
+                else {
+                    return true;
+                };
+                let page = destination.unwrap_or(selected);
+                destination = Some(match key {
+                    egui::Key::ArrowDown | egui::Key::ArrowRight => {
+                        page.saturating_add(1).min(self.page_count)
+                    }
+                    egui::Key::ArrowUp | egui::Key::ArrowLeft => page.saturating_sub(1).max(1),
+                    egui::Key::Home => 1,
+                    egui::Key::End => self.page_count,
+                    _ => return true,
+                });
+                false
+            });
+        });
+        if let Some(page) = destination {
+            self.selected_page = Some(page);
+            self.navigation.reveal_selected_page = true;
+        }
     }
 
     pub(super) fn navigation_buttons(

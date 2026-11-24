@@ -34,6 +34,7 @@ impl PdfEditorState {
                 return;
             }
         }
+        self.page_shortcuts(ctx);
         if !self.source.read_only()
             && !ctx.egui_wants_keyboard_input()
             && !self.document_tools.ocr_busy()
@@ -202,6 +203,7 @@ impl PdfEditorState {
         palette: &little_clip_core::palette::AppPalette,
     ) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
+        let reveal_selected = std::mem::take(&mut self.navigation.reveal_selected_page);
         egui::ScrollArea::vertical()
             .id_salt("pdf-page-thumbnails")
             .auto_shrink([false, false])
@@ -223,7 +225,7 @@ impl PdfEditorState {
                 for (page, (width, height), failed) in pages {
                     let selected = self.selected_page == Some(page);
                     let accent = crate::hex_to_c32(&palette.harmonies.base);
-                    egui::Frame::NONE
+                    let thumbnail = egui::Frame::NONE
                         .fill(colors.canvas)
                         .stroke(Stroke::new(
                             if selected { 2.0_f32 } else { 1.0_f32 },
@@ -264,6 +266,9 @@ impl PdfEditorState {
                                     .color(colors.text_primary),
                             );
                         });
+                    if selected && reveal_selected {
+                        thumbnail.response.scroll_to_me(None);
+                    }
                     ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                 }
             });
