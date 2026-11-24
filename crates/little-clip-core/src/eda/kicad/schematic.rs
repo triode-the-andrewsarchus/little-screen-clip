@@ -6,12 +6,12 @@ use super::super::{
 };
 use super::scene_render::render_scene_thumbnail;
 use crate::ImageThumbnail;
-use eda_view::kicad::schema::library::{LibrarySymbol, SymbolLibrary};
+use eda_view::kicad::schema::library::{SymbolLibrary, parse_unit_index, resolve_extends};
 use eda_view::kicad::schema::schematic::Schematic;
-use eda_view::kicad::sexp::parse as parse_sexp;
-use eda_view::schematic::{self, Palette, symbol_scene, symbol_scene_for_unit};
+use eda_view::kicad::sexp::{SExp, parse as parse_sexp};
+use eda_view::schematic::{self, Palette, symbol_scene_for_unit};
 use eda_view::vector::Scene;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -250,14 +250,14 @@ pub struct KicadSymbolPinInfo {
 pub struct KicadSymbolEntry {
     pub name: String,
     pub extends: Option<String>,
-    pub units: i64,
+    pub units: Vec<i64>,
     pub reference_prefix: String,
     pub value: String,
     pub footprint: String,
     pub description: String,
     pub pins: Vec<KicadSymbolPinInfo>,
     pub properties: Vec<(String, String)>,
-    pub resolved: LibrarySymbol,
+    geometry: Arc<SExp>,
 }
 
 /// Decoded `.kicad_sym` symbol library document.
@@ -274,19 +274,22 @@ impl KicadSymbolLibDocument {
         check_cancelled(cancelled, "KiCad symbol library parse cancelled")?;
         let text = std::str::from_utf8(bytes)
             .map_err(|_| "KiCad symbol library is not valid UTF-8".to_string())?;
-        let root = parse_sexp(text)
-            .map_err(|e| format!("Invalid KiCad symbol library S-expression: {e}"))?;
-        if !root.has_tag("kicad_symbol_lib") {
-            return Err("Expected root (kicad_symbol_lib ...) form".into());
-        }
         let mut lib = SymbolLibrary::load_from_string(text)
             .map_err(|e| format!("Failed to load KiCad symbol library: {e}"))?;
-        let original_extends: Vec<Option<String>> = lib
-            .symbols
-            .iter()
-            .map(|(_, sym)| sym.extends.clone())
+        let root = lib
+            .sexp
+            .take()
+            .ok_or("Missing KiCad symbol library source")?;
+        let version = root.get("version").and_then(|v| v.int_at(0));
+        let generator = root.child_str("generator").map(str::to_owned);
+        let definitions: BTreeMap<String, Arc<SExp>> = root
+            .children
+            .into_iter()
+            .filter(|node| node.has_tag("symbol"))
+            .filter_map(|node| Some((node.string_at(0)?.to_string(), Arc::new(node))))
             .collect();
-        let _ = eda_view::kicad::schema::library::resolve_extends(&mut lib.symbols);
+        resolve_extends(&mut lib.symbols)
+            .map_err(|e| format!("Invalid symbol inheritance: {e}"))?;
 
         let mut symbols = Vec::new();
         for (idx, (_, resolved)) in lib.symbols.iter().enumerate() {
@@ -296,6 +299,17 @@ impl KicadSymbolLibDocument {
             if idx.is_multiple_of(128) {
                 check_cancelled(cancelled, "KiCad symbol library parse cancelled")?;
             }
+            let Some(definition) = definitions.get(&resolved.name) else {
+                continue;
+            };
+            let geometry = symbol_geometry(&definitions, definition);
+            let name = geometry.string_at(0).unwrap_or_default();
+            let short_name = name.rsplit(':').next().unwrap_or(name);
+            let units: BTreeSet<i64> = geometry
+                .children_named("symbol")
+                .filter_map(|node| parse_unit_index(node.string_at(0)?, short_name))
+                .filter(|&unit| unit > 0)
+                .collect();
             let pins = resolved
                 .pins
                 .iter()
@@ -314,21 +328,25 @@ impl KicadSymbolLibDocument {
             let prop = |key: &str| resolved.properties.get(key).cloned().unwrap_or_default();
             symbols.push(KicadSymbolEntry {
                 name: resolved.name.clone(),
-                extends: original_extends.get(idx).and_then(Clone::clone),
-                units: resolved.units.max(1),
+                extends: resolved.extends.clone(),
+                units: if units.is_empty() {
+                    vec![1]
+                } else {
+                    units.into_iter().collect()
+                },
                 reference_prefix: prop("Reference"),
                 value: prop("Value"),
                 footprint: prop("Footprint"),
                 description: prop("Description"),
                 pins,
                 properties,
-                resolved: resolved.clone(),
+                geometry: Arc::clone(geometry),
             });
         }
 
         Ok(Self {
-            version: root.get("version").and_then(|v| v.int_at(0)),
-            generator: root.child_str("generator").map(str::to_owned),
+            version,
+            generator,
             symbols,
             source_excerpt: bounded_source_text(bytes),
         })
@@ -343,7 +361,7 @@ impl KicadSymbolLibDocument {
                 "KiCad Symbol {} · {} pins · {} units",
                 first.name,
                 first.pins.len(),
-                first.units
+                first.units.len()
             );
         }
         format!(
@@ -377,10 +395,7 @@ impl KicadSymbolLibDocument {
             .get(symbol_idx)
             .ok_or_else(|| "Symbol index out of range".to_string())?;
         let palette = Palette::default();
-        let mut scene = symbol_scene_for_unit(&entry.resolved.to_sexp_node(), unit, 1, &palette);
-        if scene.items.is_empty() {
-            scene = symbol_scene(&entry.resolved, &palette);
-        }
+        let scene = symbol_scene_for_unit(&entry.geometry, unit, 1, &palette);
         let bg = Color::from_rgba8(
             SCHEMATIC_BG[0],
             SCHEMATIC_BG[1],
@@ -402,10 +417,35 @@ impl KicadSymbolLibDocument {
             return Ok(pixmap_to_thumbnail(pix));
         }
         if self.symbols.len() == 1 {
-            return self.render_symbol_thumbnail(0, 1, max_size, cancelled);
+            return self.render_symbol_thumbnail(0, self.symbols[0].units[0], max_size, cancelled);
         }
         render_symbol_grid(self, max_size, cancelled)
     }
+}
+
+fn symbol_geometry<'a>(
+    definitions: &'a BTreeMap<String, Arc<SExp>>,
+    definition: &'a Arc<SExp>,
+) -> &'a Arc<SExp> {
+    let mut node = definition;
+    for _ in 0..10 {
+        if node.children_named("symbol").next().is_some() {
+            return node;
+        }
+        let Some(base) = node.child_str("extends") else {
+            break;
+        };
+        let Some(parent) = definitions.get(base).or_else(|| {
+            definitions
+                .iter()
+                .find(|(name, _)| name.rsplit(':').next() == Some(base))
+                .map(|(_, node)| node)
+        }) else {
+            break;
+        };
+        node = parent;
+    }
+    node
 }
 
 fn collect_schematic_symbols(sch: &Schematic) -> (Vec<SchematicSymbolInfo>, usize, usize) {
@@ -543,7 +583,8 @@ fn render_symbol_grid(
 
     let count = lib.symbols.len().min(4);
     for idx in 0..count {
-        if let Ok(tile) = lib.render_symbol_thumbnail(idx, 1, cell, cancelled)
+        if let Ok(tile) =
+            lib.render_symbol_thumbnail(idx, lib.symbols[idx].units[0], cell, cancelled)
             && let Some(tile_pix) = Pixmap::from_vec(
                 tile.premultiplied_rgba,
                 tiny_skia::IntSize::from_wh(tile.width, tile.height).unwrap(),
@@ -569,6 +610,32 @@ fn render_symbol_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symbol_preview_uses_the_selected_unit_and_keeps_shared_geometry() {
+        let bytes = br#"(kicad_symbol_lib
+            (symbol "Base"
+                (symbol "Base_0_1" (circle (center 0 0) (radius 1)))
+                (symbol "Base_1_1" (rectangle (start -2 -2) (end 2 2)))
+                (symbol "Base_3_1"
+                    (rectangle (start -4 -1) (end 4 1))
+                    (pin passive line (at 5 0 180) (length 1) (name "~") (number "3"))))
+            (symbol "Derived" (extends "Base")))"#;
+        let cancel = AtomicBool::new(false);
+        let doc = KicadSymbolLibDocument::parse(bytes, &cancel).unwrap();
+        assert_eq!(doc.symbols[1].units, [1, 3]);
+        let one = doc
+            .render_symbol_thumbnail(0, 1, [120, 120], &cancel)
+            .unwrap();
+        let three = doc
+            .render_symbol_thumbnail(0, 3, [120, 120], &cancel)
+            .unwrap();
+        let derived = doc
+            .render_symbol_thumbnail(1, 3, [120, 120], &cancel)
+            .unwrap();
+        assert_ne!(one.premultiplied_rgba, three.premultiplied_rgba);
+        assert_eq!(three.premultiplied_rgba, derived.premultiplied_rgba);
+    }
 
     #[test]
     fn kicad_schematic_and_symbol_lib_parse_resolve_extends_and_render() {
