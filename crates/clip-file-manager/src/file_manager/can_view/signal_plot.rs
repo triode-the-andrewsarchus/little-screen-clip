@@ -416,7 +416,7 @@ fn paint_selected(
             .find(|point| point.row == cursor.row)
             .and_then(|point| point.decoded)
     {
-        painter.with_clip_rect(rect).circle_stroke(
+        painter.circle_stroke(
             pos2(
                 activity::x(rect, chart.span, cursor.time_ns),
                 scale.y(rect, value.value),
@@ -518,7 +518,7 @@ fn paint_series(
             colors.text_muted,
         );
     }
-    let plot = painter.with_clip_rect(rect);
+    let plot = painter.with_clip_rect(rect.expand(2.0).intersect(painter.clip_rect()));
     let mut points: Vec<egui::Pos2> = Vec::new();
     let mut dots = egui::Mesh::default();
     for point in &series.points {

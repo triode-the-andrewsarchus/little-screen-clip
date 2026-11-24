@@ -1278,7 +1278,10 @@ pub fn stat_pill(
 pub fn badge_pill_width(ui: &mut egui::Ui, label: &str) -> f32 {
     let font = egui::TextStyle::Body.resolve(ui.style());
     let text_width = ui.fonts_mut(|fonts| {
-        fonts.layout_no_wrap(label.to_owned(), font, Color32::WHITE).size().x
+        fonts
+            .layout_no_wrap(label.to_owned(), font, Color32::WHITE)
+            .size()
+            .x
     });
     text_width.ceil() + 2.0 * (BADGE_PADDING_X + 1.0)
 }
