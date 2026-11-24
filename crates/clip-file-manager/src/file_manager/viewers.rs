@@ -1423,11 +1423,13 @@ mod tests {
         }
         let harness = files_comparison(paths.into(), "Changed source objects");
         assert!(harness.query_by_label_contains("sheet units/px").is_some());
-        assert!(
-            harness
-                .query_by_label_contains("missing or unreadable local .asy")
-                .is_some()
-        );
+        for side in ["A", "B"] {
+            assert!(
+                harness
+                    .query_by_label_contains(&format!("{side}: 1 missing or unreadable local .asy"))
+                    .is_some()
+            );
+        }
         assert!(harness.query_by_label("Edge tolerance").is_none());
     }
 
