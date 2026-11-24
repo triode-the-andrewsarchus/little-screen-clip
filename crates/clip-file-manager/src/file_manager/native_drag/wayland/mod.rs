@@ -1,10 +1,11 @@
 //! Native Wayland URI drags on eframe's existing display, using an independent event queue.
-mod io;
 mod protocol;
 
-use super::filesystem::Identity;
+use super::super::filesystem::Identity;
+use super::super::search::SourceGuard;
+use super::{Event, io};
 use little_clip_core::{BackgroundJobs, JobError};
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{
@@ -26,23 +27,6 @@ const MIME: &str = "text/uri-list";
 type Action = wl_data_device_manager::DndAction;
 type ResultReceiver<T> = mpsc::Receiver<Result<Result<T, String>, JobError>>;
 
-pub(super) enum Event {
-    Drop(u64, egui::Pos2),
-    Files(
-        u64,
-        Vec<PathBuf>,
-        bool,
-        HashMap<PathBuf, super::search::SourceGuard>,
-    ),
-    Remove(
-        BTreeMap<PathBuf, Option<Identity>>,
-        BTreeMap<PathBuf, Identity>,
-        HashMap<PathBuf, super::search::SourceGuard>,
-    ),
-    Failed(u64, String),
-    Notice(String),
-    Refresh,
-}
 struct Incoming {
     offer: wl_data_offer::WlDataOffer,
     point: egui::Pos2,
@@ -54,10 +38,7 @@ struct Reading {
     cancelled: Arc<AtomicBool>,
     offer: wl_data_offer::WlDataOffer,
     moving: bool,
-    origin: Option<(
-        BTreeSet<PathBuf>,
-        HashMap<PathBuf, super::search::SourceGuard>,
-    )>,
+    origin: Option<(BTreeSet<PathBuf>, HashMap<PathBuf, SourceGuard>)>,
 }
 struct Source {
     proxy: wl_data_source::WlDataSource,
@@ -68,7 +49,7 @@ struct Source {
     written: Arc<AtomicBool>,
     action: Action,
     movable: bool,
-    search_guards: HashMap<PathBuf, super::search::SourceGuard>,
+    search_guards: HashMap<PathBuf, SourceGuard>,
 }
 struct State {
     surface: wl_surface::WlSurface,
@@ -92,18 +73,18 @@ struct State {
     release_pointer: bool,
 }
 
-pub(super) struct NativeDrag {
+pub(super) struct WaylandDrag {
     connection: Connection,
     queue: EventQueue<State>,
     state: State,
 }
 
-impl NativeDrag {
-    pub(super) fn new(cc: &eframe::CreationContext<'_>) -> Option<Self> {
-        let RawDisplayHandle::Wayland(display) = cc.display_handle().ok()?.as_raw() else {
+impl WaylandDrag {
+    pub(super) fn new(display: RawDisplayHandle, window: RawWindowHandle) -> Option<Self> {
+        let RawDisplayHandle::Wayland(display) = display else {
             return None;
         };
-        let RawWindowHandle::Wayland(window) = cc.window_handle().ok()?.as_raw() else {
+        let RawWindowHandle::Wayland(window) = window else {
             return None;
         };
         // SAFETY: eframe owns this display and surface for the app's entire lifetime.
@@ -224,7 +205,7 @@ impl NativeDrag {
         &mut self,
         identities: BTreeMap<PathBuf, Option<Identity>>,
         copy: bool,
-        search_guards: HashMap<PathBuf, super::search::SourceGuard>,
+        search_guards: HashMap<PathBuf, SourceGuard>,
     ) -> Result<bool, String> {
         if self.state.source.is_some() {
             return Ok(false);
@@ -334,7 +315,7 @@ impl State {
     }
 }
 
-impl Drop for NativeDrag {
+impl Drop for WaylandDrag {
     fn drop(&mut self) {
         if let Some(source) = self.state.source.take() {
             source.cancelled.store(true, Ordering::Relaxed);

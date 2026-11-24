@@ -1,0 +1,890 @@
+//! Native X11 XDND v5 incoming and outgoing file drag-and-drop.
+
+use super::super::filesystem::Identity;
+use super::super::search::SourceGuard;
+use super::{Event, io};
+use little_clip_core::{BackgroundJobs, JobError};
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
+use std::time::{Duration, Instant};
+use x11rb::{
+    COPY_DEPTH_FROM_PARENT, CURRENT_TIME,
+    connection::Connection as _,
+    protocol::{
+        Event as XEvent,
+        xproto::{
+            self, Atom, AtomEnum, ClientMessageData, ClientMessageEvent, ConnectionExt as _,
+            KeyButMask, MapState, PropMode, SelectionRequestEvent, Window,
+        },
+    },
+    rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
+};
+
+const MAX_WALK_DEPTH: u8 = 32;
+const DROP_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
+
+type SnapshotResult = Result<BTreeMap<PathBuf, Identity>, String>;
+type SnapshotReceiver = mpsc::Receiver<Result<SnapshotResult, JobError>>;
+
+x11rb::atom_manager! {
+    Atoms: AtomsCookie {
+        XdndAware,
+        XdndProxy,
+        XdndEnter,
+        XdndPosition,
+        XdndStatus,
+        XdndLeave,
+        XdndDrop,
+        XdndFinished,
+        XdndSelection,
+        XdndActionCopy,
+        XdndActionMove,
+        TEXT_URI_LIST: b"text/uri-list",
+        TARGETS,
+        ATOM,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct XdndTarget {
+    window: Window,
+    destination: Window,
+    version: u8,
+}
+
+struct OutgoingDrag {
+    payload: Arc<Vec<u8>>,
+    identities: BTreeMap<PathBuf, Option<Identity>>,
+    snapshot: Arc<Mutex<BTreeMap<PathBuf, Identity>>>,
+    snapshot_done: bool,
+    snapshot_job: Option<SnapshotReceiver>,
+    pending_requests: Vec<SelectionRequestEvent>,
+    cancelled: Arc<AtomicBool>,
+    written: Arc<AtomicBool>,
+    movable: bool,
+    search_guards: HashMap<PathBuf, SourceGuard>,
+    target: Option<XdndTarget>,
+    accepted: bool,
+    accepted_action: Atom,
+    last_desired_action: Atom,
+    last_sent_pos: Option<(i16, i16)>,
+    last_sent_action: Option<Atom>,
+    dropped_at: Option<Instant>,
+}
+
+pub(super) struct X11Drag {
+    conn: RustConnection,
+    root: Window,
+    host_window: Window,
+    source_window: Window,
+    atoms: Atoms,
+    incoming_hover: Option<egui::Pos2>,
+    outgoing: Option<OutgoingDrag>,
+    events: Vec<Event>,
+    next_token: u64,
+    release_pointer: bool,
+    escape_pressed: bool,
+}
+
+impl X11Drag {
+    pub(super) fn new(host_window: Window) -> Option<Self> {
+        let (conn, screen_num) = RustConnection::connect(None).ok()?;
+        let atoms = Atoms::new(&conn).ok()?.reply().ok()?;
+        let root = conn.setup().roots[screen_num].root;
+        let source_window = conn.generate_id().ok()?;
+        conn.create_window(
+            COPY_DEPTH_FROM_PARENT,
+            source_window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            xproto::WindowClass::INPUT_ONLY,
+            x11rb::COPY_FROM_PARENT,
+            &xproto::CreateWindowAux::new(),
+        )
+        .ok()?;
+        let _ = conn.flush();
+        Some(Self {
+            conn,
+            root,
+            host_window,
+            source_window,
+            atoms,
+            incoming_hover: None,
+            outgoing: None,
+            events: Vec::new(),
+            next_token: 0,
+            release_pointer: false,
+            escape_pressed: false,
+        })
+    }
+
+    pub(super) fn set_reference_targets(&mut self, _rects: Vec<egui::Rect>) {}
+
+    pub(super) fn drag_position(&self) -> Option<egui::Pos2> {
+        self.incoming_hover
+    }
+
+    pub(super) fn busy(&self) -> bool {
+        self.outgoing.is_some() || self.incoming_hover.is_some()
+    }
+
+    pub(super) fn finish(&mut self, _token: u64, _success: bool) {}
+
+    pub(super) fn raw_input(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        if self.outgoing.is_some()
+            && input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key {
+                        key: egui::Key::Escape,
+                        pressed: true,
+                        ..
+                    }
+                )
+            })
+        {
+            self.escape_pressed = true;
+        }
+        let native_scale = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.5);
+        if !input.hovered_files.is_empty() {
+            if let Some(pos) = self.query_host_pointer(native_scale) {
+                self.incoming_hover = Some(pos);
+            }
+        } else if input.dropped_files.is_empty() {
+            self.incoming_hover = None;
+        }
+
+        if !input.dropped_files.is_empty() {
+            let point = self
+                .query_host_pointer(native_scale)
+                .or(self.incoming_hover)
+                .unwrap_or_else(|| {
+                    ctx.pointer_latest_pos().unwrap_or_default() * ctx.zoom_factor()
+                });
+            let paths: Vec<PathBuf> = input
+                .dropped_files
+                .drain(..)
+                .map(|file| file.path().to_path_buf())
+                .filter(|path| !path.as_os_str().is_empty())
+                .collect();
+            self.incoming_hover = None;
+            if !paths.is_empty() {
+                self.next_token += 1;
+                let token = self.next_token;
+                self.events.push(Event::Drop(token, point));
+                // External incoming X11 drops via winit are always Copy-only.
+                self.events
+                    .push(Event::Files(token, paths, false, HashMap::new()));
+            }
+        }
+
+        if self.release_pointer {
+            self.release_pointer = false;
+            clear_egui_drag(ctx, input);
+        }
+    }
+
+    pub(super) fn start(
+        &mut self,
+        identities: BTreeMap<PathBuf, Option<Identity>>,
+        copy: bool,
+        search_guards: HashMap<PathBuf, SourceGuard>,
+    ) -> Result<bool, String> {
+        if self.outgoing.is_some() {
+            return Ok(false);
+        }
+        let Ok(ptr) = self
+            .conn
+            .query_pointer(self.host_window)
+            .map_err(|e| e.to_string())
+            .and_then(|c| c.reply().map_err(|e| e.to_string()))
+        else {
+            return Ok(false);
+        };
+        let Ok(geom) = self
+            .conn
+            .get_geometry(self.host_window)
+            .map_err(|e| e.to_string())
+            .and_then(|c| c.reply().map_err(|e| e.to_string()))
+        else {
+            return Ok(false);
+        };
+        if !is_outside_host(
+            ptr.same_screen,
+            ptr.win_x,
+            ptr.win_y,
+            geom.width,
+            geom.height,
+        ) {
+            return Ok(false);
+        }
+        if !ptr.mask.contains(KeyButMask::BUTTON1) {
+            return Ok(false);
+        }
+
+        let paths: Vec<_> = identities.keys().cloned().collect();
+        let payload = little_clip_core::file_uri_list(&paths)
+            .map_err(|e| e.to_string())?
+            .into_bytes();
+        if payload.len() > io::LIMIT {
+            return Err("Desktop file references exceed 1 MiB".into());
+        }
+
+        let movable = !copy && identities.values().all(Option::is_some);
+        self.conn
+            .set_selection_owner(self.source_window, self.atoms.XdndSelection, CURRENT_TIME)
+            .map_err(|e| e.to_string())?;
+        let _ = self.conn.flush();
+
+        let initial_action = if movable && !ptr.mask.contains(KeyButMask::CONTROL) {
+            self.atoms.XdndActionMove
+        } else {
+            self.atoms.XdndActionCopy
+        };
+        self.outgoing = Some(OutgoingDrag {
+            payload: Arc::new(payload),
+            identities,
+            snapshot: Arc::new(Mutex::new(BTreeMap::new())),
+            snapshot_done: false,
+            snapshot_job: None,
+            pending_requests: Vec::new(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            written: Arc::new(AtomicBool::new(false)),
+            movable,
+            search_guards,
+            target: None,
+            accepted: false,
+            accepted_action: x11rb::NONE,
+            last_desired_action: initial_action,
+            last_sent_pos: None,
+            last_sent_action: None,
+            dropped_at: None,
+        });
+        self.escape_pressed = false;
+        self.release_pointer = true;
+        Ok(true)
+    }
+
+    pub(super) fn tick(&mut self) -> Vec<Event> {
+        self.poll_snapshot_job();
+        while let Ok(Some(event)) = self.conn.poll_for_event() {
+            self.handle_x11_event(event);
+        }
+        self.drive_outgoing_drag();
+        let _ = self.conn.flush();
+        std::mem::take(&mut self.events)
+    }
+
+    fn query_host_pointer(&self, native_scale: f32) -> Option<egui::Pos2> {
+        let reply = self
+            .conn
+            .query_pointer(self.host_window)
+            .ok()?
+            .reply()
+            .ok()?;
+        if !reply.same_screen {
+            return None;
+        }
+        Some(egui::pos2(
+            f32::from(reply.win_x) / native_scale,
+            f32::from(reply.win_y) / native_scale,
+        ))
+    }
+
+    fn poll_snapshot_job(&mut self) {
+        let Some(outgoing) = &mut self.outgoing else {
+            return;
+        };
+        let Some(rx) = &outgoing.snapshot_job else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(inner) => inner.map_err(|e| e.to_string()).and_then(|r| r),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("Desktop source verification disconnected".into())
+            }
+            Err(mpsc::TryRecvError::Empty) => return,
+        };
+        outgoing.snapshot_job = None;
+        let pending = std::mem::take(&mut outgoing.pending_requests);
+        match result {
+            Ok(entries) => {
+                *outgoing.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = entries;
+                outgoing.snapshot_done = true;
+                let payload = Arc::clone(&outgoing.payload);
+                let written = Arc::clone(&outgoing.written);
+                for req in pending {
+                    self.write_uri_selection(&req, &payload, &written);
+                }
+            }
+            Err(error) => {
+                for req in pending {
+                    self.send_selection_notify(&req, x11rb::NONE);
+                }
+                self.events.push(Event::Notice(error));
+            }
+        }
+    }
+
+    fn handle_x11_event(&mut self, event: XEvent) {
+        match event {
+            XEvent::SelectionRequest(req) if req.selection == self.atoms.XdndSelection => {
+                self.on_selection_request(req);
+            }
+            XEvent::ClientMessage(msg) => self.on_client_message(msg),
+            XEvent::SelectionClear(ev) if ev.selection == self.atoms.XdndSelection => {
+                if let Some(outgoing) = &self.outgoing
+                    && outgoing.dropped_at.is_none()
+                {
+                    self.cancel_outgoing();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_selection_request(&mut self, req: SelectionRequestEvent) {
+        let Some(outgoing) = &mut self.outgoing else {
+            self.send_selection_notify(&req, x11rb::NONE);
+            return;
+        };
+        if req.target == self.atoms.TARGETS {
+            let dest = dest_property(&req);
+            let _ = self.conn.change_property32(
+                PropMode::REPLACE,
+                req.requestor,
+                dest,
+                self.atoms.ATOM,
+                &[self.atoms.TARGETS, self.atoms.TEXT_URI_LIST],
+            );
+            self.send_selection_notify(&req, dest);
+            return;
+        }
+        if req.target != self.atoms.TEXT_URI_LIST {
+            self.send_selection_notify(&req, x11rb::NONE);
+            return;
+        }
+        let move_active = outgoing.accepted_action == self.atoms.XdndActionMove
+            || outgoing.last_desired_action == self.atoms.XdndActionMove;
+        let need_snapshot = outgoing.movable && !outgoing.snapshot_done && move_active;
+        if !need_snapshot {
+            let payload = Arc::clone(&outgoing.payload);
+            let written = Arc::clone(&outgoing.written);
+            self.write_uri_selection(&req, &payload, &written);
+            return;
+        }
+        outgoing.pending_requests.push(req);
+        if outgoing.snapshot_job.is_none() {
+            let roots = outgoing.identities.clone();
+            let guards = outgoing.search_guards.clone();
+            let cancelled = Arc::clone(&outgoing.cancelled);
+            let deadline = Instant::now() + DROP_FINISH_TIMEOUT;
+            let (_, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
+                verify_and_snapshot(&roots, &guards, deadline, &cancelled)
+            });
+            outgoing.snapshot_job = Some(receiver);
+        }
+    }
+
+    fn write_uri_selection(
+        &self,
+        req: &SelectionRequestEvent,
+        payload: &[u8],
+        written: &AtomicBool,
+    ) {
+        let dest = dest_property(req);
+        if self
+            .conn
+            .change_property8(PropMode::REPLACE, req.requestor, dest, req.target, payload)
+            .is_ok()
+        {
+            written.store(true, Ordering::Release);
+            self.send_selection_notify(req, dest);
+        } else {
+            self.send_selection_notify(req, x11rb::NONE);
+        }
+    }
+
+    fn send_selection_notify(&self, req: &SelectionRequestEvent, property: Atom) {
+        let notify = xproto::SelectionNotifyEvent {
+            response_type: xproto::SELECTION_NOTIFY_EVENT,
+            sequence: 0,
+            time: req.time,
+            requestor: req.requestor,
+            selection: req.selection,
+            target: req.target,
+            property,
+        };
+        let _ = self
+            .conn
+            .send_event(false, req.requestor, xproto::EventMask::NO_EVENT, notify);
+    }
+
+    fn on_client_message(&mut self, msg: ClientMessageEvent) {
+        if msg.type_ == self.atoms.XdndStatus {
+            let Some(outgoing) = &mut self.outgoing else {
+                return;
+            };
+            let data = msg.data.as_data32();
+            if !target_matches(outgoing.target, data[0]) {
+                return;
+            }
+            let accepted = (data[1] & 1) != 0;
+            let action = data[4];
+            if !outgoing.movable && action == self.atoms.XdndActionMove {
+                // Copy-only drags cannot accept or be upgraded into a source move.
+                outgoing.accepted = false;
+                outgoing.accepted_action = x11rb::NONE;
+            } else {
+                outgoing.accepted = accepted;
+                outgoing.accepted_action = action;
+            }
+            return;
+        }
+        if msg.type_ == self.atoms.XdndFinished {
+            let data = msg.data.as_data32();
+            let Some(outgoing) = &self.outgoing else {
+                return;
+            };
+            if outgoing.dropped_at.is_none() || !target_matches(outgoing.target, data[0]) {
+                return;
+            }
+            let outgoing = self.outgoing.take().expect("checked outgoing");
+            let version = outgoing.target.map_or(5, |t| t.version);
+            let finished_ok = (data[1] & 1) != 0;
+            let final_action = if version >= 5 {
+                data[2]
+            } else {
+                outgoing.accepted_action
+            };
+            let snapshot = outgoing
+                .snapshot
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if should_remove_after_finished(
+                outgoing.movable,
+                finished_ok,
+                outgoing.written.load(Ordering::Acquire),
+                final_action == self.atoms.XdndActionMove,
+                outgoing.snapshot_done && !snapshot.is_empty(),
+            ) {
+                self.events.push(Event::Remove(
+                    outgoing.identities,
+                    snapshot,
+                    outgoing.search_guards,
+                ));
+            }
+            self.events.push(Event::Refresh);
+        }
+    }
+
+    fn drive_outgoing_drag(&mut self) {
+        let Some(outgoing) = &self.outgoing else {
+            return;
+        };
+        if let Some(dropped_at) = outgoing.dropped_at {
+            if dropped_at.elapsed() > DROP_FINISH_TIMEOUT {
+                self.cancel_outgoing();
+                self.events.push(Event::Notice(
+                    "Desktop drop target did not finish in time".into(),
+                ));
+            }
+            return;
+        }
+        if self.escape_pressed {
+            self.escape_pressed = false;
+            self.cancel_outgoing();
+            return;
+        }
+        let Ok(ptr) = self
+            .conn
+            .query_pointer(self.root)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .ok_or(())
+        else {
+            self.cancel_outgoing();
+            return;
+        };
+
+        let next_target = self.find_xdnd_target(i32::from(ptr.root_x), i32::from(ptr.root_y));
+        self.sync_target_change(next_target);
+
+        let Some(outgoing) = &mut self.outgoing else {
+            return;
+        };
+        let desired_action = if outgoing.movable && !ptr.mask.contains(KeyButMask::CONTROL) {
+            self.atoms.XdndActionMove
+        } else {
+            self.atoms.XdndActionCopy
+        };
+        outgoing.last_desired_action = desired_action;
+
+        if !ptr.mask.contains(KeyButMask::BUTTON1) {
+            if outgoing.target.is_some() && outgoing.accepted {
+                let target = outgoing.target.expect("checked target");
+                send_xdnd_drop(&self.conn, &self.atoms, target, self.source_window);
+                outgoing.dropped_at = Some(Instant::now());
+            } else {
+                self.cancel_outgoing();
+            }
+            return;
+        }
+
+        if let Some(target) = outgoing.target {
+            let pos = (ptr.root_x, ptr.root_y);
+            if outgoing.last_sent_pos != Some(pos)
+                || outgoing.last_sent_action != Some(desired_action)
+            {
+                send_xdnd_position(
+                    &self.conn,
+                    &self.atoms,
+                    target,
+                    self.source_window,
+                    pos,
+                    desired_action,
+                );
+                outgoing.last_sent_pos = Some(pos);
+                outgoing.last_sent_action = Some(desired_action);
+            }
+        }
+    }
+
+    fn sync_target_change(&mut self, next: Option<XdndTarget>) {
+        let prev = self.outgoing.as_ref().and_then(|o| o.target);
+        if prev == next {
+            return;
+        }
+        if let Some(old) = prev {
+            send_xdnd_leave(&self.conn, &self.atoms, old, self.source_window);
+        }
+        if let Some(outgoing) = &mut self.outgoing {
+            outgoing.target = next;
+            outgoing.accepted = false;
+            outgoing.accepted_action = x11rb::NONE;
+            outgoing.last_sent_pos = None;
+            outgoing.last_sent_action = None;
+        }
+        if let Some(target) = next {
+            send_xdnd_enter(&self.conn, &self.atoms, target, self.source_window);
+        }
+    }
+
+    fn cancel_outgoing(&mut self) {
+        if let Some(mut outgoing) = self.outgoing.take() {
+            outgoing.cancelled.store(true, Ordering::Relaxed);
+            for req in outgoing.pending_requests.drain(..) {
+                self.send_selection_notify(&req, x11rb::NONE);
+            }
+            if let Some(target) = outgoing.target {
+                send_xdnd_leave(&self.conn, &self.atoms, target, self.source_window);
+            }
+            self.events.push(Event::Refresh);
+        }
+    }
+
+    fn find_xdnd_target(&self, root_x: i32, root_y: i32) -> Option<XdndTarget> {
+        let skip = [self.host_window, self.source_window];
+        self.walk_xdnd_window(self.root, root_x, root_y, 0, &skip)
+    }
+
+    fn walk_xdnd_window(
+        &self,
+        parent: Window,
+        rel_x: i32,
+        rel_y: i32,
+        depth: u8,
+        skip: &[Window],
+    ) -> Option<XdndTarget> {
+        if depth >= MAX_WALK_DEPTH {
+            return None;
+        }
+        let tree = self.conn.query_tree(parent).ok()?.reply().ok()?;
+        for child in tree.children.into_iter().rev().take(256) {
+            if skip.contains(&child) {
+                continue;
+            }
+            let Ok(attrs) = self.conn.get_window_attributes(child).ok()?.reply() else {
+                continue;
+            };
+            if attrs.map_state != MapState::VIEWABLE {
+                continue;
+            }
+            let Ok(geom) = self.conn.get_geometry(child).ok()?.reply() else {
+                continue;
+            };
+            let bw = i32::from(geom.border_width);
+            let cx = rel_x - i32::from(geom.x) - bw;
+            let cy = rel_y - i32::from(geom.y) - bw;
+            if cx < 0 || cy < 0 || cx >= i32::from(geom.width) || cy >= i32::from(geom.height) {
+                continue;
+            }
+            if let Some(found) = self.walk_xdnd_window(child, cx, cy, depth + 1, skip) {
+                return Some(found);
+            }
+            if let Some(target) = self.inspect_xdnd_target(child) {
+                return Some(target);
+            }
+        }
+        None
+    }
+
+    fn inspect_xdnd_target(&self, win: Window) -> Option<XdndTarget> {
+        let proxy = self.valid_xdnd_proxy(win);
+        let destination = proxy.unwrap_or(win);
+        let reply = self
+            .conn
+            .get_property(
+                false,
+                destination,
+                self.atoms.XdndAware,
+                xproto::GetPropertyType::ANY,
+                0,
+                1,
+            )
+            .ok()?
+            .reply()
+            .ok()?;
+        let raw_version = reply.value32()?.next()?;
+        let version = u8::try_from(raw_version.min(5)).ok()?;
+        (version >= 3).then_some(XdndTarget {
+            window: win,
+            destination,
+            version,
+        })
+    }
+
+    fn valid_xdnd_proxy(&self, win: Window) -> Option<Window> {
+        let proxy = self
+            .conn
+            .get_property(false, win, self.atoms.XdndProxy, AtomEnum::WINDOW, 0, 1)
+            .ok()?
+            .reply()
+            .ok()?
+            .value32()?
+            .next()?;
+        if proxy == x11rb::NONE {
+            return None;
+        }
+        let back = self
+            .conn
+            .get_property(false, proxy, self.atoms.XdndProxy, AtomEnum::WINDOW, 0, 1)
+            .ok()?
+            .reply()
+            .ok()?
+            .value32()?
+            .next()?;
+        (back == proxy).then_some(proxy)
+    }
+}
+
+impl Drop for X11Drag {
+    fn drop(&mut self) {
+        if let Some(outgoing) = &self.outgoing {
+            outgoing.cancelled.store(true, Ordering::Relaxed);
+        }
+        let _ = self.conn.destroy_window(self.source_window);
+        let _ = self.conn.flush();
+    }
+}
+
+fn verify_and_snapshot(
+    roots: &BTreeMap<PathBuf, Option<Identity>>,
+    guards: &HashMap<PathBuf, SourceGuard>,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> SnapshotResult {
+    for guard in guards.values() {
+        if Instant::now() >= deadline {
+            return Err("Desktop source verification timed out".into());
+        }
+        guard.check(cancelled)?;
+    }
+    let entries = io::snapshot(roots, deadline, cancelled)?;
+    for guard in guards.values() {
+        if Instant::now() >= deadline {
+            return Err("Desktop source verification timed out".into());
+        }
+        guard.check(cancelled)?;
+    }
+    Ok(entries)
+}
+
+fn send_xdnd_enter(conn: &RustConnection, atoms: &Atoms, target: XdndTarget, source: Window) {
+    let msg = ClientMessageEvent::new(
+        32,
+        target.window,
+        atoms.XdndEnter,
+        ClientMessageData::from([
+            source,
+            xdnd_enter_flags(target.version),
+            atoms.TEXT_URI_LIST,
+            0,
+            0,
+        ]),
+    );
+    let _ = conn.send_event(false, target.destination, xproto::EventMask::NO_EVENT, msg);
+}
+
+fn send_xdnd_position(
+    conn: &RustConnection,
+    atoms: &Atoms,
+    target: XdndTarget,
+    source: Window,
+    pos: (i16, i16),
+    action: Atom,
+) {
+    let msg = ClientMessageEvent::new(
+        32,
+        target.window,
+        atoms.XdndPosition,
+        ClientMessageData::from([
+            source,
+            0,
+            pack_xdnd_coords(pos.0, pos.1),
+            CURRENT_TIME,
+            action,
+        ]),
+    );
+    let _ = conn.send_event(false, target.destination, xproto::EventMask::NO_EVENT, msg);
+}
+
+fn send_xdnd_leave(conn: &RustConnection, atoms: &Atoms, target: XdndTarget, source: Window) {
+    let msg = ClientMessageEvent::new(
+        32,
+        target.window,
+        atoms.XdndLeave,
+        ClientMessageData::from([source, 0, 0, 0, 0]),
+    );
+    let _ = conn.send_event(false, target.destination, xproto::EventMask::NO_EVENT, msg);
+}
+
+fn send_xdnd_drop(conn: &RustConnection, atoms: &Atoms, target: XdndTarget, source: Window) {
+    let msg = ClientMessageEvent::new(
+        32,
+        target.window,
+        atoms.XdndDrop,
+        ClientMessageData::from([source, 0, CURRENT_TIME, 0, 0]),
+    );
+    let _ = conn.send_event(false, target.destination, xproto::EventMask::NO_EVENT, msg);
+}
+
+fn dest_property(req: &SelectionRequestEvent) -> Atom {
+    if req.property == x11rb::NONE {
+        req.target
+    } else {
+        req.property
+    }
+}
+
+fn target_matches(target: Option<XdndTarget>, window: Window) -> bool {
+    target.is_some_and(|t| t.window == window || t.destination == window)
+}
+
+pub(super) fn clear_egui_drag(ctx: &egui::Context, input: &mut egui::RawInput) {
+    egui::DragAndDrop::clear_payload(ctx);
+    ctx.stop_dragging();
+    let pos = ctx.pointer_latest_pos().unwrap_or_default();
+    let modifiers = input
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            egui::Event::ModifiersChanged(modifiers) => Some(*modifiers),
+            _ => None,
+        })
+        .unwrap_or_else(|| ctx.input(|input| input.modifiers));
+    input.events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers,
+    });
+}
+
+pub(super) fn is_outside_host(
+    same_screen: bool,
+    win_x: i16,
+    win_y: i16,
+    width: u16,
+    height: u16,
+) -> bool {
+    !same_screen
+        || win_x < 0
+        || win_y < 0
+        || i32::from(win_x) >= i32::from(width)
+        || i32::from(win_y) >= i32::from(height)
+}
+
+pub(super) fn pack_xdnd_coords(x: i16, y: i16) -> u32 {
+    (u32::from(x as u16) << 16) | u32::from(y as u16)
+}
+
+pub(super) fn xdnd_enter_flags(version: u8) -> u32 {
+    u32::from(version.min(5)) << 24
+}
+
+pub(super) fn should_remove_after_finished(
+    movable: bool,
+    finished_ok: bool,
+    written: bool,
+    action_is_move: bool,
+    snapshot_ready: bool,
+) -> bool {
+    movable && finished_ok && written && action_is_move && snapshot_ready
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_requires_movable_written_accepted_move_and_verified_snapshot() {
+        assert!(should_remove_after_finished(true, true, true, true, true));
+        for case in [
+            (false, true, true, true, true), // Copy-only cannot be upgraded into source removal.
+            (true, false, true, true, true),
+            (true, true, false, true, true),
+            (true, true, true, false, true),
+            (true, true, true, true, false),
+        ] {
+            assert!(
+                !should_remove_after_finished(case.0, case.1, case.2, case.3, case.4),
+                "{case:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_boundary_check_respects_edges_and_screen() {
+        assert!(!is_outside_host(true, 0, 0, 800, 600));
+        assert!(!is_outside_host(true, 799, 599, 800, 600));
+        assert!(is_outside_host(true, -1, 100, 800, 600));
+        assert!(is_outside_host(true, 100, -1, 800, 600));
+        assert!(is_outside_host(true, 800, 100, 800, 600));
+        assert!(is_outside_host(true, 100, 600, 800, 600));
+        assert!(is_outside_host(false, 100, 100, 800, 600));
+    }
+
+    #[test]
+    fn xdnd_protocol_bit_packing_matches_spec() {
+        assert_eq!(xdnd_enter_flags(5), 5 << 24);
+        assert_eq!(xdnd_enter_flags(9), 5 << 24);
+        assert_eq!(pack_xdnd_coords(1920, 420), (1920 << 16) | 420);
+        assert_eq!(
+            pack_xdnd_coords(-10, 5),
+            (u32::from((-10i16) as u16) << 16) | 5
+        );
+    }
+}
