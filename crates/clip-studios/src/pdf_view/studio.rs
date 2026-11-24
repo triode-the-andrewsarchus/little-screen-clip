@@ -275,6 +275,7 @@ impl PdfEditorState {
         ctx: &egui::Context,
         palette: &little_clip_core::palette::AppPalette,
     ) {
+        self.detail.select(self.selected_page);
         let Some(page_num) = self.selected_page else {
             ui.centered_and_justified(|ui| {
                 ui.label(if self.info_job.is_some() {
@@ -308,9 +309,7 @@ impl PdfEditorState {
         if let Some(error) = page.and_then(|page| page.error.as_deref()) {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        let texture = page
-            .and_then(|page| page.texture.as_ref())
-            .map(|texture| texture.id());
+        let texture = page.and_then(|page| page.texture.as_ref());
         let dimensions = page
             .and_then(|page| page.raster.as_ref())
             .map(|raster| raster.dimensions())
@@ -325,9 +324,21 @@ impl PdfEditorState {
                     .interaction
                     .prepare(ui, page_rect, layout)
             });
-            let response = self.viewport.show(ui, texture, dimensions);
+            let detail_enabled = self.source.has_region_detail();
+            let max_zoom = if detail_enabled { 32.0 } else { 8.0 };
+            let response = self.viewport.show(ui, texture.id(), dimensions, max_zoom);
+            let page_rect = self.viewport.page_rect(response.rect, dimensions);
+            if detail_enabled {
+                self.detail.show(
+                    ui,
+                    response.rect,
+                    page_rect,
+                    texture.size(),
+                    &self.path,
+                    &self.read_check,
+                );
+            }
             if let Some(layout) = layout {
-                let page_rect = self.viewport.page_rect(response.rect, dimensions);
                 if let Some(image) = self.document_tools.interaction.show(
                     ui,
                     &response,

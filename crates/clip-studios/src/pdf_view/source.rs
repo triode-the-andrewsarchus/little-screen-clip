@@ -6,30 +6,37 @@ pub(super) enum PageSource {
     #[default]
     Pdf,
     Notebook,
+    Xournal,
 }
 
 pub(super) struct SourceInfo {
     pub pdf: PdfInfo,
     pub warnings: Vec<String>,
+    pub xournal: bool,
 }
 impl From<PdfInfo> for SourceInfo {
     fn from(pdf: PdfInfo) -> Self {
         Self {
             pdf,
             warnings: Vec::new(),
+            xournal: false,
         }
     }
 }
 
 impl PageSource {
     pub fn read_only(self) -> bool {
-        self == Self::Notebook
+        self != Self::Pdf
+    }
+
+    pub fn has_region_detail(self) -> bool {
+        self == Self::Xournal
     }
 
     pub fn info(self, path: &Path, cancel: &AtomicBool) -> Result<SourceInfo, String> {
         match self {
             Self::Pdf => get_pdf_info(path).map(SourceInfo::from),
-            Self::Notebook => {
+            Self::Notebook | Self::Xournal => {
                 let info = little_clip_core::notebook::inspect(path, cancel)?;
                 let pdf = PdfInfo {
                     page_count: info.pages.len(),
@@ -43,6 +50,7 @@ impl PageSource {
                 Ok(SourceInfo {
                     pdf,
                     warnings: info.warnings,
+                    xournal: info.format == "Xournal",
                 })
             }
         }
@@ -57,7 +65,9 @@ impl PageSource {
     ) -> Result<(Vec<u8>, u32, u32), String> {
         match self {
             Self::Pdf => render_pdf_page_preview(path, page, edge),
-            Self::Notebook => little_clip_core::notebook::render_page(path, page, edge, cancel),
+            Self::Notebook | Self::Xournal => {
+                little_clip_core::notebook::render_page(path, page, edge, cancel)
+            }
         }
     }
 }

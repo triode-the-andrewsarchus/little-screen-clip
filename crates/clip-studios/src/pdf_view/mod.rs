@@ -4,6 +4,7 @@
 //! and a right-side large preview canvas of the selected page with live 90° rotation,
 //! page deletion, and dirty state tracking.
 
+mod detail;
 mod document_tools;
 mod editing;
 mod interaction;
@@ -381,6 +382,7 @@ impl PdfPageViewport {
         ui: &mut egui::Ui,
         texture: egui::TextureId,
         dimensions: (u32, u32),
+        max_zoom: f32,
     ) -> egui::Response {
         let (viewport, response) = ui.allocate_exact_size(
             ui.available_size().max(Vec2::splat(1.0)),
@@ -392,7 +394,7 @@ impl PdfPageViewport {
             let scroll = clip_ui::ui_ext::wheel_delta(ui.ctx()).y;
             if scroll != 0.0 {
                 let old_zoom = self.zoom;
-                self.zoom = (old_zoom * (scroll * 0.002).exp()).clamp(0.25, 8.0);
+                self.zoom = (old_zoom * (scroll * 0.002).exp()).clamp(0.25, max_zoom);
                 if let Some(pointer) = response.hover_pos() {
                     self.pan +=
                         (pointer - viewport.center() - self.pan) * (1.0 - self.zoom / old_zoom);
@@ -572,6 +574,7 @@ pub struct PdfEditorState {
     decode_job: Option<PdfPageDecodeSlot>,
     decode_requests: Vec<usize>,
     viewport: PdfPageViewport,
+    detail: detail::PageDetail,
     navigation: navigation::PdfNavigation,
     document_tools: document_tools::PdfDocumentTools,
     _office_workspace: Option<little_clip_core::staging::TemporaryWorkspace>,
@@ -611,6 +614,7 @@ impl PdfEditorState {
             decode_job: None,
             decode_requests: Vec::new(),
             viewport: PdfPageViewport::default(),
+            detail: detail::PageDetail::default(),
             navigation: navigation::PdfNavigation::default(),
             document_tools: document_tools::PdfDocumentTools::default(),
             _office_workspace: None,
@@ -640,6 +644,7 @@ impl PdfEditorState {
     /// Updates the file location while retiring previews tied to its previous name.
     pub fn relocate_file(&mut self, path: PathBuf) {
         self.path = path;
+        self.detail.select(None);
         if self.info_job.is_some() {
             self.start_info_worker();
         } else {

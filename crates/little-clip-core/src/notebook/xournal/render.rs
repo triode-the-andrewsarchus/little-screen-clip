@@ -27,6 +27,19 @@ pub fn render(
     if !(1..=4096).contains(&edge) {
         return Err("Invalid notebook preview size".into());
     }
+    with_page_svg(input, source_path, page, edge, cancel, |svg| {
+        rasterize(&svg, edge, cancel)
+    })
+}
+
+pub(in crate::notebook) fn with_page_svg<T>(
+    input: &mut (impl Read + Seek),
+    source_path: &Path,
+    page: usize,
+    edge: u32,
+    cancel: &AtomicBool,
+    finish: impl FnOnce(String) -> Result<T, String>,
+) -> Result<T, String> {
     let document = inspect(input, cancel)?;
     let sheet = page
         .checked_sub(1)
@@ -64,11 +77,11 @@ pub fn render(
     svg.push_str("</svg>");
     budget(&svg)?;
     check_cancel(cancel)?;
-    let image = rasterize(&svg, edge, cancel)?;
+    let result = finish(svg)?;
     if let Some(background) = background {
         background.validate()?;
     }
-    Ok(image)
+    Ok(result)
 }
 
 fn draw_layers(
@@ -195,6 +208,34 @@ fn raster(bytes: &[u8]) -> Result<(String, u32, u32), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_crops_match_authored_order_with_images_highlights_and_ink() {
+        use crate::notebook::{RetainedPage, vector};
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/notebooks/xournal");
+        let cancel = AtomicBool::new(false);
+        for (name, page) in [
+            ("load/image-fileversion-5.xopp", 1),
+            ("packaged/pdf-background.xopp", 2),
+            ("load/layers.xopp", 1),
+            ("load/pages.xopp", 11),
+            ("load/relativePaths.xopp", 1),
+        ] {
+            let source = root.join(name);
+            let svg = with_page_svg(
+                &mut std::fs::File::open(&source).unwrap(),
+                &source,
+                page,
+                512,
+                &cancel,
+                Ok,
+            )
+            .unwrap();
+            let scene = RetainedPage::new(&svg, &cancel).unwrap();
+            vector::verify_crops(&scene, &svg, &cancel, name);
+        }
+    }
 
     #[test]
     fn real_pages_render_against_independent_cli_exports() {

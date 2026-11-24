@@ -1,5 +1,5 @@
 //! Disposable notebook readers sharing the ordinary-file and command boundaries.
-use super::{Info, PageSize};
+use super::{Info, PageSize, RetainedPage};
 use crate::{CommandRequest, file_source::ReadCheck};
 use std::{
     fs::File,
@@ -56,6 +56,28 @@ pub fn render_page(
     Ok((png, size.width as u32, size.height as u32))
 }
 
+/// Loads one Xournal page's native paths and separate raster assets for viewing.
+///
+/// # Errors
+/// Returns source, cancellation, unsupported notebook, or scene-budget errors.
+pub fn retain_xournal_page(
+    path: &Path,
+    page: usize,
+    cancel: &AtomicBool,
+) -> Result<RetainedPage, String> {
+    if !(1..=4096).contains(&page) {
+        return Err("Notebook page is outside the supported range".into());
+    }
+    // PDF attachments are sampled once at a bounded size. The notebook's own
+    // ink, paper geometry and text stay at authored resolution.
+    let svg = request(path, "xournal-svg", page, 2048, cancel)?;
+    super::check_cancel(cancel)?;
+    RetainedPage::new(
+        std::str::from_utf8(&svg).map_err(|error| error.to_string())?,
+        cancel,
+    )
+}
+
 pub(super) fn identify(path: &Path, cancel: &AtomicBool) -> Result<bool, String> {
     serde_json::from_slice(&request(path, "identify", 0, 0, cancel)?)
         .map_err(|error| format!("Invalid notebook identification response: {error}"))
@@ -87,7 +109,7 @@ fn request(
         .resource_limit(rustix::process::Resource::As, 768 * 1024 * 1024)
         .resource_limit(rustix::process::Resource::Cpu, 15)
         .resource_limit(rustix::process::Resource::Fsize, MAX_OUTPUT as u64)
-        .max_output_bytes(if mode == "page" {
+        .max_output_bytes(if matches!(mode, "page" | "xournal-svg") {
             MAX_OUTPUT
         } else {
             256 * 1024
@@ -178,6 +200,12 @@ fn prepare(input: &mut File, mode: &str, page: usize, edge: u32) -> Result<Vec<u
         }
         ("page", 1..=4096, 1..=4096, Some(kind)) => {
             prepare_page(input, kind, page, edge).map(|result| result.0)
+        }
+        ("xournal-svg", 1..=4096, 1..=4096, Some(SourceKind::Xournal)) => {
+            prepare_xournal(input, |input, source, cancel| {
+                super::xournal::with_page_svg(input, source, page, edge, cancel, Ok)
+                    .map(String::into_bytes)
+            })
         }
         _ => Err("Invalid notebook helper operation".into()),
     }
@@ -271,11 +299,18 @@ fn prepare_page(
     match kind {
         SourceKind::Supernote => super::supernote::render(input, page, edge, &cancel),
         SourceKind::Remarkable => super::remarkable::preview::render(input, page, edge, &cancel),
-        SourceKind::Xournal => {
-            let source = crate::file_source::FileSource::capture_file(input)?;
-            let result = super::xournal::render(input, source.path(), page, edge, &cancel)?;
-            source.check_file(input)?;
-            Ok(result)
-        }
+        SourceKind::Xournal => prepare_xournal(input, |input, source, cancel| {
+            super::xournal::render(input, source, page, edge, cancel)
+        }),
     }
+}
+
+fn prepare_xournal<T>(
+    input: &mut File,
+    prepare: impl FnOnce(&mut File, &Path, &AtomicBool) -> Result<T, String>,
+) -> Result<T, String> {
+    let source = crate::file_source::FileSource::capture_file(input)?;
+    let result = prepare(input, source.path(), &AtomicBool::new(false))?;
+    source.check_file(input)?;
+    Ok(result)
 }

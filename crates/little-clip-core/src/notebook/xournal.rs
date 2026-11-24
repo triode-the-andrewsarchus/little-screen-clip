@@ -12,6 +12,7 @@ use std::{
 mod container;
 mod render;
 pub use render::render;
+pub(super) use render::with_page_svg;
 
 pub(super) fn has_container_prefix(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x1f, 0x8b])

@@ -2,7 +2,7 @@ use super::*;
 
 impl PdfEditorState {
     pub(super) fn page_render_width(&self, page_num: usize) -> u32 {
-        if self.viewport.page_num == Some(page_num) {
+        if !self.source.has_region_detail() && self.viewport.page_num == Some(page_num) {
             self.viewport.render_width
         } else {
             PAGE_RASTER_MAX_DIM

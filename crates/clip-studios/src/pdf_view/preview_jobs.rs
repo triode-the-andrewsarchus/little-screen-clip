@@ -16,6 +16,7 @@ impl PdfEditorState {
         }
         self.decode_requests.clear();
         self.viewport = PdfPageViewport::default();
+        self.detail.select(None);
         self.pages.clear();
         self.page_count = 0;
         self.source_warnings.clear();
@@ -65,6 +66,13 @@ impl PdfEditorState {
             }
         };
         self.source_warnings = info.warnings;
+        if self.source.read_only() {
+            self.source = if info.xournal {
+                PageSource::Xournal
+            } else {
+                PageSource::Notebook
+            };
+        }
         let info = info.pdf;
         self.page_count = info.page_count;
         self.pages = (1..=self.page_count)
