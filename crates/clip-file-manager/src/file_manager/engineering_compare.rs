@@ -141,10 +141,10 @@ impl Viewer {
         }
         ui.separator();
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.mode, Mode::Sources, "Sources");
-            ui.selectable_value(&mut self.mode, Mode::Fields, "Decoded fields");
+            clip_ui::buttons::choice(ui, &mut self.mode, Mode::Sources, "Sources");
+            clip_ui::buttons::choice(ui, &mut self.mode, Mode::Fields, "Decoded fields");
             if self.tags.is_some() {
-                ui.selectable_value(&mut self.mode, Mode::Memory, "Memory map");
+                clip_ui::buttons::choice(ui, &mut self.mode, Mode::Memory, "Memory map");
             }
             if self.mode == Mode::Fields
                 && ui
@@ -374,6 +374,12 @@ impl Viewer {
                             .on_hover_text(source.file.path().display().to_string());
                         ui.weak(format!("{} bytes", source.size));
                         ui.label(&source.detail);
+                        if let Some(wave) = &source.waveform
+                            && ui.small_button("Fit recording").clicked()
+                        {
+                            let domain = time_span(&wave.overview().channels);
+                            zoom = Some(0.0..(domain.end - domain.start).max(1e-12));
+                        }
                     });
                     if let Some(wave) = &source.waveform {
                         let overview = wave.overview();
@@ -383,7 +389,7 @@ impl Viewer {
                                 Sense::hover(),
                             );
                             let plot = Rect::from_min_max(
-                                pos2(area.left() + 48.0, area.top() + 4.0),
+                                pos2(area.left() + 55.0, area.top() + 8.0),
                                 pos2(area.right() - 4.0, area.bottom() - 16.0),
                             );
                             let painter = ui.painter_at(area);
@@ -597,11 +603,14 @@ fn error(err: impl std::fmt::Display) -> String {
 }
 
 fn diff_keys(a: &Facts, b: &Facts, same: bool) -> Vec<String> {
-    a.0.keys()
-        .chain(b.0.keys())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .filter(|key| same || a.0.get(*key) != b.0.get(*key))
-        .cloned()
-        .collect()
+    let mut keys: Vec<_> =
+        a.0.keys()
+            .chain(b.0.keys())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|key| same || a.0.get(*key) != b.0.get(*key))
+            .cloned()
+            .collect();
+    keys.sort_by(|a, b| little_clip_core::natural_sort::natural_cmp(a, b));
+    keys
 }

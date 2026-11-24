@@ -194,17 +194,24 @@ impl Lane {
             let top = self.y(mark.high);
             let bottom = self.y(mark.low).max(top + 1.0).min(self.rect.bottom());
             let color = axis::color(mark.sender);
+            let inset = self.rect.shrink(4.0);
+            let dot = inset.clamp(pos2(x, top));
             match mark.glyph {
-                Glyph::Ack => ack_mark(&mut marks, pos2(x, top), color.gamma_multiply(0.61)),
-                Glyph::Delay => marks
-                    .add_colored_rect(Rect::from_center_size(pos2(x, top), vec2(5.0, 5.0)), color),
+                Glyph::Ack => ack_mark(&mut marks, dot, color.gamma_multiply(0.8)),
+                Glyph::Delay => {
+                    marks.add_colored_rect(Rect::from_center_size(dot, vec2(6.0, 6.0)), color)
+                }
                 Glyph::Segment => marks.add_colored_rect(
                     Rect::from_min_max(pos2(x - 1.0, top - 0.5), pos2(x + 1.0, bottom + 0.5)),
                     color,
                 ),
             }
             if let Some(pointer) = pointer.filter(|point| self.rect.contains(*point)) {
-                let distance = pointer.distance_sq(pos2(x, pointer.y.clamp(top, bottom)));
+                let nearest = match mark.glyph {
+                    Glyph::Segment => pos2(x, pointer.y.clamp(top, bottom)),
+                    Glyph::Ack | Glyph::Delay => dot,
+                };
+                let distance = pointer.distance_sq(nearest);
                 if distance <= 12.0_f32.powi(2) && near.is_none_or(|(_, old)| distance < old) {
                     near = Some((point, distance));
                 }
@@ -229,7 +236,7 @@ fn ack_mark(mesh: &mut Mesh, at: Pos2, color: Color32) {
         vec2(0.0, 1.0),
         vec2(-1.0, 0.0),
     ];
-    for radius in [2.8, 1.25] {
+    for radius in [3.7, 1.6] {
         for corner in corners {
             mesh.colored_vertex(at + corner * radius, color);
         }

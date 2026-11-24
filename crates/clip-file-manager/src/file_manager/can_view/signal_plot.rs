@@ -244,10 +244,10 @@ impl Lane {
                 }
             }
         });
-        let height = if chart.paired { 45.0 } else { 72.0 };
+        let height = if chart.paired { 82.0 } else { 96.0 };
         let (area, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
-        let rect = data_rect(area).shrink2(vec2(0.0, 2.0));
+        let rect = data_rect(area).shrink2(vec2(0.0, 8.0));
         let painter = ui.painter_at(area);
         painter.rect_filled(rect, 3.0, chart.colors.recessed);
         for tick in 1..4 {
