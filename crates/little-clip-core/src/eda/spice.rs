@@ -23,6 +23,7 @@ use tiny_skia::{
 
 const SCOPE_BG: [u8; 4] = [16, 20, 26, 255];
 const MAX_NETLIST_LIST: usize = 2048;
+const MAX_NETLIST_NODES: usize = 4096;
 const MAX_DECODED_TRACES: usize = 64;
 const MAX_WAVEFORM_POINTS: usize = 4096;
 const MAX_RAW_PLOTS: usize = 16;
@@ -101,15 +102,17 @@ impl SpiceNetlistDocument {
             dune_netlist::parse_with_loader(Path::new(name), text.clone(), &mut NoIncludeLoader);
         check_cancelled(cancelled, "SPICE netlist parse cancelled")?;
 
-        let scanned = scan_spice_cards(&text, cancelled)?;
-        let scanned_node_count = scanned.nodes.len();
+        let use_card_elements = outcome.netlist.elements.is_empty();
+        let scanned = scan_spice_cards(&text, use_card_elements, cancelled)?;
         let title = pick_netlist_title(&outcome.netlist.title, &scanned.title, path);
 
-        let (components, category_counts, distinct_nodes) = if outcome.netlist.elements.is_empty() {
-            (scanned.components, scanned.category_counts, scanned.nodes)
-        } else {
-            summarize_ir_elements(&outcome.netlist.elements)
-        };
+        let mut elements = scanned.elements;
+        for (index, element) in outcome.netlist.elements.iter().enumerate() {
+            if index.is_multiple_of(512) {
+                check_cancelled(cancelled, "SPICE netlist summary cancelled")?;
+            }
+            elements.record(&element.name, element.nodes.iter().map(String::as_str));
+        }
         let models = merge_models(&outcome.netlist.models, scanned.models);
         let analyses = merge_analyses(&outcome.netlist.analyses, scanned.analyses);
 
@@ -122,11 +125,11 @@ impl SpiceNetlistDocument {
 
         Ok(Self {
             title,
-            node_count: distinct_nodes.len().max(scanned_node_count),
-            nodes: distinct_nodes,
-            component_count: components.len(),
-            components,
-            category_counts,
+            node_count: elements.nodes.len(),
+            nodes: elements.nodes.into_iter().take(MAX_NETLIST_NODES).collect(),
+            component_count: elements.categories.values().sum(),
+            components: elements.components,
+            category_counts: elements.categories.into_iter().collect(),
             subcircuits: scanned.subcircuits,
             models,
             analyses,
@@ -183,7 +186,7 @@ impl SpiceNetlistDocument {
             SCOPE_BG[3],
         ));
 
-        draw_netlist_graph_motif(&mut pixmap, self);
+        draw_component_distribution(&mut pixmap, self);
         Ok(pixmap_to_thumbnail(pixmap))
     }
 }
@@ -640,13 +643,43 @@ fn decode_utf16_be(bytes: &[u8]) -> String {
 
 struct ScannedNetlist {
     title: String,
-    nodes: Vec<String>,
-    components: Vec<SpiceComponentInfo>,
-    category_counts: Vec<(&'static str, usize)>,
+    elements: ElementSummary,
     subcircuits: Vec<SpiceSubcktInfo>,
     models: Vec<SpiceModelInfo>,
     analyses: Vec<String>,
     includes: Vec<String>,
+}
+
+#[derive(Default)]
+struct ElementSummary {
+    nodes: BTreeSet<String>,
+    components: Vec<SpiceComponentInfo>,
+    categories: BTreeMap<&'static str, usize>,
+}
+
+impl ElementSummary {
+    fn record<'a>(&mut self, name: &str, nodes: impl Iterator<Item = &'a str>) {
+        let Some(prefix) = name.chars().next() else {
+            return;
+        };
+        let (kind, category, _) = spice_device_kind(prefix);
+        *self.categories.entry(category).or_default() += 1;
+        let save = self.components.len() < MAX_NETLIST_LIST;
+        let mut connections = Vec::new();
+        for node in nodes {
+            self.nodes.insert(node.to_ascii_lowercase());
+            if save {
+                connections.push(node.to_owned());
+            }
+        }
+        if save {
+            self.components.push(SpiceComponentInfo {
+                name: name.to_owned(),
+                kind,
+                nodes: connections,
+            });
+        }
+    }
 }
 
 fn join_logical_lines(text: &str) -> Vec<String> {
@@ -735,13 +768,15 @@ fn try_consume_control_or_title(
     }
 }
 
-fn scan_spice_cards(text: &str, cancelled: &AtomicBool) -> Result<ScannedNetlist, String> {
+fn scan_spice_cards(
+    text: &str,
+    use_card_elements: bool,
+    cancelled: &AtomicBool,
+) -> Result<ScannedNetlist, String> {
     let cards = join_logical_lines(text);
     let mut title = String::new();
     let mut dot_title = String::new();
-    let mut node_set: BTreeSet<String> = BTreeSet::new();
-    let mut components = Vec::new();
-    let mut cats: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut elements = ElementSummary::default();
     let mut subcircuits = Vec::new();
     let mut active_subckt: Option<SpiceSubcktInfo> = None;
     let mut in_control = false;
@@ -780,7 +815,9 @@ fn scan_spice_cards(text: &str, cancelled: &AtomicBool) -> Result<ScannedNetlist
             sub.element_count += 1;
             continue;
         }
-        record_top_element(trimmed, &mut components, &mut cats, &mut node_set);
+        if use_card_elements && idx != 0 {
+            record_top_element(trimmed, &mut elements);
+        }
     }
     if let Some(sub) = active_subckt {
         subcircuits.push(sub);
@@ -789,12 +826,9 @@ fn scan_spice_cards(text: &str, cancelled: &AtomicBool) -> Result<ScannedNetlist
         title = dot_title;
     }
 
-    let category_counts: Vec<(&'static str, usize)> = cats.into_iter().collect();
     Ok(ScannedNetlist {
         title,
-        nodes: node_set.into_iter().collect(),
-        components,
-        category_counts,
+        elements,
         subcircuits,
         models,
         analyses,
@@ -844,12 +878,7 @@ fn scan_dot_directive(
     }
 }
 
-fn record_top_element(
-    line: &str,
-    components: &mut Vec<SpiceComponentInfo>,
-    cats: &mut BTreeMap<&'static str, usize>,
-    node_set: &mut BTreeSet<String>,
-) {
+fn record_top_element(line: &str, elements: &mut ElementSummary) {
     let tokens: Vec<&str> = line.split_whitespace().collect();
     let Some(name) = tokens.first().copied() else {
         return;
@@ -857,33 +886,20 @@ fn record_top_element(
     let Some(first_ch) = name.chars().next() else {
         return;
     };
-    let (kind, cat_label, min_nodes) = spice_device_kind(first_ch);
-    *cats.entry(cat_label).or_default() += 1;
+    let (_, _, min_nodes) = spice_device_kind(first_ch);
 
     let end = if first_ch.eq_ignore_ascii_case(&'X') {
         tokens.len().saturating_sub(1).max(2)
     } else {
         (1 + min_nodes).min(tokens.len())
     };
-    let nodes: Vec<String> = tokens
+    let nodes = tokens
         .get(1..end)
         .unwrap_or(&[])
         .iter()
-        .filter(|n| !n.contains('='))
-        .map(|s| (*s).to_string())
-        .collect();
-    for n in &nodes {
-        if node_set.len() < 4096 {
-            node_set.insert(n.clone());
-        }
-    }
-    if components.len() < MAX_NETLIST_LIST {
-        components.push(SpiceComponentInfo {
-            name: name.to_string(),
-            kind,
-            nodes,
-        });
-    }
+        .copied()
+        .filter(|n| !n.contains('='));
+    elements.record(name, nodes);
 }
 
 fn pick_netlist_title(ir_title: &str, scan_title: &str, path: &Path) -> String {
@@ -907,40 +923,6 @@ fn pick_netlist_title(ir_title: &str, scan_title: &str, path: &Path) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("SPICE Netlist")
         .to_string()
-}
-
-fn summarize_ir_elements(
-    elements: &[dune_netlist::ir::Element],
-) -> (
-    Vec<SpiceComponentInfo>,
-    Vec<(&'static str, usize)>,
-    Vec<String>,
-) {
-    let mut components = Vec::new();
-    let mut cats: BTreeMap<&'static str, usize> = BTreeMap::new();
-    let mut node_set: BTreeSet<String> = BTreeSet::new();
-    for el in elements {
-        let prefix = el.name.chars().next().unwrap_or('R');
-        let (kind, cat, _) = spice_device_kind(prefix);
-        *cats.entry(cat).or_default() += 1;
-        for node in &el.nodes {
-            if node_set.len() < 4096 {
-                node_set.insert(node.clone());
-            }
-        }
-        if components.len() < MAX_NETLIST_LIST {
-            components.push(SpiceComponentInfo {
-                name: el.name.clone(),
-                kind,
-                nodes: el.nodes.clone(),
-            });
-        }
-    }
-    (
-        components,
-        cats.into_iter().collect(),
-        node_set.into_iter().collect(),
-    )
 }
 
 fn merge_models(
@@ -991,7 +973,7 @@ fn format_ir_analysis(analysis: &Analysis) -> String {
     }
 }
 
-fn draw_netlist_graph_motif(pixmap: &mut Pixmap, doc: &SpiceNetlistDocument) {
+fn draw_component_distribution(pixmap: &mut Pixmap, doc: &SpiceNetlistDocument) {
     let w = pixmap.width() as f32;
     let h = pixmap.height() as f32;
     let bar_count = doc.category_counts.len().clamp(1, 6);
@@ -1004,7 +986,7 @@ fn draw_netlist_graph_motif(pixmap: &mut Pixmap, doc: &SpiceNetlistDocument) {
         .max(1) as f32;
 
     let left = w * 0.08;
-    let avail_w = w * 0.44;
+    let avail_w = w * 0.84;
     let bar_h = (h * 0.68 / bar_count as f32).clamp(4.0, 18.0);
     for idx in 0..doc.category_counts.len().min(6) {
         let count = doc.category_counts[idx].1 as f32;
@@ -1015,58 +997,6 @@ fn draw_netlist_graph_motif(pixmap: &mut Pixmap, doc: &SpiceNetlistDocument) {
         paint.set_color_rgba8(r, g, b, 230);
         if let Some(rect) = Rect::from_xywh(left, y, bw, (bar_h * 0.72).max(3.0)) {
             pixmap.fill_rect(rect, &paint, Transform::identity(), None);
-        }
-    }
-
-    // Draw node connectivity ring motif on the right half.
-    let cx = w * 0.75;
-    let cy = h * 0.5;
-    let rad = (w * 0.22).min(h * 0.36).max(12.0);
-    let n_nodes = doc.node_count.clamp(3, 12);
-    let pts: Vec<[f32; 2]> = (0..n_nodes)
-        .map(|i| {
-            let a = std::f32::consts::TAU * (i as f32 / n_nodes as f32);
-            [cx + rad * a.cos(), cy + rad * a.sin()]
-        })
-        .collect();
-    let mut edge_paint = Paint::default();
-    edge_paint.set_color_rgba8(122, 162, 247, 130);
-    edge_paint.anti_alias = true;
-    for i in 0..pts.len() {
-        let next = (i + 1) % pts.len();
-        let opp = (i + pts.len() / 2) % pts.len();
-        let mut pb = PathBuilder::new();
-        pb.move_to(pts[i][0], pts[i][1]);
-        pb.line_to(pts[next][0], pts[next][1]);
-        pb.move_to(pts[i][0], pts[i][1]);
-        pb.line_to(pts[opp][0], pts[opp][1]);
-        if let Some(path) = pb.finish() {
-            pixmap.stroke_path(
-                &path,
-                &edge_paint,
-                &Stroke {
-                    width: 1.2,
-                    ..Stroke::default()
-                },
-                Transform::identity(),
-                None,
-            );
-        }
-    }
-    let mut node_paint = Paint::default();
-    node_paint.set_color_rgba8(98, 224, 134, 240);
-    node_paint.anti_alias = true;
-    for [x, y] in pts {
-        let mut pb = PathBuilder::new();
-        pb.push_circle(x, y, 2.8);
-        if let Some(path) = pb.finish() {
-            pixmap.fill_path(
-                &path,
-                &node_paint,
-                FillRule::Winding,
-                Transform::identity(),
-                None,
-            );
         }
     }
 }
@@ -1786,6 +1716,27 @@ mod tests {
 
     fn sweep_lengths(trace: &SpiceRawTrace) -> Vec<usize> {
         trace.sweeps().map(<[_]>::len).collect()
+    }
+
+    #[test]
+    fn netlist_totals_outlive_capped_preview_lists() {
+        let mut deck = String::from("* Large resistor network\n");
+        let count = MAX_NETLIST_NODES + 1;
+        for index in 0..count {
+            writeln!(deck, "R{index} node{index} 0 1000").unwrap();
+        }
+        deck.push_str("Ralias NODE1 0 1000\n.op\n.end\n");
+        let doc = SpiceNetlistDocument::parse(
+            Path::new("network.cir"),
+            deck.as_bytes(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(doc.component_count, count + 1);
+        assert_eq!(doc.node_count, count + 1);
+        assert_eq!(doc.components.len(), MAX_NETLIST_LIST);
+        assert_eq!(doc.nodes.len(), MAX_NETLIST_NODES);
+        assert_eq!(doc.category_counts, [("Resistors", count + 1)]);
     }
 
     #[test]
