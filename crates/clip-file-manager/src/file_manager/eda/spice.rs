@@ -5,8 +5,8 @@ use super::ViewerState;
 use crate::ui_appearance::WorkbenchColors;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, Ui, pos2, vec2};
 use little_clip_core::eda::spice::{
-    LtspicePlotDocument, RawAnalysisKind, SpiceNetlistDocument, SpiceRawDocument, SpiceRawPlot,
-    TRACE_PALETTE,
+    LtspicePlotDocument, RawAnalysisKind, SpiceNetlistDocument, SpicePreviewSample,
+    SpiceRawDocument, SpiceRawPlot, TRACE_PALETTE,
 };
 
 pub(super) fn render_netlist_details(
@@ -136,7 +136,7 @@ pub(super) fn render_raw_details(ui: &mut Ui, raw: &SpiceRawDocument, state: &mu
         let [r, g, b] = TRACE_PALETTE[idx % TRACE_PALETTE.len()];
         let mut visible = !state.hidden_traces.contains(&idx);
         let summary = if plot.kind == RawAnalysisKind::DcOperatingPoint {
-            let val = trace.values.first().copied().unwrap_or(0.0);
+            let val = trace.samples().first().map_or(0.0, |s| s.value);
             format!("{} = {}", trace.name, fmt_num(val))
         } else {
             format!(
@@ -202,10 +202,11 @@ pub(super) fn paint_raw_center(
         return format!("{} · {} signals", plot.kind.label(), plot.traces.len());
     }
 
-    if plot.x_values.len() < 2 {
-        return format!("{} · {} point", plot.kind.label(), plot.total_points);
-    }
-    let (x_mapped, xmin, xmax, log_x) = compute_x_mapping(plot);
+    let Some(x_range) = plot.x_range else {
+        return format!("{} · No finite axis samples", plot.kind.label());
+    };
+    let log_x = plot.log_x();
+    let [xmin, xmax] = x_range.map(|x| axis_position(x, log_x));
     let (ymin, ymax) = compute_y_bounds(plot, state);
     let pad = 28.0_f32;
     let plot_rect = Rect::from_min_max(rect.min + vec2(pad, 14.0), rect.max - vec2(14.0, pad));
@@ -214,9 +215,7 @@ pub(super) fn paint_raw_center(
     }
 
     paint_scope_grid(&painter, plot_rect);
-    paint_trace_curves(
-        &painter, plot_rect, plot, &x_mapped, xmin, xmax, ymin, ymax, state,
-    );
+    paint_trace_curves(&painter, plot_rect, plot, [xmin, xmax], [ymin, ymax], state);
     let range = |a, b, offset, size| {
         let middle = (a + b) * 0.5 - f64::from(offset / (size * state.zoom)) * (b - a);
         let half = (b - a) * 0.5 / f64::from(state.zoom);
@@ -225,35 +224,11 @@ pub(super) fn paint_raw_center(
     let (left, right) = range(xmin, xmax, state.pan.x, plot_rect.width());
     let (bottom, top) = range(ymin, ymax, -state.pan.y, plot_rect.height());
     paint_axis_labels(&painter, plot_rect, left, right, bottom, top, log_x, colors);
-    hover_readout(ui, &painter, plot_rect, plot, &x_mapped, xmin, xmax, state)
+    hover_readout(ui, &painter, plot_rect, plot, [xmin, xmax], state)
 }
 
-fn compute_x_mapping(plot: &SpiceRawPlot) -> (Vec<f64>, f64, f64, bool) {
-    let log_x = plot.kind == RawAnalysisKind::AcSweep && plot.x_values.iter().all(|&x| x > 0.0);
-    let mapped: Vec<f64> = plot
-        .x_values
-        .iter()
-        .map(|&x| if log_x { x.log10() } else { x })
-        .collect();
-    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-    for &x in &mapped {
-        if x.is_finite() {
-            lo = lo.min(x);
-            hi = hi.max(x);
-        }
-    }
-    if !lo.is_finite() || !hi.is_finite() {
-        (mapped, 0.0, 1.0, log_x)
-    } else {
-        (mapped, lo, hi, log_x)
-    }
-}
-
-fn trace_y_slice(trace: &little_clip_core::eda::spice::SpiceRawTrace, phase: bool) -> &[f64] {
-    if phase && let Some(ph) = &trace.phase_deg {
-        return ph;
-    }
-    &trace.values
+fn axis_position(x: f64, log_x: bool) -> f64 {
+    if log_x { x.log10() } else { x }
 }
 
 fn compute_y_bounds(plot: &SpiceRawPlot, state: &ViewerState) -> (f64, f64) {
@@ -262,7 +237,8 @@ fn compute_y_bounds(plot: &SpiceRawPlot, state: &ViewerState) -> (f64, f64) {
         if state.hidden_traces.contains(&idx) {
             continue;
         }
-        for &v in trace_y_slice(tr, state.show_phase) {
+        for sample in tr.samples() {
+            let v = sample.ordinate(state.show_phase && plot.is_complex);
             if v.is_finite() {
                 lo = lo.min(v);
                 hi = hi.max(v);
@@ -298,45 +274,39 @@ fn paint_scope_grid(painter: &egui::Painter, rect: Rect) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn paint_trace_curves(
     painter: &egui::Painter,
     plot_rect: Rect,
     plot: &SpiceRawPlot,
-    x_mapped: &[f64],
-    xmin: f64,
-    xmax: f64,
-    ymin: f64,
-    ymax: f64,
+    [xmin, xmax]: [f64; 2],
+    [ymin, ymax]: [f64; 2],
     state: &ViewerState,
 ) {
     let xspan = (xmax - xmin).max(1e-12);
     let yspan = (ymax - ymin).max(1e-12);
     let scope_painter = painter.with_clip_rect(plot_rect);
+    let phase = state.show_phase && plot.is_complex;
+    let log_x = plot.log_x();
+    let point = |sample: &SpicePreviewSample| {
+        let u = (axis_position(sample.x, log_x) - xmin) / xspan;
+        let v = (sample.ordinate(phase) - ymin) / yspan;
+        map_point(plot_rect, u, v, state.zoom, state.pan)
+    };
 
     for (idx, tr) in plot.traces.iter().enumerate() {
         if state.hidden_traces.contains(&idx) {
             continue;
         }
-        let ys = trace_y_slice(tr, state.show_phase);
-        let n = x_mapped.len().min(ys.len());
-        if n < 2 {
-            continue;
-        }
         let [r, g, b] = TRACE_PALETTE[idx % TRACE_PALETTE.len()];
         let stroke = Stroke::new(1.7, Color32::from_rgb(r, g, b));
-        for range in plot.sweep_ranges() {
-            let mut previous = None;
-            for i in range.start..range.end.min(n) {
-                let next = (x_mapped[i].is_finite() && ys[i].is_finite()).then(|| {
-                    let u = (x_mapped[i] - xmin) / xspan;
-                    let v = (ys[i] - ymin) / yspan;
-                    map_point(plot_rect, u, v, state.zoom, state.pan)
-                });
-                if let (Some(a), Some(b)) = (previous, next) {
-                    scope_painter.line_segment([a, b], stroke);
-                }
-                previous = next;
+        for run in tr
+            .sweeps()
+            .flat_map(|sweep| sweep.chunk_by(SpicePreviewSample::shares_run_with))
+        {
+            if let [sample] = run {
+                scope_painter.circle_filled(point(sample), stroke.width * 0.5, stroke.color);
+            } else {
+                scope_painter.add(egui::Shape::line(run.iter().map(point).collect(), stroke));
             }
         }
     }
@@ -413,7 +383,7 @@ fn paint_op_table(
         .take(24)
     {
         let [r, g, b] = TRACE_PALETTE[idx % TRACE_PALETTE.len()];
-        let val = tr.values.first().copied().unwrap_or(0.0);
+        let val = tr.samples().first().map_or(0.0, |s| s.value);
         painter.text(
             pos2(rect.left() + 16.0, y),
             Align2::LEFT_TOP,
@@ -435,15 +405,12 @@ fn paint_op_table(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
 fn hover_readout(
     ui: &egui::Ui,
     painter: &egui::Painter,
     plot_rect: Rect,
     plot: &SpiceRawPlot,
-    x_mapped: &[f64],
-    xmin: f64,
-    xmax: f64,
+    [xmin, xmax]: [f64; 2],
     state: &ViewerState,
 ) -> String {
     let default_hint = "Drag to pan · scroll to zoom · hover waveforms for readout".to_string();
@@ -458,15 +425,30 @@ fn hover_readout(
     if !(0.0..=1.0).contains(&u) {
         return default_hint;
     }
-    let target_x = xmin + f64::from(u) * (xmax - xmin).max(1e-12);
-    let Some(idx) = nearest_sample(x_mapped, target_x) else {
+    let xspan = (xmax - xmin).max(1e-12);
+    let target_x = xmin + f64::from(u) * xspan;
+    let log_x = plot.log_x();
+    let Some(reference) = plot
+        .traces
+        .iter()
+        .enumerate()
+        .find(|(idx, tr)| !state.hidden_traces.contains(idx) && !tr.samples().is_empty())
+        .map(|(_, tr)| tr.samples())
+    else {
         return default_hint;
     };
-    let x_actual = plot.x_values[idx];
+    let Some(index) = nearest_sample(
+        reference.iter().map(|s| axis_position(s.x, log_x)),
+        target_x,
+    ) else {
+        return default_hint;
+    };
+    let sample = reference[index];
+    let x_actual = sample.x;
 
     let sx = map_point(
         plot_rect,
-        (x_mapped[idx] - xmin) / (xmax - xmin).max(1e-12),
+        (axis_position(x_actual, log_x) - xmin) / xspan,
         0.5,
         state.zoom,
         state.pan,
@@ -484,8 +466,10 @@ fn hover_readout(
         if state.hidden_traces.contains(&t_idx) {
             continue;
         }
-        let ys = trace_y_slice(tr, state.show_phase);
-        if let Some(&yv) = ys.get(idx) {
+        // Peak reduction can retain different source rows for different
+        // traces. A readout compares values from the same row and sweep.
+        if let Some(value) = tr.sample_at(sample.source_index) {
+            let yv = value.ordinate(state.show_phase && plot.is_complex);
             let unit = if plot.is_complex {
                 if state.show_phase { "°" } else { " dB" }
             } else {
@@ -504,9 +488,8 @@ fn hover_readout(
     }
 }
 
-fn nearest_sample(values: &[f64], target: f64) -> Option<usize> {
+fn nearest_sample(values: impl Iterator<Item = f64>, target: f64) -> Option<usize> {
     values
-        .iter()
         .enumerate()
         .filter(|(_, value)| value.is_finite())
         .min_by(|(_, a), (_, b)| (*a - target).abs().total_cmp(&(*b - target).abs()))
@@ -520,8 +503,8 @@ mod tests {
     #[test]
     fn hover_selects_nearest_sample_across_descending_and_restarted_sweeps() {
         let values = [3.0, 1.0, f64::NAN, -4.0, 4.0, 0.0];
-        assert_eq!(nearest_sample(&values, 2.5), Some(0));
-        assert_eq!(nearest_sample(&values, 0.4), Some(5));
-        assert_eq!(nearest_sample(&[f64::NAN], 1.0), None);
+        assert_eq!(nearest_sample(values.into_iter(), 2.5), Some(0));
+        assert_eq!(nearest_sample(values.into_iter(), 0.4), Some(5));
+        assert_eq!(nearest_sample([f64::NAN].into_iter(), 1.0), None);
     }
 }
