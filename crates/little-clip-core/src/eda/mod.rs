@@ -4,6 +4,8 @@ pub mod gerber;
 pub mod hpgl;
 pub mod kicad;
 pub mod pick_place;
+mod region;
+pub use region::RasterRegion;
 pub mod spice;
 
 pub use spice::{is_spice_raw_bytes, is_spice_raw_path};

@@ -1,7 +1,7 @@
 //! Shared `tiny-skia` rasterizer for `eda_view::vector::Scene` primitives.
 
 use super::super::{
-    allocate_canvas_with_y_flip, check_cancelled, pixmap_to_thumbnail, update_bounds,
+    RasterRegion, allocate_canvas_with_y_flip, check_cancelled, pixmap_to_thumbnail, update_bounds,
 };
 use crate::ImageThumbnail;
 use eda_view::vector::{Layer, Prim, Scene};
@@ -23,10 +23,28 @@ pub fn render_scene_thumbnail(
 ) -> Result<ImageThumbnail, String> {
     check_cancelled(cancelled, "KiCad scene render cancelled")?;
     let bounds = resolve_scene_bounds(scene);
-    let (mut pixmap, transform, scale) =
-        allocate_canvas_with_y_flip(bounds, max_size, bg, scene.y_down)
-            .ok_or_else(|| "Could not allocate KiCad preview canvas".to_string())?;
+    let canvas = allocate_canvas_with_y_flip(bounds, max_size, bg, scene.y_down)
+        .ok_or_else(|| "Could not allocate KiCad preview canvas".to_string())?;
 
+    render_scene(scene, canvas, None, cancelled)
+}
+
+pub fn render_scene_region(
+    scene: &Scene,
+    region: RasterRegion,
+    bg: Color,
+    cancelled: &AtomicBool,
+) -> Result<ImageThumbnail, String> {
+    render_scene(scene, region.canvas(bg)?, Some(region), cancelled)
+}
+
+fn render_scene(
+    scene: &Scene,
+    (mut pixmap, transform, scale): (Pixmap, Transform, f32),
+    region: Option<RasterRegion>,
+    cancelled: &AtomicBool,
+) -> Result<ImageThumbnail, String> {
+    check_cancelled(cancelled, "EDA scene render cancelled")?;
     let layers: BTreeMap<u16, &Layer> = scene.layers.iter().map(|l| (l.id, l)).collect();
     let mut order: Vec<usize> = (0..scene.items.len().min(MAX_SCENE_ITEMS)).collect();
     order.sort_by_key(|&idx| layers.get(&scene.items[idx].layer).map_or(0, |l| l.z));
@@ -37,7 +55,7 @@ pub fn render_scene_thumbnail(
         }
         let item = &scene.items[item_idx];
         if let Some(layer) = layers.get(&item.layer) {
-            if !layer.visible {
+            if !layer.visible || region.is_some_and(|region| !prim_visible(region, &item.prim)) {
                 continue;
             }
             draw_scene_prim(&mut pixmap, &item.prim, layer.color, transform, scale);
@@ -46,6 +64,19 @@ pub fn render_scene_thumbnail(
 
     check_cancelled(cancelled, "KiCad scene render cancelled")?;
     Ok(pixmap_to_thumbnail(pixmap))
+}
+
+fn prim_visible(region: RasterRegion, prim: &Prim) -> bool {
+    let mut bounds = None;
+    extend_prim_bounds(&mut bounds, prim);
+    let width = match prim {
+        Prim::Polyline { width, .. } | Prim::Arc { width, .. } | Prim::Strokes { width, .. } => {
+            *width
+        }
+        Prim::Polygon { stroke, .. } | Prim::Circle { stroke, .. } => *stroke,
+        Prim::Hole { .. } => 0.0,
+    };
+    bounds.is_some_and(|bounds| region.intersects(bounds, width.abs() + 2.0 / region.pixels_per_mm))
 }
 
 pub(super) fn resolve_scene_bounds(scene: &Scene) -> [f64; 4] {

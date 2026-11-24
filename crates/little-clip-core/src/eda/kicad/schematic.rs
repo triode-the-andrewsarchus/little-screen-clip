@@ -4,8 +4,8 @@ use super::super::{
     StripSummary, allocate_canvas_with_y_flip, bounded_source_text, check_cancelled,
     pixmap_to_thumbnail, update_bounds,
 };
-use super::scene_render::{render_scene_thumbnail, resolve_scene_bounds};
-use crate::ImageThumbnail;
+use super::scene_render::{render_scene_region, render_scene_thumbnail, resolve_scene_bounds};
+use crate::{ImageThumbnail, eda::RasterRegion};
 use eda_view::kicad::schema::library::{SymbolLibrary, parse_unit_index, resolve_extends};
 use eda_view::kicad::schema::schematic::Schematic;
 use eda_view::kicad::sexp::{SExp, parse as parse_sexp};
@@ -211,6 +211,21 @@ impl KicadSchematicDocument {
         }
     }
 
+    pub fn render_region(
+        &self,
+        region: RasterRegion,
+        cancelled: &AtomicBool,
+    ) -> Result<ImageThumbnail, String> {
+        let [r, g, b, a] = SCHEMATIC_BG;
+        let bg = Color::from_rgba8(r, g, b, a);
+        if let Some(scene) = &self.scene
+            && !scene.items.is_empty()
+        {
+            return render_scene_region(scene, region, bg, cancelled);
+        }
+        render_schematic_fallback(self, region.canvas(bg)?, Some(region), cancelled)
+    }
+
     pub fn render_thumbnail(
         &self,
         max_size: [u32; 2],
@@ -227,7 +242,9 @@ impl KicadSchematicDocument {
         {
             return render_scene_thumbnail(scene, max_size, bg, cancelled);
         }
-        render_schematic_fallback(self, max_size, bg, cancelled)
+        let canvas = allocate_canvas_with_y_flip(self.bounds_mm, max_size, bg, true)
+            .ok_or_else(|| "Could not allocate schematic fallback canvas".to_string())?;
+        render_schematic_fallback(self, canvas, None, cancelled)
     }
 }
 
@@ -514,14 +531,11 @@ fn compute_wire_bounds(
 
 fn render_schematic_fallback(
     doc: &KicadSchematicDocument,
-    max_size: [u32; 2],
-    bg: Color,
+    (mut pixmap, transform, scale): (Pixmap, Transform, f32),
+    region: Option<RasterRegion>,
     cancelled: &AtomicBool,
 ) -> Result<ImageThumbnail, String> {
     check_cancelled(cancelled, "KiCad schematic render cancelled")?;
-    let (mut pixmap, transform, scale) =
-        allocate_canvas_with_y_flip(doc.bounds_mm, max_size, bg, true)
-            .ok_or_else(|| "Could not allocate schematic fallback canvas".to_string())?;
     let mut wire_paint = Paint::default();
     wire_paint.set_color_rgba8(158, 206, 106, 255);
     wire_paint.anti_alias = true;
@@ -530,7 +544,19 @@ fn render_schematic_fallback(
         ..Stroke::default()
     };
     let mut pb = PathBuilder::new();
-    for &(a, b) in &doc.fallback_wires {
+    for (index, &(a, b)) in doc.fallback_wires.iter().enumerate() {
+        if index.is_multiple_of(1024) {
+            check_cancelled(cancelled, "KiCad schematic render cancelled")?;
+        }
+        let bounds = [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[0].max(b[0]),
+            a[1].max(b[1]),
+        ];
+        if region.is_some_and(|region| !region.intersects(bounds, f64::from(stroke.width))) {
+            continue;
+        }
         pb.move_to(a[0] as f32, a[1] as f32);
         pb.line_to(b[0] as f32, b[1] as f32);
     }

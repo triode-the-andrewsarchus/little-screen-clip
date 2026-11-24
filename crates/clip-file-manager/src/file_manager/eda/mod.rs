@@ -1,6 +1,7 @@
 //! EDA / PCB fabrication, Excellon drill, centroid, HPGL, and KiCad strips and viewers.
 
 mod kicad;
+use little_clip_core::eda::RasterRegion;
 mod spice;
 
 use super::{
@@ -176,6 +177,7 @@ fn paint_strip_contents(
 #[derive(Default)]
 struct ViewerState {
     raster: ViewerRaster,
+    detail: ViewerRaster,
     source_lines: Vec<std::ops::Range<usize>>,
     selected_line: Option<usize>,
     source_scroll: bool,
@@ -407,18 +409,8 @@ fn paint_canvas_document(
             paint_pick_place_canvas(ui, rect, response, pos_doc, state, colors)
         }
         Document::Hpgl(hpgl) => paint_hpgl_canvas(ui, rect, response, hpgl, state, colors),
-        Document::KicadPcb(pcb) => {
-            paint_raster_canvas(ui, rect, Some((pcb.bounds_mm, true)), state)
-        }
-        Document::KicadSchematic(sch) => {
-            let y_down = sch
-                .scene
-                .as_ref()
-                .is_none_or(|scene| scene.items.is_empty() || scene.y_down);
-            paint_raster_canvas(ui, rect, Some((sch.bounds_mm, y_down)), state)
-        }
-        Document::KicadFootprint(fp) => {
-            paint_raster_canvas(ui, rect, Some((fp.bounds_mm, true)), state)
+        Document::KicadPcb(_) | Document::KicadSchematic(_) | Document::KicadFootprint(_) => {
+            paint_raster_canvas(ui, rect, detail_geometry(doc), state)
         }
         Document::KicadSymbolLib(_) | Document::GerberJob(_) | Document::LtspicePlot(_) => {
             paint_raster_canvas(ui, rect, None, state)
@@ -447,7 +439,7 @@ fn paint_canvas_document(
 const EDA_MIN_ZOOM: f32 = 0.1;
 const EDA_MAX_ZOOM: f32 = 64.0;
 
-fn eda_pan_zoom_canvas(
+pub(super) fn eda_pan_zoom_canvas(
     ui: &egui::Ui,
     rect: Rect,
     center: Pos2,
@@ -489,7 +481,7 @@ fn eda_pan_zoom_canvas(
     *zoom = next_zoom;
 }
 
-fn eda_fit_rect(rect: Rect) -> Rect {
+pub(super) fn eda_fit_rect(rect: Rect) -> Rect {
     if rect.width() > 48.0 && rect.height() > 48.0 {
         rect.shrink(12.0)
     } else {
@@ -538,6 +530,19 @@ fn render_center_panel(
     if let Some(request) = RasterRequest::for_document(doc, state) {
         state.raster.update(ui.ctx(), doc, request);
     }
+    if let Some((bounds, y_down)) = detail_geometry(doc)
+        && let Some(view) = RasterView::new(rect, state)
+        && let Some(mapping) = view.mapping(bounds, y_down)
+        && let Some(region) = detail_region(rect, &mapping, view.scale, ui.ctx().pixels_per_point())
+    {
+        let layers =
+            matches!(doc.as_ref(), Document::KicadPcb(_)).then(|| state.pcb_layers.clone());
+        state
+            .detail
+            .update(ui.ctx(), doc, RasterRequest::Detail(region, layers));
+    } else if state.detail.pending.is_some() || state.detail.display.is_some() {
+        state.detail.clear(ui.ctx());
+    }
     let coord_text = paint_canvas_document(ui, rect, &response, doc, state, colors);
     match state.raster.display.as_ref().map(|(_, image)| image) {
         Some(Err(error)) => {
@@ -556,11 +561,12 @@ fn render_center_panel(
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 enum RasterRequest {
     Fixed([u32; 2]),
     Pcb(BTreeSet<PcbLayerBucket>),
     Symbol(usize, i64),
+    Detail(RasterRegion, Option<BTreeSet<PcbLayerBucket>>),
 }
 
 impl RasterRequest {
@@ -576,6 +582,13 @@ impl RasterRequest {
         })
     }
 
+    fn compatible(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Detail(_, layers), Self::Detail(_, other_layers)) => layers == other_layers,
+            _ => self == other,
+        }
+    }
+
     fn render(self, doc: &Document, cancelled: &AtomicBool) -> Result<egui::ColorImage, String> {
         let image = match (self, doc) {
             (Self::Fixed(size), doc) => doc.render_thumbnail(size, cancelled),
@@ -584,6 +597,15 @@ impl RasterRequest {
             }
             (Self::Symbol(index, unit), Document::KicadSymbolLib(lib)) => {
                 lib.render_symbol_thumbnail(index, unit, [1024, 1024], cancelled)
+            }
+            (Self::Detail(region, Some(layers)), Document::KicadPcb(pcb)) => {
+                pcb.render_region(region, &layers, cancelled)
+            }
+            (Self::Detail(region, None), Document::KicadSchematic(sch)) => {
+                sch.render_region(region, cancelled)
+            }
+            (Self::Detail(region, None), Document::KicadFootprint(fp)) => {
+                fp.render_region(region, cancelled)
             }
             _ => return Err("Invalid EDA raster request".into()),
         }?;
@@ -607,9 +629,16 @@ impl ViewerRaster {
             .as_ref()
             .is_some_and(|(request, _)| *request == wanted)
         {
+            self.retire_pending(ctx);
             return;
         }
-        self.display = None;
+        if self
+            .display
+            .as_ref()
+            .is_some_and(|(request, result)| !request.compatible(&wanted) || result.is_err())
+        {
+            self.display = None;
+        }
         if let Some((request, task)) = &self.pending {
             if *request != wanted {
                 task.token.store(true, Ordering::Relaxed);
@@ -628,12 +657,14 @@ impl ViewerRaster {
                 let image = result
                     .map_err(|error| error.to_string())
                     .and_then(|image| image);
-                self.display = Some((
-                    wanted,
-                    image.map(|image| {
-                        ctx.load_texture("eda-viewer", image, egui::TextureOptions::LINEAR)
-                    }),
-                ));
+                if image.is_ok() || self.display.is_none() {
+                    self.display = Some((
+                        wanted,
+                        image.map(|image| {
+                            ctx.load_texture("eda-viewer", image, egui::TextureOptions::LINEAR)
+                        }),
+                    ));
+                }
                 return;
             }
         }
@@ -649,6 +680,22 @@ impl ViewerRaster {
         ctx.request_repaint_after(Duration::from_millis(16));
     }
 
+    fn clear(&mut self, ctx: &egui::Context) {
+        self.display = None;
+        self.retire_pending(ctx);
+    }
+
+    fn retire_pending(&mut self, ctx: &egui::Context) {
+        if let Some((_, task)) = &self.pending {
+            task.token.store(true, Ordering::Relaxed);
+            if task.poll().is_some() {
+                self.pending = None;
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+        }
+    }
+
     fn texture(&self) -> Option<&TextureHandle> {
         self.display
             .as_ref()
@@ -656,13 +703,13 @@ impl ViewerRaster {
     }
 }
 
-struct RasterMapping {
+pub(super) struct RasterMapping {
     origin: Pos2,
     points_per_mm: [f64; 2],
 }
 
 impl RasterMapping {
-    fn new(drawn: Rect, size: [u32; 2], bounds: [f64; 4], y_down: bool) -> Option<Self> {
+    pub(super) fn new(drawn: Rect, size: [u32; 2], bounds: [f64; 4], y_down: bool) -> Option<Self> {
         let transform = raster_transform(bounds, size, y_down)?;
         let scale = drawn.width() / size[0] as f32;
         Some(Self {
@@ -674,7 +721,7 @@ impl RasterMapping {
         })
     }
 
-    fn screen(&self, [x, y]: [f64; 2]) -> Pos2 {
+    pub(super) fn screen(&self, [x, y]: [f64; 2]) -> Pos2 {
         self.origin
             + vec2(
                 (x * self.points_per_mm[0]) as f32,
@@ -682,7 +729,7 @@ impl RasterMapping {
             )
     }
 
-    fn world(&self, pos: Pos2) -> [f64; 2] {
+    pub(super) fn world(&self, pos: Pos2) -> [f64; 2] {
         let delta = pos - self.origin;
         [
             f64::from(delta.x) / self.points_per_mm[0],
@@ -709,19 +756,97 @@ fn paint_raster(
     state: &ViewerState,
 ) -> Option<RasterMapping> {
     painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 22, 26));
-    let texture = state.raster.texture()?;
-    let size = texture.size_vec2();
-    let available = eda_fit_rect(rect).size().max(Vec2::splat(1.0));
-    let scale = (available.x / size.x).min(available.y / size.y) * state.zoom;
-    let drawn = Rect::from_center_size(rect.center() + state.pan, size * scale);
-    painter.image(
-        texture.id(),
-        drawn,
-        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-        Color32::WHITE,
-    );
+    let view = RasterView::new(rect, state)?;
+    let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
+    painter.image(view.texture.id(), view.drawn, uv, Color32::WHITE);
     let (bounds, y_down) = geometry?;
-    RasterMapping::new(drawn, texture.size().map(|dim| dim as u32), bounds, y_down)
+    let mapping = view.mapping(bounds, y_down)?;
+    if let Some((RasterRequest::Detail(region, _), Ok(texture))) = &state.detail.display {
+        let detail = Rect::from_two_pos(
+            mapping.screen(region.origin),
+            mapping.screen(region.far_corner()),
+        );
+        painter.image(texture.id(), detail, uv, Color32::WHITE);
+    }
+    Some(mapping)
+}
+
+struct RasterView<'a> {
+    texture: &'a TextureHandle,
+    drawn: Rect,
+    scale: f32,
+}
+
+impl<'a> RasterView<'a> {
+    fn new(rect: Rect, state: &'a ViewerState) -> Option<Self> {
+        let texture = state.raster.texture()?;
+        let size = texture.size_vec2();
+        let available = eda_fit_rect(rect).size().max(Vec2::splat(1.0));
+        let scale = (available.x / size.x).min(available.y / size.y) * state.zoom;
+        let drawn = Rect::from_center_size(rect.center() + state.pan, size * scale);
+        Some(Self {
+            texture,
+            drawn,
+            scale,
+        })
+    }
+
+    fn mapping(&self, bounds: [f64; 4], y_down: bool) -> Option<RasterMapping> {
+        RasterMapping::new(
+            self.drawn,
+            self.texture.size().map(|dim| dim as u32),
+            bounds,
+            y_down,
+        )
+    }
+}
+
+fn detail_geometry(doc: &Document) -> Option<([f64; 4], bool)> {
+    match doc {
+        Document::KicadPcb(pcb) => Some((pcb.bounds_mm, true)),
+        Document::KicadFootprint(fp) => Some((fp.bounds_mm, true)),
+        Document::KicadSchematic(sch) => Some((
+            sch.bounds_mm,
+            sch.scene
+                .as_ref()
+                .is_none_or(|scene| scene.items.is_empty() || scene.y_down),
+        )),
+        _ => None,
+    }
+}
+
+fn detail_region(
+    rect: Rect,
+    mapping: &RasterMapping,
+    base_scale: f32,
+    dpr: f32,
+) -> Option<RasterRegion> {
+    if base_scale * dpr <= 1.4 {
+        return None;
+    }
+    // A quantized density and padded origin let nearby views share a tile.
+    let ppm = mapping.points_per_mm[0];
+    let side = f64::from(rect.width().max(rect.height())).max(1.0);
+    let cap = ppm * f64::from(RasterRegion::MAX_SIDE - 128) / side;
+    let pixels_per_mm = 2.0_f64.powf((ppm * f64::from(dpr)).min(cap).log2().floor());
+    if !pixels_per_mm.is_finite() || pixels_per_mm <= 0.0 {
+        return None;
+    }
+    let y_down = mapping.points_per_mm[1] > 0.0;
+    let direction = if y_down { 1.0 } else { -1.0 };
+    let top = mapping.world(rect.left_top());
+    let origin = [top[0], top[1] * direction]
+        .map(|coord| ((coord * pixels_per_mm / 64.0).floor() - 1.0) * 64.0 / pixels_per_mm);
+    let size = [rect.width(), rect.height()].map(|side| {
+        ((f64::from(side) * pixels_per_mm / ppm / 64.0).ceil() as u32 * 64 + 128)
+            .min(RasterRegion::MAX_SIDE)
+    });
+    Some(RasterRegion {
+        origin: [origin[0], origin[1] * direction],
+        size,
+        pixels_per_mm,
+        y_down,
+    })
 }
 
 fn raster_cursor(ui: &egui::Ui, rect: Rect, mapping: &RasterMapping) -> Option<[f64; 2]> {
@@ -1289,7 +1414,7 @@ fn paint_origin_crosshair(
     paint_crosshair(painter, clip_rect, origin);
 }
 
-fn paint_crosshair(painter: &egui::Painter, rect: Rect, origin: Pos2) {
+pub(super) fn paint_crosshair(painter: &egui::Painter, rect: Rect, origin: Pos2) {
     if rect.contains(origin) {
         let stroke = Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 145, 175, 110));
         painter.line_segment([origin - vec2(8.0, 0.0), origin + vec2(8.0, 0.0)], stroke);
@@ -1372,6 +1497,39 @@ mod tests {
         assert_eq!(child.related[0].source, origin);
         std::fs::write(&board, "(kicad_pcb)").unwrap();
         assert!(Viewer::follow_project_link(origin, link, &cancel).is_err());
+    }
+
+    #[test]
+    fn detail_tile_covers_the_view_and_keeps_both_axis_directions_registered() {
+        let viewport = Rect::from_min_size(pos2(100.0, 200.0), vec2(1100.0, 500.0));
+        let base = Rect::from_center_size(pos2(830.0, 320.0), vec2(6000.0, 3000.0));
+        for y_down in [true, false] {
+            let mapping =
+                RasterMapping::new(base, [1200, 600], [-40.0, -20.0, 40.0, 20.0], y_down).unwrap();
+            let tile = detail_region(viewport, &mapping, 5.0, 2.0).unwrap();
+            let rect = Rect::from_two_pos(
+                mapping.screen(tile.origin),
+                mapping.screen(tile.far_corner()),
+            );
+            assert!(rect.contains_rect(viewport));
+            assert!(
+                tile.size
+                    .into_iter()
+                    .all(|side| side <= RasterRegion::MAX_SIDE)
+            );
+            assert_eq!(tile.y_down, y_down);
+            let anchor = [2.0, -1.0];
+            let device = [
+                (anchor[0] - tile.origin[0]) * tile.pixels_per_mm,
+                (anchor[1] - tile.origin[1]) * tile.pixels_per_mm * if y_down { 1.0 } else { -1.0 },
+            ];
+            let from_tile = rect.min
+                + vec2(
+                    device[0] as f32 / tile.size[0] as f32 * rect.width(),
+                    device[1] as f32 / tile.size[1] as f32 * rect.height(),
+                );
+            assert!(from_tile.distance(mapping.screen(anchor)) < 0.001);
+        }
     }
 
     fn render_single_frame(viewer: &mut Viewer, palette: &AppPalette) {

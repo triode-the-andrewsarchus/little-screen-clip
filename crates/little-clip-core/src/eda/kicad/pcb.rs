@@ -5,7 +5,7 @@ use super::super::{
     extend_arc_bounds, pixmap_to_thumbnail, update_bounds,
 };
 use super::scene_render::{append_arc_points, draw_obround, obround_axis};
-use crate::ImageThumbnail;
+use crate::{ImageThumbnail, eda::RasterRegion};
 use eda_view::kicad::sexp::{SExp, Value, parse as parse_sexp};
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::PI;
@@ -144,6 +144,21 @@ impl PcbPrim {
             | Self::Polygon { layer, .. }
             | Self::Arc { layer, .. } => *layer,
         }
+    }
+
+    fn visible_in(&self, region: RasterRegion) -> bool {
+        let mut bounds = None;
+        self.extend_bounds(&mut bounds);
+        let width = match self {
+            Self::Segment { width, .. } | Self::Arc { width, .. } => *width,
+            Self::Circle { stroke, .. }
+            | Self::Rect { stroke, .. }
+            | Self::Polygon { stroke, .. } => *stroke,
+            Self::Obround { .. } => 0.0,
+        };
+        bounds.is_some_and(|bounds| {
+            region.intersects(bounds, width.abs() + 2.0 / region.pixels_per_mm)
+        })
     }
 
     fn extend_bounds(&self, bounds: &mut Option<[f64; 4]>) {
@@ -365,6 +380,22 @@ impl KicadPcbDocument {
         self.render_layers(max_size, &enabled, cancelled)
     }
 
+    pub fn render_region(
+        &self,
+        region: RasterRegion,
+        visible: &BTreeSet<PcbLayerBucket>,
+        cancelled: &AtomicBool,
+    ) -> Result<ImageThumbnail, String> {
+        let bg = Color::from_rgba8(PCB_BG[0], PCB_BG[1], PCB_BG[2], PCB_BG[3]);
+        draw_pcb(
+            &self.primitives,
+            region.canvas(bg)?,
+            Some(region),
+            visible,
+            cancelled,
+        )
+    }
+
     /// Rasterizes the board using an explicit subset of visible layer buckets.
     pub fn render_layers(
         &self,
@@ -398,6 +429,22 @@ pub struct KicadFootprintDocument {
 }
 
 impl KicadFootprintDocument {
+    pub fn render_region(
+        &self,
+        region: RasterRegion,
+        cancelled: &AtomicBool,
+    ) -> Result<ImageThumbnail, String> {
+        let bg = Color::from_rgba8(PCB_BG[0], PCB_BG[1], PCB_BG[2], PCB_BG[3]);
+        let visible = PcbLayerBucket::ALL.into_iter().collect();
+        draw_pcb(
+            &self.primitives,
+            region.canvas(bg)?,
+            Some(region),
+            &visible,
+            cancelled,
+        )
+    }
+
     pub fn parse(bytes: &[u8], cancelled: &AtomicBool) -> Result<Self, String> {
         check_cancelled(cancelled, "KiCad footprint parse cancelled")?;
         let text = std::str::from_utf8(bytes)
@@ -1041,9 +1088,19 @@ fn render_pcb_prims(
 ) -> Result<ImageThumbnail, String> {
     check_cancelled(cancelled, "KiCad PCB render cancelled")?;
     let bg = Color::from_rgba8(PCB_BG[0], PCB_BG[1], PCB_BG[2], PCB_BG[3]);
-    let (mut pixmap, transform, scale) = allocate_canvas_with_y_flip(bounds, max_size, bg, true)
+    let canvas = allocate_canvas_with_y_flip(bounds, max_size, bg, true)
         .ok_or_else(|| "Could not allocate KiCad PCB canvas".to_string())?;
 
+    draw_pcb(prims, canvas, None, visible, cancelled)
+}
+
+fn draw_pcb(
+    prims: &[PcbPrim],
+    (mut pixmap, transform, scale): (Pixmap, Transform, f32),
+    region: Option<RasterRegion>,
+    visible: &BTreeSet<PcbLayerBucket>,
+    cancelled: &AtomicBool,
+) -> Result<ImageThumbnail, String> {
     let min_stroke = f64::from(0.9 / scale.max(0.01));
     for &bucket in &PcbLayerBucket::ALL {
         if !visible.contains(&bucket) {
@@ -1054,7 +1111,7 @@ fn render_pcb_prims(
             if idx.is_multiple_of(2048) {
                 check_cancelled(cancelled, "KiCad PCB render cancelled")?;
             }
-            if prim.layer() == bucket {
+            if prim.layer() == bucket && region.is_none_or(|region| prim.visible_in(region)) {
                 draw_pcb_prim(&mut pixmap, prim, rgba, transform, min_stroke);
             }
         }
