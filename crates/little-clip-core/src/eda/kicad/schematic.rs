@@ -53,6 +53,9 @@ pub struct SchematicSymbolInfo {
     pub lib_id: String,
     pub footprint: String,
     pub pos_mm: [f64; 2],
+    pub unit: i64,
+    pub rotation_deg: f64,
+    pub mirror: String,
     pub is_power: bool,
 }
 
@@ -476,6 +479,9 @@ fn collect_schematic_symbols(sch: &Schematic) -> (Vec<SchematicSymbolInfo>, usiz
                 lib_id: sym.lib_id.clone(),
                 footprint: sym.footprint().to_string(),
                 pos_mm: [sym.position.0, sym.position.1],
+                unit: sym.unit,
+                rotation_deg: sym.rotation,
+                mirror: sym.mirror.clone(),
                 is_power,
             });
         }

@@ -1,5 +1,6 @@
 //! Read-only comparison of guarded file snapshots and captured waveform summaries.
 mod artwork;
+mod eda_fields;
 mod facts;
 mod tag_memory;
 use super::{preview_job::Task, scope_view, shelf::preview, tags_view};
@@ -104,8 +105,10 @@ impl Viewer {
             (Some(a), Some(b)) if a == b => {
                 if is_artwork(a) {
                     Mode::Artwork
-                } else {
+                } else if eda_fields::supported(a) {
                     Mode::Fields
+                } else {
+                    Mode::Sources
                 }
             }
             _ => Mode::Sources,
@@ -335,6 +338,11 @@ impl Viewer {
     }
 
     fn fields(&self, ui: &mut Ui) {
+        if self.sources[0].eda == Some(little_clip_core::eda::EdaFormat::SpiceRaw)
+            && self.sources[self.other].eda == self.sources[0].eda
+        {
+            ui.weak("Sweeps are matched by source order within each analysis and signal. Values summarize retained samples.");
+        }
         if self.keys.is_empty() {
             ui.weak("No differences in the decoded fields shown here.");
             return;
@@ -526,13 +534,14 @@ impl Input {
             .map(|data| Facts::prepare(data, &path, cancel))
             .unwrap_or_default();
         use little_clip_core::eda::{
-            EdaFormat, is_gerber_gbr_path, is_spice_raw_path, read_document_with_source,
+            EdaFormat, is_gerber_gbr_path, is_spice_raw_path, ltspice, read_document_with_source,
         };
         let mut eda = None;
         if format.is_none()
             && (EdaFormat::extension_hint(&path).is_some()
                 || is_gerber_gbr_path(&path)
-                || is_spice_raw_path(&path))
+                || is_spice_raw_path(&path)
+                || ltspice::is_schematic_path(&path))
         {
             match read_document_with_source(&path, cancel) {
                 Ok((document, observed)) => {
@@ -541,6 +550,7 @@ impl Input {
                     }
                     eda = Some(document.format());
                     facts.eda(&document);
+                    eda_fields::prepare(&mut facts, &document);
                 }
                 Err(error) => facts.add("EDA preview unavailable", error),
             }
@@ -682,7 +692,7 @@ mod tests {
     use super::*;
     use egui_kittest::{
         Harness,
-        kittest::{Node, Queryable},
+        kittest::{NodeT, Queryable},
     };
 
     #[test]

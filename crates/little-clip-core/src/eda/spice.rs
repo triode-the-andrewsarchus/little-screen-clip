@@ -68,6 +68,7 @@ pub struct SpiceComponentInfo {
     pub name: String,
     pub kind: &'static str,
     pub nodes: Vec<String>,
+    pub card: String,
 }
 
 /// Decoded SPICE netlist document (`.cir`, `.sp`, `.spice`).
@@ -111,7 +112,11 @@ impl SpiceNetlistDocument {
             if index.is_multiple_of(512) {
                 check_cancelled(cancelled, "SPICE netlist summary cancelled")?;
             }
-            elements.record(&element.name, element.nodes.iter().map(String::as_str));
+            elements.record(
+                &element.name,
+                element.nodes.iter().map(String::as_str),
+                outcome.sources.snippet(element.span),
+            );
         }
         let models = merge_models(&outcome.netlist.models, scanned.models);
         let analyses = merge_analyses(&outcome.netlist.analyses, scanned.analyses);
@@ -673,7 +678,7 @@ struct ElementSummary {
 }
 
 impl ElementSummary {
-    fn record<'a>(&mut self, name: &str, nodes: impl Iterator<Item = &'a str>) {
+    fn record<'a>(&mut self, name: &str, nodes: impl Iterator<Item = &'a str>, card: &str) {
         let Some(prefix) = name.chars().next() else {
             return;
         };
@@ -692,6 +697,9 @@ impl ElementSummary {
                 name: name.to_owned(),
                 kind,
                 nodes: connections,
+                card: card[..card.floor_char_boundary(card.len().min(1024))]
+                    .trim()
+                    .to_owned(),
             });
         }
     }
@@ -914,7 +922,7 @@ fn record_top_element(line: &str, elements: &mut ElementSummary) {
         .iter()
         .copied()
         .filter(|n| !n.contains('='));
-    elements.record(name, nodes);
+    elements.record(name, nodes, line);
 }
 
 fn pick_netlist_title(ir_title: &str, scan_title: &str, path: &Path) -> String {
