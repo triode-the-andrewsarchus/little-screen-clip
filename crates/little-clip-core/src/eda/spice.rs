@@ -1,7 +1,7 @@
 //! SPICE circuit netlists (`.cir`, `.sp`, `.spice`), SPICE/LTspice simulation
 //! output waveforms (`.raw`), and LTspice plot settings (`.plt`).
 
-use super::{MAX_SOURCE_CHARS, StripSummary, check_cancelled, pixmap_to_thumbnail};
+use super::{StripSummary, bounded_source_excerpt, check_cancelled, pixmap_to_thumbnail};
 use crate::ImageThumbnail;
 use dune_netlist::IncludeLoader;
 use dune_netlist::ir::Analysis;
@@ -124,7 +124,7 @@ impl SpiceNetlistDocument {
             analyses,
             includes: scanned.includes,
             diagnostics,
-            source_excerpt: bounded_spice_text(&text),
+            source_excerpt: bounded_source_excerpt(&text),
         })
     }
 
@@ -447,7 +447,7 @@ impl LtspicePlotDocument {
             analysis,
             panes,
             trace_count,
-            source_excerpt: bounded_spice_text(&text),
+            source_excerpt: bounded_source_excerpt(&text),
         })
     }
 
@@ -628,18 +628,6 @@ fn decode_utf16_be(bytes: &[u8]) -> String {
         .map(|chunk| u16::from_be_bytes(*chunk))
         .collect();
     String::from_utf16_lossy(&units)
-}
-
-fn bounded_spice_text(text: &str) -> String {
-    if text.len() <= MAX_SOURCE_CHARS {
-        text.to_string()
-    } else {
-        let end = text.floor_char_boundary(MAX_SOURCE_CHARS);
-        let mut out = String::with_capacity(end + 64);
-        out.push_str(&text[..end]);
-        out.push_str("\n… [source truncated for preview]");
-        out
-    }
 }
 
 struct ScannedNetlist {

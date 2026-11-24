@@ -369,9 +369,12 @@ pub(crate) fn check_cancelled(cancelled: &AtomicBool, message: &str) -> Result<(
 }
 
 pub(crate) fn bounded_source_text(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
+    bounded_source_excerpt(&String::from_utf8_lossy(bytes))
+}
+
+fn bounded_source_excerpt(text: &str) -> String {
     if text.len() <= MAX_SOURCE_CHARS {
-        text.into_owned()
+        text.to_owned()
     } else {
         let end = text.floor_char_boundary(MAX_SOURCE_CHARS);
         let mut out = String::with_capacity(end + 64);
