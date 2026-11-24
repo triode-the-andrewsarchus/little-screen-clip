@@ -396,6 +396,12 @@ mod tests {
             "parts.pos",
             "plot.plt",
             "plot.hpgl",
+            "board.kicad_pcb",
+            "sheet.kicad_sch",
+            "proj.kicad_pro",
+            "pad.kicad_mod",
+            "lib.kicad_sym",
+            "fab.gbrjob",
         ] {
             let entry = file_entry(name);
             assert_eq!(family(&entry), Category::Eda, "expected Eda for {name}");

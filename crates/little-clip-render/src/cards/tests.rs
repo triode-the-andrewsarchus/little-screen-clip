@@ -648,3 +648,60 @@ fn eda_cards_render_stage1_pcb_files_and_preserve_gimp_brushes() {
     let brush_preview = renderer.file_preview(&brush_item).expect("gimp brush card");
     assert!(matches!(brush_preview.as_ref(), Preview::Brush(_)));
 }
+
+#[test]
+fn eda_cards_render_stage2_kicad_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let pcb = dir.path().join("board.kicad_pcb");
+    std::fs::write(
+        &pcb,
+        "(kicad_pcb (version 20240108) (layers (0 \"F.Cu\" signal) (44 \"Edge.Cuts\" user)) (gr_rect (start 0 0) (end 20 15) (layer \"Edge.Cuts\")) (segment (start 2 2) (end 18 12) (width 0.4) (layer \"F.Cu\")))",
+    )
+    .unwrap();
+    let sch = dir.path().join("sheet.kicad_sch");
+    std::fs::write(
+        &sch,
+        "(kicad_sch (version 20231120) (paper \"A4\") (wire (pts (xy 10 10) (xy 50 10))) (label \"VIN\" (at 20 10 0)))",
+    )
+    .unwrap();
+    let pro = dir.path().join("proj.kicad_pro");
+    std::fs::write(
+        &pro,
+        r#"{"meta":{"filename":"proj.kicad_pro","version":1},"net_settings":{"classes":[{"name":"Default","track_width":0.25}]}}"#,
+    )
+    .unwrap();
+    let fp = dir.path().join("part.kicad_mod");
+    std::fs::write(
+        &fp,
+        "(footprint \"Test:R\" (layer \"F.Cu\") (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\")))",
+    )
+    .unwrap();
+    let sym = dir.path().join("lib.kicad_sym");
+    std::fs::write(
+        &sym,
+        "(kicad_symbol_lib (version 20231120) (symbol \"R\" (symbol \"R_0_1\" (rectangle (start -1 -2) (end 1 2)))))",
+    )
+    .unwrap();
+    let gbrjob = dir.path().join("fab.gbrjob");
+    std::fs::write(
+        &gbrjob,
+        r#"{"GeneralSpecs":{"Size":{"X":50,"Y":30},"LayerNumber":2},"MaterialStackup":[{"Type":"Copper","Name":"F.Cu","Thickness":0.035},{"Type":"Dielectric","Name":"Core","Thickness":1.5}]}"#,
+    )
+    .unwrap();
+
+    let renderer = ScreenRenderer::fallback(AppConfig::default());
+    for path in [&pcb, &sch, &pro, &fp, &sym, &gbrjob] {
+        let item = ClipItem::from_single_file(path);
+        let preview = renderer
+            .file_preview(&item)
+            .unwrap_or_else(|| panic!("missing card preview for {}", path.display()));
+        assert!(matches!(
+            preview.as_ref(),
+            Preview::Page(page) if page.width == 0 && page.height == 0
+        ));
+        let mut state = SlotManager::default();
+        state.push_left(item);
+        let image = renderer.render_pixmap(&state).unwrap();
+        assert!(image.pixels().iter().any(|p| p.alpha() > 0));
+    }
+}

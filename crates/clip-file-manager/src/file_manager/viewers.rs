@@ -1133,6 +1133,12 @@ mod tests {
             ("missing.POS", Format::Eda),
             ("missing.PLT", Format::Eda),
             ("missing.HPGL", Format::Eda),
+            ("missing.KICAD_PCB", Format::Eda),
+            ("missing.KICAD_SCH", Format::Eda),
+            ("missing.KICAD_PRO", Format::Eda),
+            ("missing.KICAD_MOD", Format::Eda),
+            ("missing.KICAD_SYM", Format::Eda),
+            ("missing.GBRJOB", Format::Eda),
         ] {
             let path = Path::new(name);
             assert_eq!(Format::for_path(path), Some(format));
