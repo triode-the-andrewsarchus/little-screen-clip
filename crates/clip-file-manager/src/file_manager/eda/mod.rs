@@ -11,7 +11,6 @@ use crate::{
 };
 use clip_ui::buttons::ButtonRole;
 use egui::{Align2, Color32, FontId, Pos2, Rect, Stroke, TextureHandle, Vec2, pos2, vec2};
-use little_clip_core::ImageThumbnail;
 use little_clip_core::eda::{
     Document, EdaFormat, StripSummary,
     gerber::GerberDocument,
@@ -20,10 +19,15 @@ use little_clip_core::eda::{
     pick_place::{PickAndPlaceDocument, PlacementSide},
     read_document,
 };
+use little_clip_core::jobs::{BackgroundJobs, JobError, task::Task};
 use little_clip_core::palette::AppPalette;
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
 
 pub(super) fn is_gerber_gbr_file(path: &Path) -> bool {
     little_clip_core::eda::is_gerber_gbr_path(path)
@@ -161,7 +165,7 @@ fn paint_strip_contents(
 
 #[derive(Default)]
 struct ViewerState {
-    raster: Option<TextureHandle>,
+    raster: ViewerRaster,
     source_lines: Vec<std::ops::Range<usize>>,
     selected_line: Option<usize>,
     source_scroll: bool,
@@ -202,7 +206,7 @@ impl ViewerState {
 }
 
 pub(super) struct Viewer {
-    doc: Document,
+    doc: Arc<Document>,
     state: ViewerState,
 }
 
@@ -216,7 +220,10 @@ impl Viewer {
         {
             state.selected_unit = symbol.units[0];
         }
-        Ok(Self { doc, state })
+        Ok(Self {
+            doc: Arc::new(doc),
+            state,
+        })
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
@@ -295,40 +302,26 @@ fn paint_canvas_document(
 ) -> String {
     let mut raw_readout = None;
     let cursor_mm = match doc {
-        Document::Gerber(gerber) => {
-            if state.raster.is_none() {
-                ensure_texture_from_result(
-                    ui.ctx(),
-                    "eda-gerber",
-                    gerber.render_thumbnail([1024, 1024], &AtomicBool::new(false)),
-                    state,
-                );
-            }
-            paint_gerber_canvas(ui, rect, gerber, state, colors)
-        }
+        Document::Gerber(gerber) => paint_gerber_canvas(ui, rect, gerber, state, colors),
         Document::PickAndPlace(pos_doc) => {
             paint_pick_place_canvas(ui, rect, response, pos_doc, state, colors)
         }
         Document::Hpgl(hpgl) => paint_hpgl_canvas(ui, rect, response, hpgl, state, colors),
-        Document::KicadPcb(pcb) => kicad::paint_pcb_center(ui, rect, pcb, state, colors),
+        Document::KicadPcb(pcb) => {
+            paint_raster_canvas(ui, rect, pcb.bounds_mm, true, state, colors)
+        }
         Document::KicadSchematic(sch) => {
-            kicad::paint_schematic_center(ui, rect, sch, state, colors)
+            paint_raster_canvas(ui, rect, sch.bounds_mm, true, state, colors)
         }
-        Document::KicadFootprint(fp) => kicad::paint_footprint_center(ui, rect, fp, state, colors),
-        Document::KicadSymbolLib(lib) => {
-            kicad::paint_symbol_lib_center(ui, rect, lib, state, colors);
-            None
+        Document::KicadFootprint(fp) => {
+            paint_raster_canvas(ui, rect, fp.bounds_mm, true, state, colors)
         }
-        Document::GerberJob(job) => {
-            kicad::paint_gbrjob_center(ui, rect, job, state, colors);
+        Document::KicadSymbolLib(_) | Document::GerberJob(_) | Document::LtspicePlot(_) => {
+            paint_raster_canvas(ui, rect, [0.0, 0.0, 0.0, 0.0], true, state, colors);
             None
         }
         Document::SpiceRaw(raw) => {
             raw_readout = Some(spice::paint_raw_center(ui, rect, raw, state, colors));
-            None
-        }
-        Document::LtspicePlot(plt) => {
-            spice::paint_plt_center(ui, rect, plt, state, colors);
             None
         }
         Document::KicadProject(_) | Document::SpiceNetlist(_) => None,
@@ -405,7 +398,7 @@ fn eda_fit_rect(rect: Rect) -> Rect {
 
 fn render_center_panel(
     ui: &mut egui::Ui,
-    doc: &Document,
+    doc: &Arc<Document>,
     state: &mut ViewerState,
     colors: WorkbenchColors,
 ) {
@@ -416,7 +409,7 @@ fn render_center_panel(
         return;
     }
 
-    let has_source = matches!(doc, Document::Hpgl(_) | Document::LtspicePlot(_))
+    let has_source = matches!(doc.as_ref(), Document::Hpgl(_) | Document::LtspicePlot(_))
         && !state.source_lines.is_empty();
     let canvas_h = if has_source {
         (ui.available_height() - 160.0).max(120.0)
@@ -429,26 +422,124 @@ fn render_center_panel(
     );
     eda_pan_zoom_canvas(ui, rect, &response, &mut state.zoom, &mut state.pan);
 
+    if let Some(request) = RasterRequest::for_document(doc, state) {
+        state.raster.update(ui.ctx(), doc, request);
+    }
     let coord_text = paint_canvas_document(ui, rect, &response, doc, state, colors);
-    ui.label(coord_text);
+    match state.raster.display.as_ref().map(|(_, image)| image) {
+        Some(Err(error)) => {
+            ui.label(error);
+        }
+        None if state.raster.pending.is_some() => {
+            ui.label("Rendering preview…");
+        }
+        _ => {
+            ui.label(coord_text);
+        }
+    }
 
     if has_source {
         render_source_rows(ui, source_text_for(doc), state);
     }
 }
 
-fn ensure_texture_from_result(
-    ctx: &egui::Context,
-    name: &str,
-    rendered: Result<ImageThumbnail, String>,
-    state: &mut ViewerState,
-) {
-    if let Ok(image) = rendered {
-        let color_image = egui::ColorImage::from_rgba_premultiplied(
+#[derive(Clone, PartialEq, Eq)]
+enum RasterRequest {
+    Fixed([u32; 2]),
+    Pcb(BTreeSet<PcbLayerBucket>),
+    Symbol(usize, i64),
+}
+
+impl RasterRequest {
+    fn for_document(doc: &Document, state: &ViewerState) -> Option<Self> {
+        Some(match doc {
+            Document::KicadPcb(_) => Self::Pcb(state.pcb_layers.clone()),
+            Document::KicadSymbolLib(_) => Self::Symbol(state.selected_symbol, state.selected_unit),
+            Document::Gerber(_) | Document::KicadFootprint(_) => Self::Fixed([1024, 1024]),
+            Document::KicadSchematic(_) => Self::Fixed([1400, 1000]),
+            Document::GerberJob(_) => Self::Fixed([1024, 700]),
+            Document::LtspicePlot(_) => Self::Fixed([1024, 520]),
+            _ => return None,
+        })
+    }
+
+    fn render(self, doc: &Document, cancelled: &AtomicBool) -> Result<egui::ColorImage, String> {
+        let image = match (self, doc) {
+            (Self::Fixed(size), doc) => doc.render_thumbnail(size, cancelled),
+            (Self::Pcb(layers), Document::KicadPcb(pcb)) => {
+                pcb.render_layers([1400, 1000], &layers, cancelled)
+            }
+            (Self::Symbol(index, unit), Document::KicadSymbolLib(lib)) => {
+                lib.render_symbol_thumbnail(index, unit, [1024, 1024], cancelled)
+            }
+            _ => return Err("Invalid EDA raster request".into()),
+        }?;
+        Ok(egui::ColorImage::from_rgba_premultiplied(
             [image.width as usize, image.height as usize],
             &image.premultiplied_rgba,
-        );
-        state.raster = Some(ctx.load_texture(name, color_image, egui::TextureOptions::LINEAR));
+        ))
+    }
+}
+
+#[derive(Default)]
+struct ViewerRaster {
+    pending: Option<(RasterRequest, Task<Result<egui::ColorImage, String>>)>,
+    display: Option<(RasterRequest, Result<TextureHandle, String>)>,
+}
+
+impl ViewerRaster {
+    fn update(&mut self, ctx: &egui::Context, doc: &Arc<Document>, wanted: RasterRequest) {
+        if self
+            .display
+            .as_ref()
+            .is_some_and(|(request, _)| *request == wanted)
+        {
+            return;
+        }
+        self.display = None;
+        if let Some((request, task)) = &self.pending {
+            if *request != wanted {
+                task.token.store(true, Ordering::Relaxed);
+            }
+            let Some(result) = task.poll() else {
+                ctx.request_repaint_after(Duration::from_millis(16));
+                return;
+            };
+            let current = *request == wanted && !task.token.load(Ordering::Relaxed);
+            self.pending = None;
+            if current {
+                if matches!(result, Err(JobError::QueueFull)) {
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                    return;
+                }
+                let image = result
+                    .map_err(|error| error.to_string())
+                    .and_then(|image| image);
+                self.display = Some((
+                    wanted,
+                    image.map(|image| {
+                        ctx.load_texture("eda-viewer", image, egui::TextureOptions::LINEAR)
+                    }),
+                ));
+                return;
+            }
+        }
+
+        let document = Arc::clone(doc);
+        let request = wanted.clone();
+        self.pending = Some((
+            wanted,
+            Task::start_unbounded(BackgroundJobs::global(), move |cancelled| {
+                request.render(&document, cancelled)
+            }),
+        ));
+        ctx.request_repaint_after(Duration::from_millis(16));
+    }
+
+    fn texture(&self) -> Option<&TextureHandle> {
+        self.display
+            .as_ref()
+            .and_then(|(_, result)| result.as_ref().ok())
     }
 }
 
@@ -462,7 +553,7 @@ fn paint_raster_canvas(
 ) -> Option<[f64; 2]> {
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 3.0, Color32::from_rgb(18, 22, 26));
-    if let Some(tex) = &state.raster {
+    if let Some(tex) = state.raster.texture() {
         let tex_size = tex.size_vec2();
         if tex_size.x > 0.0 && tex_size.y > 0.0 {
             let scale = ((rect.width() - 32.0).max(1.0) / tex_size.x)
@@ -531,7 +622,7 @@ fn paint_gerber_canvas(
         state.pan,
     );
 
-    if let Some(tex) = &state.raster {
+    if let Some(tex) = state.raster.texture() {
         let board_rect = Rect::from_min_max(lo, hi);
         let draw_rect = gerber_texture_draw_rect(board_rect, bounds, tex.size_vec2());
         painter.image(
@@ -1260,6 +1351,40 @@ mod tests {
             assert!(strip.eda.is_some());
             let mut viewer = Viewer::load(path, &cancel).unwrap();
             render_single_frame(&mut viewer, &palette);
+        }
+    }
+
+    #[test]
+    fn raster_worker_publishes_only_the_current_layer_request() {
+        let ctx = egui::Context::default();
+        let doc = Arc::new(
+            little_clip_core::eda::parse_bytes(
+                Path::new("board.kicad_pcb"),
+                br#"(kicad_pcb (segment (start 2 2) (end 12 2) (width 0.3) (layer "F.Cu")))"#,
+                &AtomicBool::new(false),
+            )
+            .unwrap(),
+        );
+        let mut raster = ViewerRaster::default();
+        raster.update(
+            &ctx,
+            &doc,
+            RasterRequest::Pcb(PcbLayerBucket::ALL.into_iter().collect()),
+        );
+        let wanted = RasterRequest::Pcb(BTreeSet::new());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            raster.update(&ctx, &doc, wanted.clone());
+            if let Some((request, result)) = &raster.display {
+                assert!(*request == wanted);
+                assert!(result.is_ok());
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "raster did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
