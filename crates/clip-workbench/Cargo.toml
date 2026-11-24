@@ -29,6 +29,7 @@ hound = "3.5.1"
 image = { workspace = true }
 tempfile = "3.27"
 libc = "0.2"
+x11rb.workspace = true
 
 [dev-dependencies]
 clip-ui = { path = "../clip-ui", features = ["test-support"] }
