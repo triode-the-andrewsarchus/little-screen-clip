@@ -1,16 +1,38 @@
 //! Screen-relative sizing for the fixed-size workbench popup.
 
+mod x11;
+
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use eframe::egui::{Vec2, ViewportBuilder};
+use eframe::egui::{Pos2, Vec2, ViewportBuilder};
 use serde::Deserialize;
 
 const SCREEN_FRACTION: f32 = 0.92;
 const FALLBACK_SIZE: Vec2 = Vec2::new(960.0, 540.0);
+
+#[derive(Clone, Copy, Debug)]
+struct Placement {
+    size: Vec2,
+    logical_position: Option<Pos2>,
+    physical_position: Option<(i32, i32)>,
+}
+
+impl Placement {
+    fn fallback() -> Self {
+        Self {
+            size: FALLBACK_SIZE,
+            logical_position: None,
+            physical_position: None,
+        }
+    }
+}
+
+static RESOLVED_X11_PLACEMENT: OnceLock<Placement> = OnceLock::new();
 
 #[derive(Deserialize)]
 struct Output {
@@ -208,22 +230,32 @@ fn wait_for_window(pid: Option<u32>, expected_size: Option<Vec2>) -> Option<u64>
     None
 }
 
+fn has_env(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| !value.is_empty())
+}
+
 fn focus_existing() {
-    if std::env::var_os("NIRI_SOCKET").is_some()
-        && let Some(id) = wait_for_window(None, None)
-    {
-        niri_action("FocusWindow", id);
+    if has_env("NIRI_SOCKET") {
+        if let Some(id) = wait_for_window(None, None) {
+            niri_action("FocusWindow", id);
+        }
+    } else if has_env("DISPLAY") {
+        x11::focus_existing();
     }
 }
 
 pub(crate) fn center_when_mapped() {
-    if std::env::var_os("NIRI_SOCKET").is_some() {
+    if has_env("NIRI_SOCKET") {
         let expected_size = discover_size().unwrap_or(FALLBACK_SIZE);
         std::thread::spawn(move || {
             if let Some(id) = wait_for_window(Some(std::process::id()), Some(expected_size)) {
                 niri_action("CenterWindow", id);
             }
         });
+    } else if has_env("DISPLAY")
+        && let Some(pos) = discover_placement().physical_position
+    {
+        x11::center_when_mapped(pos);
     }
 }
 
@@ -248,6 +280,29 @@ fn discover_size() -> Result<Vec2, String> {
     size_from_output(output)
 }
 
+fn discover_placement() -> Placement {
+    if has_env("NIRI_SOCKET") {
+        let size = discover_size().unwrap_or_else(|err| {
+            tracing::warn!(%err, "Using fallback workbench popup size");
+            FALLBACK_SIZE
+        });
+        return Placement {
+            size,
+            logical_position: None,
+            physical_position: None,
+        };
+    }
+    if has_env("DISPLAY") {
+        return *RESOLVED_X11_PLACEMENT.get_or_init(|| {
+            x11::discover_placement().unwrap_or_else(|err| {
+                tracing::warn!(%err, "Using fallback X11 workbench popup placement");
+                Placement::fallback()
+            })
+        });
+    }
+    Placement::fallback()
+}
+
 fn fixed_viewport(viewport: ViewportBuilder, size: Vec2) -> ViewportBuilder {
     viewport
         .with_inner_size(size)
@@ -260,17 +315,18 @@ fn fixed_viewport(viewport: ViewportBuilder, size: Vec2) -> ViewportBuilder {
 }
 
 pub(crate) fn window_builder(viewport: ViewportBuilder) -> ViewportBuilder {
-    let size = discover_size().unwrap_or_else(|err| {
-        tracing::warn!(%err, "Using fallback workbench popup size");
-        FALLBACK_SIZE
-    });
+    let placement = discover_placement();
     tracing::info!(
-        width = size.x,
-        height = size.y,
+        width = placement.size.x,
+        height = placement.size.y,
         "Opening fixed workbench popup"
     );
     // This hook runs after eframe's initial size selection, before native creation.
-    fixed_viewport(viewport, size)
+    let mut builder = fixed_viewport(viewport, placement.size);
+    if let Some(position) = placement.logical_position {
+        builder = builder.with_position(position);
+    }
+    builder
 }
 
 #[cfg(test)]
