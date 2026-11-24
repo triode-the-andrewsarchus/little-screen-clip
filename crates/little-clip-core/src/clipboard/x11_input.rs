@@ -14,40 +14,40 @@ const KEYSYM_SUPER_R: u32 = 0xffec;
 const KEYSYM_C: u32 = 0x0063;
 const KEYSYM_V: u32 = 0x0076;
 
+struct XtestKeymap {
+    conn: x11rb::rust_connection::RustConnection,
+    min_kc: u8,
+    per_kc: usize,
+    syms: Vec<u32>,
+    keymap: [u8; 32],
+}
+
 pub(super) fn send_shortcut(
     action: ClipboardShortcutAction,
     release_alt: bool,
 ) -> Result<(), ClipboardError> {
-    let (conn, min_kc, per_kc, syms, keymap) = query_xtest_keymap()?;
+    let km = query_xtest_keymap()?;
     let (ctrl_kc, key_kc, ctrl_held) =
-        resolve_shortcut_keys(action, min_kc, per_kc, &syms, &keymap)?;
+        resolve_shortcut_keys(action, km.min_kc, km.per_kc, &km.syms, &km.keymap)?;
 
     if release_alt {
-        release_held_modifiers(&conn, min_kc, per_kc, &syms, &keymap)?;
+        release_held_modifiers(&km.conn, km.min_kc, km.per_kc, &km.syms, &km.keymap)?;
     }
     if !ctrl_held {
-        emit_key(&conn, xproto::KEY_PRESS_EVENT, ctrl_kc)?;
+        emit_key(&km.conn, xproto::KEY_PRESS_EVENT, ctrl_kc)?;
     }
-    emit_key(&conn, xproto::KEY_PRESS_EVENT, key_kc)?;
-    emit_key(&conn, xproto::KEY_RELEASE_EVENT, key_kc)?;
+    emit_key(&km.conn, xproto::KEY_PRESS_EVENT, key_kc)?;
+    emit_key(&km.conn, xproto::KEY_RELEASE_EVENT, key_kc)?;
     if !ctrl_held {
-        emit_key(&conn, xproto::KEY_RELEASE_EVENT, ctrl_kc)?;
+        emit_key(&km.conn, xproto::KEY_RELEASE_EVENT, ctrl_kc)?;
     }
-    conn.sync()
+    km.conn
+        .sync()
         .map_err(|e| ClipboardError::Failed(format!("XTEST sync: {e}")))?;
     Ok(())
 }
 
-fn query_xtest_keymap() -> Result<
-    (
-        x11rb::rust_connection::RustConnection,
-        u8,
-        usize,
-        Vec<u32>,
-        [u8; 32],
-    ),
-    ClipboardError,
-> {
+fn query_xtest_keymap() -> Result<XtestKeymap, ClipboardError> {
     let (conn, _) =
         x11rb::connect(None).map_err(|e| ClipboardError::Failed(format!("X11 connect: {e}")))?;
     conn.xtest_get_version(2, 2)
@@ -72,7 +72,13 @@ fn query_xtest_keymap() -> Result<
         .map_err(|e| ClipboardError::Failed(format!("query_keymap reply: {e}")))?
         .keys;
     let per_kc = usize::from(mapping.keysyms_per_keycode).max(1);
-    Ok((conn, min_kc, per_kc, mapping.keysyms, keymap))
+    Ok(XtestKeymap {
+        conn,
+        min_kc,
+        per_kc,
+        syms: mapping.keysyms,
+        keymap,
+    })
 }
 
 fn resolve_shortcut_keys(
