@@ -97,3 +97,5 @@ can-dbc = "7.0.0"
 tiny-skia.workspace = true
 lib_gerber_edit = { version = "0.7.2", default-features = false }
 eda-view = { version = "0.1.0", default-features = false, features = ["schematic"] }
+dune-netlist = "0.8.1"
+dune-raw = "0.8.1"

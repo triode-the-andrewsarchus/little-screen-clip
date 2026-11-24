@@ -4,6 +4,9 @@ pub mod gerber;
 pub mod hpgl;
 pub mod kicad;
 pub mod pick_place;
+pub mod spice;
+
+pub use spice::{is_spice_raw_bytes, is_spice_raw_path};
 
 use crate::ImageThumbnail;
 use crate::file_source::read_file_snapshot_with_source;
@@ -28,6 +31,9 @@ pub enum EdaFormat {
     KicadFootprint,
     KicadSymbolLib,
     GerberJob,
+    SpiceNetlist,
+    SpiceRaw,
+    LtspicePlot,
 }
 
 const UNIFIED_EXT_MAP: &[(&str, EdaFormat)] = &[
@@ -43,11 +49,14 @@ const UNIFIED_EXT_MAP: &[(&str, EdaFormat)] = &[
     ("kicad_mod", EdaFormat::KicadFootprint),
     ("kicad_sym", EdaFormat::KicadSymbolLib),
     ("gbrjob", EdaFormat::GerberJob),
+    ("cir", EdaFormat::SpiceNetlist),
+    ("sp", EdaFormat::SpiceNetlist),
+    ("spice", EdaFormat::SpiceNetlist),
 ];
 
 /// Returns whether a filename extension unambiguously identifies an EDA file format.
 ///
-/// `.gbr` is intentionally excluded because it collides with GIMP bitmap brushes.
+/// `.gbr` (GIMP brush) and `.raw` (camera RAW) are excluded and disambiguated by content.
 pub fn supports_extension(ext: &str) -> bool {
     EdaFormat::from_extension_str(ext).is_some()
 }
@@ -65,6 +74,9 @@ impl EdaFormat {
             Self::KicadFootprint => "KiCad Footprint",
             Self::KicadSymbolLib => "KiCad Symbol Library",
             Self::GerberJob => "Gerber Job",
+            Self::SpiceNetlist => "SPICE Netlist",
+            Self::SpiceRaw => "SPICE Waveforms",
+            Self::LtspicePlot => "LTspice Plot Settings",
         }
     }
 
@@ -92,6 +104,9 @@ pub enum Document {
     KicadFootprint(Box<kicad::KicadFootprintDocument>),
     KicadSymbolLib(Box<kicad::KicadSymbolLibDocument>),
     GerberJob(Box<kicad::GerberJobDocument>),
+    SpiceNetlist(Box<spice::SpiceNetlistDocument>),
+    SpiceRaw(Box<spice::SpiceRawDocument>),
+    LtspicePlot(Box<spice::LtspicePlotDocument>),
 }
 
 impl Document {
@@ -107,6 +122,9 @@ impl Document {
             Self::KicadFootprint(_) => EdaFormat::KicadFootprint,
             Self::KicadSymbolLib(_) => EdaFormat::KicadSymbolLib,
             Self::GerberJob(_) => EdaFormat::GerberJob,
+            Self::SpiceNetlist(_) => EdaFormat::SpiceNetlist,
+            Self::SpiceRaw(_) => EdaFormat::SpiceRaw,
+            Self::LtspicePlot(_) => EdaFormat::LtspicePlot,
         }
     }
 
@@ -122,6 +140,9 @@ impl Document {
             Self::KicadFootprint(doc) => doc.summary_line(),
             Self::KicadSymbolLib(doc) => doc.summary_line(),
             Self::GerberJob(doc) => doc.summary_line(),
+            Self::SpiceNetlist(doc) => doc.summary_line(),
+            Self::SpiceRaw(doc) => doc.summary_line(),
+            Self::LtspicePlot(doc) => doc.summary_line(),
         }
     }
 
@@ -141,6 +162,9 @@ impl Document {
             Self::KicadFootprint(doc) => doc.render_thumbnail(max_size, cancelled),
             Self::KicadSymbolLib(doc) => doc.render_thumbnail(max_size, cancelled),
             Self::GerberJob(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::SpiceNetlist(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::SpiceRaw(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::LtspicePlot(doc) => doc.render_thumbnail(max_size, cancelled),
         }
     }
 
@@ -158,6 +182,9 @@ impl Document {
             Self::KicadFootprint(doc) => doc.strip_summary(),
             Self::KicadSymbolLib(doc) => doc.strip_summary(),
             Self::GerberJob(doc) => doc.strip_summary(),
+            Self::SpiceNetlist(doc) => doc.strip_summary(),
+            Self::SpiceRaw(doc) => doc.strip_summary(),
+            Self::LtspicePlot(doc) => doc.strip_summary(),
         }
     }
 }
@@ -304,7 +331,19 @@ pub fn parse_bytes(path: &Path, bytes: &[u8], cancelled: &AtomicBool) -> Result<
         "pos" => {
             pick_place::PickAndPlaceDocument::parse(bytes, cancelled).map(Document::PickAndPlace)
         }
-        "plt" | "hpgl" => hpgl::HpglDocument::parse(bytes, cancelled).map(Document::Hpgl),
+        "plt" => {
+            if spice::looks_like_ltspice_plt(bytes) {
+                spice::LtspicePlotDocument::parse(bytes, cancelled)
+                    .map(|doc| Document::LtspicePlot(Box::new(doc)))
+            } else {
+                hpgl::HpglDocument::parse(bytes, cancelled).map(Document::Hpgl)
+            }
+        }
+        "hpgl" => hpgl::HpglDocument::parse(bytes, cancelled).map(Document::Hpgl),
+        "cir" | "sp" | "spice" => spice::SpiceNetlistDocument::parse(path, bytes, cancelled)
+            .map(|doc| Document::SpiceNetlist(Box::new(doc))),
+        "raw" => spice::SpiceRawDocument::parse(bytes, cancelled)
+            .map(|doc| Document::SpiceRaw(Box::new(doc))),
         ext @ ("kicad_pcb" | "kicad_mod" | "kicad_sch" | "kicad_sym" | "kicad_pro" | "gbrjob") => {
             kicad::parse_kicad(ext, path, bytes, cancelled)
         }

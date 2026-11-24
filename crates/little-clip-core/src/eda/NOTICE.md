@@ -7,3 +7,7 @@ vector extraction use [`eda-view`](https://crates.io/crates/eda-view) (MIT Licen
 from `kct`), which incorporates KiCad S-expression/schema code derived from
 `kicad-tools` (Copyright 2024 RJ Walters, MIT OR Apache-2.0) and the KiCad
 NewStroke vector font (CC0-1.0, KiCad Developers).
+
+SPICE netlist parsing and SPICE rawfile decoding use
+[`dune-netlist`](https://crates.io/crates/dune-netlist) and
+[`dune-raw`](https://crates.io/crates/dune-raw) (BSD-3-Clause License).

@@ -578,6 +578,7 @@ impl ClipItem {
             crate::file_format::Format::for_path(path),
             Some(crate::file_format::Format::Embroidery | crate::file_format::Format::Eda)
         ) || crate::eda::is_gerber_gbr_path(path)
+            || crate::eda::is_spice_raw_path(path)
         {
             // Keep the original file reference for clipboard restoration.
             return Self::from_single_file(path);

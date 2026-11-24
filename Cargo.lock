@@ -3085,6 +3085,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
+name = "dune-netlist"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ad686cad948e4629225806c2f18acf505294933a2e9fa65bd4cf495498a063a"
+dependencies = [
+ "libm",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "dune-raw"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4212dfc28f569a1547bb824eb04fb14527c786ecfed887574fe1e038054bedf7"
+dependencies = [
+ "num-complex",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "dwrote"
 version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6715,6 +6735,8 @@ dependencies = [
  "chrono",
  "clip-media-protocol",
  "csv",
+ "dune-netlist",
+ "dune-raw",
  "eda-view",
  "excalidraw-document",
  "fearless_simd 1.2.0",
