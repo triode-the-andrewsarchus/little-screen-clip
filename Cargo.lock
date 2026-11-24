@@ -3094,6 +3094,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda-view"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef2e46d804e85916c7f5f780cc1369ded8a114f77dd22f5d46433c7a18b3a62c"
+dependencies = [
+ "anyhow",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "eframe"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6680,6 +6691,7 @@ dependencies = [
  "chrono",
  "clip-media-protocol",
  "csv",
+ "eda-view",
  "excalidraw-document",
  "fearless_simd 1.2.0",
  "fearless_simd_macros",

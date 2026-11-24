@@ -2,6 +2,7 @@
 
 pub mod gerber;
 pub mod hpgl;
+pub mod kicad;
 pub mod pick_place;
 
 use crate::ImageThumbnail;
@@ -21,6 +22,34 @@ pub enum EdaFormat {
     Excellon,
     PickAndPlace,
     Hpgl,
+    KicadPcb,
+    KicadSchematic,
+    KicadProject,
+    KicadFootprint,
+    KicadSymbolLib,
+    GerberJob,
+}
+
+const UNIFIED_EXT_MAP: &[(&str, EdaFormat)] = &[
+    ("ger", EdaFormat::Gerber),
+    ("drl", EdaFormat::Excellon),
+    ("xln", EdaFormat::Excellon),
+    ("pos", EdaFormat::PickAndPlace),
+    ("plt", EdaFormat::Hpgl),
+    ("hpgl", EdaFormat::Hpgl),
+    ("kicad_pcb", EdaFormat::KicadPcb),
+    ("kicad_sch", EdaFormat::KicadSchematic),
+    ("kicad_pro", EdaFormat::KicadProject),
+    ("kicad_mod", EdaFormat::KicadFootprint),
+    ("kicad_sym", EdaFormat::KicadSymbolLib),
+    ("gbrjob", EdaFormat::GerberJob),
+];
+
+/// Returns whether a filename extension unambiguously identifies an EDA file format.
+///
+/// `.gbr` is intentionally excluded because it collides with GIMP bitmap brushes.
+pub fn supports_extension(ext: &str) -> bool {
+    EdaFormat::from_extension_str(ext).is_some()
 }
 
 impl EdaFormat {
@@ -30,31 +59,39 @@ impl EdaFormat {
             Self::Excellon => "Excellon Drill",
             Self::PickAndPlace => "Pick & Place",
             Self::Hpgl => "HPGL Plot",
+            Self::KicadPcb => "KiCad PCB",
+            Self::KicadSchematic => "KiCad Schematic",
+            Self::KicadProject => "KiCad Project",
+            Self::KicadFootprint => "KiCad Footprint",
+            Self::KicadSymbolLib => "KiCad Symbol Library",
+            Self::GerberJob => "Gerber Job",
         }
+    }
+
+    pub fn from_extension_str(ext: &str) -> Option<Self> {
+        UNIFIED_EXT_MAP
+            .iter()
+            .find(|(candidate, _)| ext.eq_ignore_ascii_case(candidate))
+            .map(|(_, format)| *format)
     }
 
     pub fn extension_hint(path: &Path) -> Option<Self> {
-        let ext = path.extension()?.to_str()?;
-        if ext.eq_ignore_ascii_case("ger") {
-            Some(Self::Gerber)
-        } else if ext.eq_ignore_ascii_case("drl") || ext.eq_ignore_ascii_case("xln") {
-            Some(Self::Excellon)
-        } else if ext.eq_ignore_ascii_case("pos") {
-            Some(Self::PickAndPlace)
-        } else if ext.eq_ignore_ascii_case("plt") || ext.eq_ignore_ascii_case("hpgl") {
-            Some(Self::Hpgl)
-        } else {
-            None
-        }
+        Self::from_extension_str(path.extension()?.to_str()?)
     }
 }
 
-/// Decoded Stage 1 EDA document.
+/// Decoded EDA document across fabrication, KiCad, and simulation formats.
 #[derive(Debug, Clone)]
 pub enum Document {
     Gerber(Box<gerber::GerberDocument>),
     PickAndPlace(pick_place::PickAndPlaceDocument),
     Hpgl(hpgl::HpglDocument),
+    KicadPcb(Box<kicad::KicadPcbDocument>),
+    KicadSchematic(Box<kicad::KicadSchematicDocument>),
+    KicadProject(Box<kicad::KicadProjectDocument>),
+    KicadFootprint(Box<kicad::KicadFootprintDocument>),
+    KicadSymbolLib(Box<kicad::KicadSymbolLibDocument>),
+    GerberJob(Box<kicad::GerberJobDocument>),
 }
 
 impl Document {
@@ -64,6 +101,12 @@ impl Document {
             Self::Gerber(_) => EdaFormat::Gerber,
             Self::PickAndPlace(_) => EdaFormat::PickAndPlace,
             Self::Hpgl(_) => EdaFormat::Hpgl,
+            Self::KicadPcb(_) => EdaFormat::KicadPcb,
+            Self::KicadSchematic(_) => EdaFormat::KicadSchematic,
+            Self::KicadProject(_) => EdaFormat::KicadProject,
+            Self::KicadFootprint(_) => EdaFormat::KicadFootprint,
+            Self::KicadSymbolLib(_) => EdaFormat::KicadSymbolLib,
+            Self::GerberJob(_) => EdaFormat::GerberJob,
         }
     }
 
@@ -73,6 +116,12 @@ impl Document {
             Self::Gerber(doc) => doc.summary_line(),
             Self::PickAndPlace(doc) => doc.summary_line(),
             Self::Hpgl(doc) => doc.summary_line(),
+            Self::KicadPcb(doc) => doc.summary_line(),
+            Self::KicadSchematic(doc) => doc.summary_line(),
+            Self::KicadProject(doc) => doc.summary_line(),
+            Self::KicadFootprint(doc) => doc.summary_line(),
+            Self::KicadSymbolLib(doc) => doc.summary_line(),
+            Self::GerberJob(doc) => doc.summary_line(),
         }
     }
 
@@ -86,89 +135,115 @@ impl Document {
             Self::Gerber(doc) => doc.render_thumbnail(max_size, cancelled),
             Self::PickAndPlace(doc) => doc.render_thumbnail(max_size, cancelled),
             Self::Hpgl(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::KicadPcb(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::KicadSchematic(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::KicadProject(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::KicadFootprint(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::KicadSymbolLib(doc) => doc.render_thumbnail(max_size, cancelled),
+            Self::GerberJob(doc) => doc.render_thumbnail(max_size, cancelled),
         }
     }
 
     /// Lightweight metadata summary stored in file-list preview caches.
     pub fn strip_summary(&self) -> StripSummary {
-        let format = self.format();
-        let detail = self.summary_line();
         match self {
-            Self::Gerber(doc) if doc.is_excellon => {
-                let w = (doc.bounds_mm[2] - doc.bounds_mm[0]).max(0.0);
-                let h = (doc.bounds_mm[3] - doc.bounds_mm[1]).max(0.0);
-                StripSummary {
-                    format,
-                    headline: format!(
-                        "{} · {} tools · {} holes",
-                        doc.layer_type,
-                        doc.tools.len(),
-                        doc.hole_count
-                    ),
-                    specs: format!(
-                        "{} · {} slots · {} arcs · {:.1}×{:.1} mm",
-                        doc.coordinate_format, doc.slot_count, doc.arc_count, w, h
-                    ),
-                    detail,
-                }
-            }
-            Self::Gerber(doc) => {
-                let mut parts = vec![
-                    doc.coordinate_format.clone(),
-                    doc.units.clone(),
-                    doc.polarity.clone(),
-                ];
-                if let Some(cu) = &doc.copper_thickness {
-                    parts.push(format!("Cu {cu}"));
-                }
-                parts.push(format!("{} apertures", doc.aperture_count));
-                StripSummary {
-                    format,
-                    headline: format!("Gerber · {}", doc.layer_type),
-                    specs: parts.join(" · "),
-                    detail,
-                }
-            }
+            Self::Gerber(doc) => gerber_strip_summary(doc, self.format(), self.summary_line()),
             Self::PickAndPlace(doc) => {
-                let w = (doc.bounds_mm[2] - doc.bounds_mm[0]).max(0.0);
-                let h = (doc.bounds_mm[3] - doc.bounds_mm[1]).max(0.0);
-                StripSummary {
-                    format,
-                    headline: format!(
-                        "Pick & Place · {} parts ({} Top / {} Bottom)",
-                        doc.placements.len(),
-                        doc.top_count,
-                        doc.bottom_count
-                    ),
-                    specs: format!(
-                        "{} · {} packages · {:.1}×{:.1} mm",
-                        doc.units, doc.unique_packages, w, h
-                    ),
-                    detail,
-                }
+                pick_place_strip_summary(doc, self.format(), self.summary_line())
             }
-            Self::Hpgl(doc) => {
-                let w = (doc.bounds_mm[2] - doc.bounds_mm[0]).max(0.0);
-                let h = (doc.bounds_mm[3] - doc.bounds_mm[1]).max(0.0);
-                StripSummary {
-                    format,
-                    headline: format!(
-                        "HPGL Plot · {} pens · {} strokes",
-                        doc.pens_used.len().max(1),
-                        doc.draw_count
-                    ),
-                    specs: format!(
-                        "Draw {:.1} mm · {} moves · {} labels · {:.1}×{:.1} mm",
-                        doc.draw_length_mm,
-                        doc.move_count,
-                        doc.labels.len(),
-                        w,
-                        h
-                    ),
-                    detail,
-                }
-            }
+            Self::Hpgl(doc) => hpgl_strip_summary(doc, self.format(), self.summary_line()),
+            Self::KicadPcb(doc) => doc.strip_summary(),
+            Self::KicadSchematic(doc) => doc.strip_summary(),
+            Self::KicadProject(doc) => doc.strip_summary(),
+            Self::KicadFootprint(doc) => doc.strip_summary(),
+            Self::KicadSymbolLib(doc) => doc.strip_summary(),
+            Self::GerberJob(doc) => doc.strip_summary(),
         }
+    }
+}
+
+fn gerber_strip_summary(
+    doc: &gerber::GerberDocument,
+    format: EdaFormat,
+    detail: String,
+) -> StripSummary {
+    let w = (doc.bounds_mm[2] - doc.bounds_mm[0]).max(0.0);
+    let h = (doc.bounds_mm[3] - doc.bounds_mm[1]).max(0.0);
+    if doc.is_excellon {
+        return StripSummary {
+            format,
+            headline: format!(
+                "{} · {} tools · {} holes",
+                doc.layer_type,
+                doc.tools.len(),
+                doc.hole_count
+            ),
+            specs: format!(
+                "{} · {} slots · {} arcs · {:.1}×{:.1} mm",
+                doc.coordinate_format, doc.slot_count, doc.arc_count, w, h
+            ),
+            detail,
+        };
+    }
+    let mut parts = vec![
+        doc.coordinate_format.clone(),
+        doc.units.clone(),
+        doc.polarity.clone(),
+    ];
+    if let Some(cu) = &doc.copper_thickness {
+        parts.push(format!("Cu {cu}"));
+    }
+    parts.push(format!("{} apertures", doc.aperture_count));
+    StripSummary {
+        format,
+        headline: format!("Gerber · {}", doc.layer_type),
+        specs: parts.join(" · "),
+        detail,
+    }
+}
+
+fn pick_place_strip_summary(
+    doc: &pick_place::PickAndPlaceDocument,
+    format: EdaFormat,
+    detail: String,
+) -> StripSummary {
+    let w = (doc.bounds_mm[2] - doc.bounds_mm[0]).max(0.0);
+    let h = (doc.bounds_mm[3] - doc.bounds_mm[1]).max(0.0);
+    StripSummary {
+        format,
+        headline: format!(
+            "Pick & Place · {} parts ({} Top / {} Bottom)",
+            doc.placements.len(),
+            doc.top_count,
+            doc.bottom_count
+        ),
+        specs: format!(
+            "{} · {} packages · {:.1}×{:.1} mm",
+            doc.units, doc.unique_packages, w, h
+        ),
+        detail,
+    }
+}
+
+fn hpgl_strip_summary(doc: &hpgl::HpglDocument, format: EdaFormat, detail: String) -> StripSummary {
+    let w = (doc.bounds_mm[2] - doc.bounds_mm[0]).max(0.0);
+    let h = (doc.bounds_mm[3] - doc.bounds_mm[1]).max(0.0);
+    StripSummary {
+        format,
+        headline: format!(
+            "HPGL Plot · {} pens · {} strokes",
+            doc.pens_used.len().max(1),
+            doc.draw_count
+        ),
+        specs: format!(
+            "Draw {:.1} mm · {} moves · {} labels · {:.1}×{:.1} mm",
+            doc.draw_length_mm,
+            doc.move_count,
+            doc.labels.len(),
+            w,
+            h
+        ),
+        detail,
     }
 }
 
@@ -230,6 +305,9 @@ pub fn parse_bytes(path: &Path, bytes: &[u8], cancelled: &AtomicBool) -> Result<
             pick_place::PickAndPlaceDocument::parse(bytes, cancelled).map(Document::PickAndPlace)
         }
         "plt" | "hpgl" => hpgl::HpglDocument::parse(bytes, cancelled).map(Document::Hpgl),
+        ext @ ("kicad_pcb" | "kicad_mod" | "kicad_sch" | "kicad_sym" | "kicad_pro" | "gbrjob") => {
+            kicad::parse_kicad(ext, path, bytes, cancelled)
+        }
         _ => Err("Unsupported EDA file format".into()),
     }
 }
@@ -269,6 +347,15 @@ pub(crate) fn allocate_canvas(
     max_size: [u32; 2],
     bg: Color,
 ) -> Option<(Pixmap, Transform, f32)> {
+    allocate_canvas_with_y_flip(bounds, max_size, bg, false)
+}
+
+pub(crate) fn allocate_canvas_with_y_flip(
+    bounds: [f64; 4],
+    max_size: [u32; 2],
+    bg: Color,
+    y_down: bool,
+) -> Option<(Pixmap, Transform, f32)> {
     let max_w = max_size[0].clamp(16, 2048);
     let max_h = max_size[1].clamp(16, 2048);
     let span_x = (bounds[2] - bounds[0]).abs();
@@ -300,8 +387,12 @@ pub(crate) fn allocate_canvas(
     let cx = (bounds[0] + bounds[2]) * 0.5;
     let cy = (bounds[1] + bounds[3]) * 0.5;
     let tx = (f64::from(pw) * 0.5 - cx * scale) as f32;
-    let ty = (f64::from(ph) * 0.5 + cy * scale) as f32;
-    let transform = Transform::from_row(scale as f32, 0.0, 0.0, -(scale as f32), tx, ty);
+    let (sy, ty) = if y_down {
+        (scale as f32, (f64::from(ph) * 0.5 - cy * scale) as f32)
+    } else {
+        (-(scale as f32), (f64::from(ph) * 0.5 + cy * scale) as f32)
+    };
+    let transform = Transform::from_row(scale as f32, 0.0, 0.0, sy, tx, ty);
     Some((pixmap, transform, scale as f32))
 }
 
