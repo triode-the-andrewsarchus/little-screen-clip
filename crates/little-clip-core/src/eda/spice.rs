@@ -1186,11 +1186,10 @@ struct RawHeaderMeta {
     plot_name: String,
     is_complex: bool,
     is_double: bool,
+    fast_access: bool,
     nvars: usize,
     npoints: usize,
     variables: Vec<(String, String)>,
-    is_binary: bool,
-    payload_offset: usize,
 }
 
 fn find_raw_data_marker(bytes: &[u8]) -> Option<(bool, usize)> {
@@ -1235,8 +1234,11 @@ fn parse_ltspice_header(header_bytes: &[u8]) -> Result<RawHeaderMeta, String> {
         }
         apply_raw_header_line(trimmed, &mut meta, &mut in_vars);
     }
-    if meta.variables.is_empty() {
-        return Err("Missing Variables section in SPICE .raw header".into());
+    if meta.nvars == 0 || meta.variables.len() != meta.nvars {
+        return Err("SPICE .raw variable count does not match the header".into());
+    }
+    if meta.npoints == 0 {
+        return Err("SPICE .raw header declares no data points".into());
     }
     Ok(meta)
 }
@@ -1260,8 +1262,9 @@ fn apply_raw_header_line(line: &str, meta: &mut RawHeaderMeta, in_vars: &mut boo
             meta.plot_name = v.to_string();
         } else if lower.starts_with("flags:") {
             let fl = v.to_ascii_lowercase();
-            meta.is_complex = fl.contains("complex");
-            meta.is_double = fl.contains("double");
+            meta.is_complex = fl.split_ascii_whitespace().any(|flag| flag == "complex");
+            meta.is_double = fl.split_ascii_whitespace().any(|flag| flag == "double");
+            meta.fast_access = fl.split_ascii_whitespace().any(|flag| flag == "fastaccess");
         } else if lower.starts_with("no. variables:") {
             meta.nvars = v.parse().unwrap_or(0);
         } else if lower.starts_with("no. points:") {
@@ -1275,12 +1278,10 @@ fn apply_raw_header_line(line: &str, meta: &mut RawHeaderMeta, in_vars: &mut boo
 fn parse_ltspice_raw(bytes: &[u8], cancelled: &AtomicBool) -> Result<SpiceRawDocument, String> {
     let (is_binary, payload_offset) = find_raw_data_marker(bytes)
         .ok_or_else(|| "Missing Binary:/Values: section in SPICE .raw file".to_string())?;
-    let mut meta = parse_ltspice_header(&bytes[..payload_offset])?;
-    meta.is_binary = is_binary;
-    meta.payload_offset = payload_offset;
+    let meta = parse_ltspice_header(&bytes[..payload_offset])?;
 
     let payload = &bytes[payload_offset..];
-    let plot = if meta.is_binary {
+    let plot = if is_binary {
         decode_ltspice_binary_plot(&meta, payload, cancelled)?
     } else {
         decode_ltspice_ascii_plot(&meta, payload, cancelled)?
@@ -1298,23 +1299,24 @@ fn decode_ltspice_binary_plot(
     payload: &[u8],
     cancelled: &AtomicBool,
 ) -> Result<SpiceRawPlot, String> {
-    let nvars = meta.variables.len().max(meta.nvars);
-    let stride_bytes = if meta.is_complex {
-        nvars * 16
-    } else if meta.is_double {
-        nvars * 8
-    } else {
-        8 + nvars.saturating_sub(1) * 4
-    };
-    if stride_bytes == 0 {
-        return Err("Invalid LTspice variable count".into());
+    if meta.fast_access {
+        return Err("LTspice FastAccess binary layout is unsupported".into());
     }
-    let avail_pts = payload.len() / stride_bytes;
-    let total_points = if meta.npoints > 0 {
-        meta.npoints.min(avail_pts)
+    let nvars = meta.variables.len();
+    let stride_bytes = if meta.is_complex {
+        nvars.checked_mul(16)
+    } else if meta.is_double {
+        nvars.checked_mul(8)
     } else {
-        avail_pts
-    };
+        (nvars - 1)
+            .checked_mul(4)
+            .and_then(|size| size.checked_add(8))
+    }
+    .ok_or("Invalid LTspice variable count")?;
+    let total_points = meta.npoints;
+    if stride_bytes.checked_mul(total_points) != Some(payload.len()) {
+        return Err("LTspice binary data size does not match the header".into());
+    }
     let step = decimate_stride(total_points);
     let kept_vars = nvars.saturating_sub(1).min(MAX_DECODED_TRACES);
 
@@ -1364,64 +1366,53 @@ fn decode_ltspice_ascii_plot(
     cancelled: &AtomicBool,
 ) -> Result<SpiceRawPlot, String> {
     let text = decode_spice_text(payload);
-    let nvars = meta.variables.len().max(1);
-    let tokens: Vec<&str> = text.split_whitespace().collect();
-    let total_points = if meta.npoints > 0 {
-        meta.npoints
-    } else {
-        tokens.len() / nvars
-    };
-    let step = decimate_stride(total_points.max(1));
-    let kept_vars = nvars.saturating_sub(1).min(MAX_DECODED_TRACES);
-
+    let mut tokens = text.split_whitespace();
+    let step = decimate_stride(meta.npoints);
+    let kept_vars = (meta.variables.len() - 1).min(MAX_DECODED_TRACES);
     let mut x_values = Vec::new();
-    let mut reals: Vec<Vec<f64>> = vec![Vec::new(); kept_vars];
-    let mut phases: Vec<Vec<f64>> = if meta.is_complex {
-        vec![Vec::new(); kept_vars]
-    } else {
-        Vec::new()
-    };
+    let mut reals = vec![Vec::new(); kept_vars];
+    let mut phases = vec![Vec::new(); if meta.is_complex { kept_vars } else { 0 }];
 
-    let mut idx = 0_usize;
-    let mut point_idx = 0_usize;
-    while idx < tokens.len() && (meta.npoints == 0 || point_idx < meta.npoints) {
-        if point_idx.is_multiple_of(512) {
+    for point in 0..meta.npoints {
+        if point.is_multiple_of(512) {
             check_cancelled(cancelled, "SPICE ASCII raw decode cancelled")?;
         }
-        // Skip point index prefix token.
-        let _pt_num = tokens[idx];
-        idx += 1;
-        if idx + nvars > tokens.len() {
-            break;
+        if tokens.next().and_then(|token| token.parse::<usize>().ok()) != Some(point) {
+            return Err("Invalid or missing SPICE .raw point index".into());
         }
-        if point_idx.is_multiple_of(step) {
-            let x_val = parse_raw_scalar(tokens[idx]).0.abs();
-            x_values.push(x_val);
-            for v in 0..kept_vars {
-                let (re, im) = parse_raw_scalar(tokens[idx + 1 + v]);
+        let (x, _) = parse_raw_scalar(tokens.next(), meta.is_complex)?;
+        let keep = point.is_multiple_of(step);
+        if keep {
+            x_values.push(x.abs());
+        }
+        for var in 0..meta.variables.len() - 1 {
+            let (re, im) = parse_raw_scalar(tokens.next(), meta.is_complex)?;
+            if keep && var < kept_vars {
                 if meta.is_complex {
-                    let mag = re.hypot(im).max(1e-18);
-                    reals[v].push(20.0 * mag.log10());
-                    phases[v].push(im.atan2(re).to_degrees());
+                    reals[var].push(20.0 * re.hypot(im).max(1e-18).log10());
+                    phases[var].push(im.atan2(re).to_degrees());
                 } else {
-                    reals[v].push(re);
+                    reals[var].push(re);
                 }
             }
         }
-        idx += nvars;
-        point_idx += 1;
+    }
+    if tokens.next().is_some() {
+        return Err("Unexpected data after SPICE .raw values".into());
     }
 
-    build_plot_from_vecs(meta, point_idx, x_values, reals, phases)
+    build_plot_from_vecs(meta, meta.npoints, x_values, reals, phases)
 }
 
-fn parse_raw_scalar(tok: &str) -> (f64, f64) {
-    if let Some((a, b)) = tok.split_once(',') {
-        let re = a.parse::<f64>().unwrap_or(0.0);
-        let im = b.parse::<f64>().unwrap_or(0.0);
-        (re, im)
+fn parse_raw_scalar(token: Option<&str>, complex: bool) -> Result<(f64, f64), String> {
+    let invalid = || "Invalid or missing SPICE .raw sample".to_string();
+    let token = token.ok_or_else(invalid)?;
+    let parse = |value: &str| value.parse::<f64>().map_err(|_| invalid());
+    if complex {
+        let (re, im) = token.split_once(',').ok_or_else(invalid)?;
+        Ok((parse(re)?, parse(im)?))
     } else {
-        (tok.parse::<f64>().unwrap_or(0.0), 0.0)
+        Ok((parse(token)?, 0.0))
     }
 }
 
@@ -1859,6 +1850,16 @@ Binary:
 
         let fake_tiff = b"II*\0\x08\0\0\0\x01\0\x00\x01\x03\0\x01\0\0\0";
         assert!(!is_spice_raw_bytes(fake_tiff));
+    }
+
+    #[test]
+    fn raw_preview_rejects_missing_and_invalid_ascii_samples() {
+        let header = "Title: Incomplete\nPlotname: Transient Analysis\nFlags: real\nNo. Variables: 2\nNo. Points: 2\nVariables:\n0 time time\n1 V(out) voltage\nValues:\n";
+        let cancel = AtomicBool::new(false);
+        for values in ["0 0 5\n1 1", "0 0 5\n1 1 missing"] {
+            let raw = format!("{header}{values}\n");
+            assert!(SpiceRawDocument::parse(raw.as_bytes(), &cancel).is_err());
+        }
     }
 
     #[test]
