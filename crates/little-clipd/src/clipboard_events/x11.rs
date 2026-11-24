@@ -198,15 +198,20 @@ impl X11State {
         self.request_targets(serial, true)
     }
 
+    fn pump_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        while let Some(event) = self.conn.poll_for_event()? {
+            self.handle_event(event)?;
+        }
+        Ok(())
+    }
+
     fn run_loop(
         &mut self,
         requests: &mpsc::Receiver<Request>,
         mut wakeup_rd: &UnixStream,
     ) -> Result<(), Box<dyn std::error::Error>> {
         loop {
-            while let Some(event) = self.conn.poll_for_event()? {
-                self.handle_event(event)?;
-            }
+            self.pump_events()?;
             if !self.process_requests(requests)? {
                 return Ok(());
             }
@@ -241,24 +246,25 @@ impl X11State {
         }
     }
 
+    fn dispatch_request(&mut self, request: Request) -> Result<(), Box<dyn std::error::Error>> {
+        match request.command {
+            Command::Publish { bytes, mime } => self.publish(bytes, mime)?,
+            Command::Barrier => {
+                self.conn.sync()?;
+            }
+        }
+        self.pump_events()?;
+        let _ = request.reply.send(());
+        Ok(())
+    }
+
     fn process_requests(
         &mut self,
         requests: &mpsc::Receiver<Request>,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         loop {
             match requests.try_recv() {
-                Ok(request) => {
-                    match request.command {
-                        Command::Publish { bytes, mime } => self.publish(bytes, mime)?,
-                        Command::Barrier => {
-                            self.conn.sync()?;
-                        }
-                    }
-                    while let Some(event) = self.conn.poll_for_event()? {
-                        self.handle_event(event)?;
-                    }
-                    let _ = request.reply.send(());
-                }
+                Ok(request) => self.dispatch_request(request)?,
                 Err(mpsc::TryRecvError::Empty) => return Ok(true),
                 Err(mpsc::TryRecvError::Disconnected) => return Ok(false),
             }
@@ -470,6 +476,24 @@ impl X11State {
         Ok(())
     }
 
+    fn read_xfer_property(
+        &self,
+        property: Atom,
+    ) -> Result<xproto::GetPropertyReply, Box<dyn std::error::Error>> {
+        let long_len = u32::try_from(TRANSFER_LIMIT / 4 + 4).unwrap_or(u32::MAX);
+        Ok(self
+            .conn
+            .get_property(
+                true,
+                self.helper_win,
+                property,
+                xproto::GetPropertyType::ANY,
+                0,
+                long_len,
+            )?
+            .reply()?)
+    }
+
     fn on_payload_notify(
         &mut self,
         ev: xproto::SelectionNotifyEvent,
@@ -483,18 +507,7 @@ impl X11State {
             }
             return Ok(());
         }
-        let long_len = u32::try_from(TRANSFER_LIMIT / 4 + 4).unwrap_or(u32::MAX);
-        let reply = self
-            .conn
-            .get_property(
-                true,
-                self.helper_win,
-                ev.property,
-                xproto::GetPropertyType::ANY,
-                0,
-                long_len,
-            )?
-            .reply()?;
+        let reply = self.read_xfer_property(ev.property)?;
         if reply.type_ == self.atoms.INCR {
             pending.incr = Some(Vec::new());
             pending.started = Instant::now();
@@ -549,18 +562,7 @@ impl X11State {
         let Some(mut buf) = pending.incr.take() else {
             return Ok(());
         };
-        let long_len = u32::try_from(TRANSFER_LIMIT / 4 + 4).unwrap_or(u32::MAX);
-        let reply = self
-            .conn
-            .get_property(
-                true,
-                self.helper_win,
-                self.atoms.XFER_PROP,
-                xproto::GetPropertyType::ANY,
-                0,
-                long_len,
-            )?
-            .reply()?;
+        let reply = self.read_xfer_property(self.atoms.XFER_PROP)?;
         if reply.value.is_empty() {
             let latin1 = pending.target.as_ref().is_some_and(|t| t.2);
             Self::deliver_incoming(pending.reply, buf, latin1);
@@ -620,18 +622,16 @@ impl X11State {
         &mut self,
         req: xproto::SelectionRequestEvent,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(pub_data) = &self.publication else {
+            return self.send_selection_notify(&req, x11rb::NONE);
+        };
         if req.selection != self.atoms.CLIPBOARD {
-            self.send_selection_notify(&req, x11rb::NONE)?;
-            return Ok(());
+            return self.send_selection_notify(&req, x11rb::NONE);
         }
         let dest = if req.property == x11rb::NONE {
             req.target
         } else {
             req.property
-        };
-        let Some(pub_data) = &self.publication else {
-            self.send_selection_notify(&req, x11rb::NONE)?;
-            return Ok(());
         };
         if req.target == self.atoms.TARGETS {
             self.conn.change_property32(
@@ -653,8 +653,19 @@ impl X11State {
             )?;
             return self.send_selection_notify(&req, dest);
         }
+        self.serve_data_request(&req, dest)
+    }
+
+    fn serve_data_request(
+        &mut self,
+        req: &xproto::SelectionRequestEvent,
+        dest: Atom,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(pub_data) = &self.publication else {
+            return self.send_selection_notify(req, x11rb::NONE);
+        };
         if !pub_data.data_targets.contains(&req.target) {
-            return self.send_selection_notify(&req, x11rb::NONE);
+            return self.send_selection_notify(req, x11rb::NONE);
         }
         let bytes = pub_data.bytes.clone();
         let target_type = if pub_data.mime.starts_with("text/") && req.target == self.atoms.STRING {
@@ -670,12 +681,12 @@ impl X11State {
                 target_type,
                 &bytes,
             )?;
-            return self.send_selection_notify(&req, dest);
+            return self.send_selection_notify(req, dest);
         }
-        if self.start_outgoing_incr(&req, dest, target_type, bytes)? {
-            self.send_selection_notify(&req, dest)
+        if self.start_outgoing_incr(req, dest, target_type, bytes)? {
+            self.send_selection_notify(req, dest)
         } else {
-            self.send_selection_notify(&req, x11rb::NONE)
+            self.send_selection_notify(req, x11rb::NONE)
         }
     }
 

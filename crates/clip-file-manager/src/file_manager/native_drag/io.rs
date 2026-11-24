@@ -92,6 +92,28 @@ pub(super) fn write(
     Ok(())
 }
 
+pub(super) fn verify_and_snapshot(
+    roots: &std::collections::BTreeMap<std::path::PathBuf, Option<super::Identity>>,
+    guards: &std::collections::HashMap<std::path::PathBuf, super::SourceGuard>,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<std::collections::BTreeMap<std::path::PathBuf, super::Identity>, String> {
+    for guard in guards.values() {
+        if Instant::now() >= deadline {
+            return Err("Desktop source verification timed out".into());
+        }
+        guard.check(cancelled)?;
+    }
+    let entries = snapshot(roots, deadline, cancelled)?;
+    for guard in guards.values() {
+        if Instant::now() >= deadline {
+            return Err("Desktop source verification timed out".into());
+        }
+        guard.check(cancelled)?;
+    }
+    Ok(entries)
+}
+
 pub(super) fn snapshot(
     roots: &std::collections::BTreeMap<std::path::PathBuf, Option<super::Identity>>,
     deadline: Instant,

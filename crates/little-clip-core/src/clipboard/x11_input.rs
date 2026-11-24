@@ -18,48 +18,13 @@ pub(super) fn send_shortcut(
     action: ClipboardShortcutAction,
     release_alt: bool,
 ) -> Result<(), ClipboardError> {
-    let (conn, _) =
-        x11rb::connect(None).map_err(|e| ClipboardError::Failed(format!("X11 connect: {e}")))?;
-    conn.xtest_get_version(2, 2)
-        .map_err(|e| ClipboardError::Failed(format!("XTEST query: {e}")))?
-        .reply()
-        .map_err(|e| ClipboardError::Failed(format!("XTEST unavailable: {e}")))?;
-
-    let min_kc = conn.setup().min_keycode;
-    let max_kc = conn.setup().max_keycode;
-    let count = max_kc.saturating_sub(min_kc).saturating_add(1);
-    let mapping = conn
-        .get_keyboard_mapping(min_kc, count)
-        .map_err(|e| ClipboardError::Failed(format!("keymap query: {e}")))?
-        .reply()
-        .map_err(|e| ClipboardError::Failed(format!("keymap reply: {e}")))?;
-    let keymap = conn
-        .query_keymap()
-        .map_err(|e| ClipboardError::Failed(format!("query_keymap: {e}")))?
-        .reply()
-        .map_err(|e| ClipboardError::Failed(format!("query_keymap reply: {e}")))?
-        .keys;
-
-    let per_kc = usize::from(mapping.keysyms_per_keycode).max(1);
-    let syms = &mapping.keysyms;
-    let target_sym = match action {
-        ClipboardShortcutAction::Copy => KEYSYM_C,
-        ClipboardShortcutAction::Paste => KEYSYM_V,
-    };
-    let ctrl_kc = find_keycode(min_kc, per_kc, syms, KEYSYM_CTRL_L)
-        .or_else(|| find_keycode(min_kc, per_kc, syms, KEYSYM_CTRL_R))
-        .ok_or_else(|| ClipboardError::Failed("X11 Control keycode not mapped".into()))?;
-    let key_kc = find_keycode(min_kc, per_kc, syms, target_sym)
-        .ok_or_else(|| ClipboardError::Failed("X11 shortcut keycode not mapped".into()))?;
+    let (conn, min_kc, per_kc, syms, keymap) = query_xtest_keymap()?;
+    let (ctrl_kc, key_kc, ctrl_held) =
+        resolve_shortcut_keys(action, min_kc, per_kc, &syms, &keymap)?;
 
     if release_alt {
-        release_held_modifiers(&conn, min_kc, per_kc, syms, &keymap)?;
+        release_held_modifiers(&conn, min_kc, per_kc, &syms, &keymap)?;
     }
-    let ctrl_held = [KEYSYM_CTRL_L, KEYSYM_CTRL_R]
-        .into_iter()
-        .filter_map(|sym| find_keycode(min_kc, per_kc, syms, sym))
-        .any(|kc| is_key_pressed(&keymap, kc));
-
     if !ctrl_held {
         emit_key(&conn, xproto::KEY_PRESS_EVENT, ctrl_kc)?;
     }
@@ -71,6 +36,66 @@ pub(super) fn send_shortcut(
     conn.sync()
         .map_err(|e| ClipboardError::Failed(format!("XTEST sync: {e}")))?;
     Ok(())
+}
+
+fn query_xtest_keymap() -> Result<
+    (
+        x11rb::rust_connection::RustConnection,
+        u8,
+        usize,
+        Vec<u32>,
+        [u8; 32],
+    ),
+    ClipboardError,
+> {
+    let (conn, _) =
+        x11rb::connect(None).map_err(|e| ClipboardError::Failed(format!("X11 connect: {e}")))?;
+    conn.xtest_get_version(2, 2)
+        .map_err(|e| ClipboardError::Failed(format!("XTEST query: {e}")))?
+        .reply()
+        .map_err(|e| ClipboardError::Failed(format!("XTEST unavailable: {e}")))?;
+    let min_kc = conn.setup().min_keycode;
+    let count = conn
+        .setup()
+        .max_keycode
+        .saturating_sub(min_kc)
+        .saturating_add(1);
+    let mapping = conn
+        .get_keyboard_mapping(min_kc, count)
+        .map_err(|e| ClipboardError::Failed(format!("keymap query: {e}")))?
+        .reply()
+        .map_err(|e| ClipboardError::Failed(format!("keymap reply: {e}")))?;
+    let keymap = conn
+        .query_keymap()
+        .map_err(|e| ClipboardError::Failed(format!("query_keymap: {e}")))?
+        .reply()
+        .map_err(|e| ClipboardError::Failed(format!("query_keymap reply: {e}")))?
+        .keys;
+    let per_kc = usize::from(mapping.keysyms_per_keycode).max(1);
+    Ok((conn, min_kc, per_kc, mapping.keysyms, keymap))
+}
+
+fn resolve_shortcut_keys(
+    action: ClipboardShortcutAction,
+    min_kc: u8,
+    per_kc: usize,
+    syms: &[u32],
+    keymap: &[u8; 32],
+) -> Result<(u8, u8, bool), ClipboardError> {
+    let target_sym = match action {
+        ClipboardShortcutAction::Copy => KEYSYM_C,
+        ClipboardShortcutAction::Paste => KEYSYM_V,
+    };
+    let ctrl_kc = find_keycode(min_kc, per_kc, syms, KEYSYM_CTRL_L)
+        .or_else(|| find_keycode(min_kc, per_kc, syms, KEYSYM_CTRL_R))
+        .ok_or_else(|| ClipboardError::Failed("X11 Control keycode not mapped".into()))?;
+    let key_kc = find_keycode(min_kc, per_kc, syms, target_sym)
+        .ok_or_else(|| ClipboardError::Failed("X11 shortcut keycode not mapped".into()))?;
+    let ctrl_held = [KEYSYM_CTRL_L, KEYSYM_CTRL_R]
+        .into_iter()
+        .filter_map(|sym| find_keycode(min_kc, per_kc, syms, sym))
+        .any(|kc| is_key_pressed(keymap, kc));
+    Ok((ctrl_kc, key_kc, ctrl_held))
 }
 
 fn release_held_modifiers<C: x11rb::protocol::xtest::ConnectionExt>(

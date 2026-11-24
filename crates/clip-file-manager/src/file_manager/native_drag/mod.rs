@@ -109,3 +109,24 @@ impl NativeDrag {
         }
     }
 }
+
+pub(super) fn release_egui_pointer(ctx: &egui::Context, input: &mut egui::RawInput) {
+    egui::DragAndDrop::clear_payload(ctx);
+    ctx.stop_dragging();
+    let pos = ctx.pointer_latest_pos().unwrap_or_default();
+    let modifiers = input
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            egui::Event::ModifiersChanged(modifiers) => Some(*modifiers),
+            _ => None,
+        })
+        .unwrap_or_else(|| ctx.input(|input| input.modifiers));
+    input.events.push(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers,
+    });
+}

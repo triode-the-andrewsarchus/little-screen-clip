@@ -1459,6 +1459,54 @@ async fn capture_clipboard_selection(
     ctx.maybe_restore_os_clipboard_after_route(restore_os, target_hand, prior_left);
 }
 
+async fn poll_clipboard_image() -> Option<(Vec<u8>, String)> {
+    let types = tokio::task::spawn_blocking(|| {
+        little_clip_core::list_system_clipboard_types(
+            little_clip_core::ClipboardSelection::Clipboard,
+        )
+        .ok()
+    })
+    .await
+    .ok()??;
+    let image_mime = {
+        let mut supported = types
+            .iter()
+            .map(|s| s.trim())
+            .filter(|mime| little_clip_core::item::image_extension_for_mime(mime).is_some());
+        supported
+            .clone()
+            .find(|mime| *mime == "image/png")
+            .or_else(|| supported.next())
+            .map(str::to_owned)?
+    };
+    let requested = image_mime.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        little_clip_core::read_system_clipboard_bytes(
+            little_clip_core::ClipboardSelection::Clipboard,
+            Some(&requested),
+            clipboard_events::TRANSFER_LIMIT as usize,
+        )
+        .ok()
+    })
+    .await
+    .ok()??;
+    (!bytes.is_empty()).then_some((bytes, image_mime))
+}
+
+async fn poll_clipboard_text() -> Option<String> {
+    let bytes = tokio::task::spawn_blocking(|| {
+        little_clip_core::read_system_clipboard_bytes(
+            little_clip_core::ClipboardSelection::Clipboard,
+            None,
+            clipboard_events::TRANSFER_LIMIT as usize,
+        )
+        .ok()
+    })
+    .await
+    .ok()??;
+    String::from_utf8(bytes).ok()
+}
+
 async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
     use std::hash::{Hash, Hasher};
 
@@ -1469,90 +1517,31 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
     loop {
         interval.tick().await;
 
-        // 1. Check clipboard MIME types
-        let types_output = tokio::task::spawn_blocking(|| {
-            little_clip_core::list_system_clipboard_types(
-                little_clip_core::ClipboardSelection::Clipboard,
-            )
-            .ok()
-        })
-        .await
-        .ok()
-        .flatten();
+        if let Some((bytes, image_mime)) = poll_clipboard_image().await {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            let hash = hasher.finish();
 
-        let image_mime = types_output.and_then(|types| {
-            let mut supported = types
-                .iter()
-                .map(|s| s.trim())
-                .filter(|mime| little_clip_core::item::image_extension_for_mime(mime).is_some());
-            // Prefer PNG when offered, but request the actual advertised format.
-            supported
-                .clone()
-                .find(|mime| *mime == "image/png")
-                .or_else(|| supported.next())
-                .map(str::to_owned)
-        });
-
-        if let Some(image_mime) = image_mime {
-            // Attempt reading raw image bytes
-            let requested = image_mime.clone();
-            if let Some(bytes) = tokio::task::spawn_blocking(move || {
-                little_clip_core::read_system_clipboard_bytes(
-                    little_clip_core::ClipboardSelection::Clipboard,
-                    Some(&requested),
-                    clipboard_events::TRANSFER_LIMIT as usize,
-                )
-                .ok()
-            })
-            .await
-            .ok()
-            .flatten()
-                && !bytes.is_empty()
-            {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                bytes.hash(&mut hasher);
-                let hash = hasher.finish();
-
-                let self_img_hash = *ctx.self_copied_image_hash.read().await;
-                if self_img_hash == Some(hash) {
-                    last_image_hash = Some(hash);
-                    continue;
-                }
-
-                if Some(hash) != last_image_hash {
-                    last_image_hash = Some(hash);
-                    last_clipboard_text.clear();
-
-                    capture_clipboard_selection(
-                        &ctx,
-                        bytes,
-                        image_mime,
-                        Some(tokio::time::Instant::now()),
-                        None,
-                    )
-                    .await;
-                    continue;
-                } else {
-                    // Same image as last tick, no update needed
-                    continue;
-                }
+            if *ctx.self_copied_image_hash.read().await == Some(hash) {
+                last_image_hash = Some(hash);
+                continue;
             }
+            if Some(hash) != last_image_hash {
+                last_image_hash = Some(hash);
+                last_clipboard_text.clear();
+                capture_clipboard_selection(
+                    &ctx,
+                    bytes,
+                    image_mime,
+                    Some(tokio::time::Instant::now()),
+                    None,
+                )
+                .await;
+            }
+            continue;
         }
 
-        // 2. Fall back to text / file URI polling
-        if let Some(bytes) = tokio::task::spawn_blocking(|| {
-            little_clip_core::read_system_clipboard_bytes(
-                little_clip_core::ClipboardSelection::Clipboard,
-                None,
-                clipboard_events::TRANSFER_LIMIT as usize,
-            )
-            .ok()
-        })
-        .await
-        .ok()
-        .flatten()
-            && let Ok(text) = String::from_utf8(bytes)
-        {
+        if let Some(text) = poll_clipboard_text().await {
             if ctx.is_self_copied_text(&text).await {
                 last_clipboard_text = text;
                 continue;
