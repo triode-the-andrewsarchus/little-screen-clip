@@ -171,19 +171,23 @@ impl Viewer {
         fill: Color32,
         clock: little_clip_core::engineering::analysis::Clock,
         channels: &[PlottedChannel],
+        time_plots: &[Rect],
     ) {
         let Some(time) = self.hover.time else { return };
         let x = plot::x_at(rect, &self.span, time);
         let Some(layout) = ProbeLayout::new(painter, rect, x) else {
             return;
         };
-        painter.vline(x, rect.y_range(), Stroke::new(1.0, ink));
-        if layout.visible.top() == rect.top() {
+        for plot in time_plots {
+            painter.vline(x, plot.y_range(), Stroke::new(1.0, ink));
+        }
+        if let Some(first) = time_plots.first() {
+            let visible = first.intersect(layout.visible);
             selection_label(
-                painter,
-                layout.visible,
+                &painter.with_clip_rect(visible),
+                visible,
                 x,
-                rect.top() + 5.0,
+                visible.top() + 5.0,
                 &display_value(clock.to_workspace(time), "s"),
                 ink,
                 fill,
@@ -196,6 +200,7 @@ impl Viewer {
         let math_slot = self.physical_lanes();
         if let Some((raw, bounds)) = self.calculated()
             && let Some(value) = raw.value_at(time)
+            && time_plots.contains(&self.lane(rect, math_slot).plot)
         {
             labels.extend(layout.label(
                 painter,
@@ -215,6 +220,9 @@ impl Viewer {
         let filter_start = math_slot + usize::from(self.math_state.numeric().is_some());
         for (slot, probe) in self.filters.probes(time) {
             let plot = self.lane(rect, filter_start + slot).plot;
+            if !time_plots.contains(&plot) {
+                continue;
+            }
             labels.extend(layout.label(
                 painter,
                 self.filtered_reading(painter, plot, probe, true),

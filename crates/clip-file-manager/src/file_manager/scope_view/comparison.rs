@@ -175,7 +175,14 @@ impl Viewer {
                 self.math_envelope(),
             );
         }
-        self.paint_time_markers(ui, &painter, rect, Some(link), index == self.active);
+        self.paint_time_markers(
+            ui,
+            &painter,
+            rect,
+            Some(link),
+            index == self.active,
+            &[ScopeTrace::Recorded(index)],
+        );
         self.paint_lane_probe(
             &painter,
             PlottedChannel {
@@ -202,6 +209,10 @@ impl Viewer {
         .inner
     }
 
+    pub(in crate::file_manager) fn spectrum_time_evidence(&self) -> bool {
+        self.spectra.origin().is_some()
+    }
+
     pub(in crate::file_manager) fn comparison_spectrum(
         &mut self,
         ui: &mut Ui,
@@ -223,7 +234,7 @@ impl Viewer {
                 link.clock,
             );
         } else {
-            self.spectrum_ui(ui, Some(link), false, Some(source));
+            self.spectrum_ui(ui, Some(link), false, Some(source), true);
         }
         self.spectrum
     }

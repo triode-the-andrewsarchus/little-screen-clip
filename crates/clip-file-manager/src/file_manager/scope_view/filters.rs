@@ -425,7 +425,14 @@ impl Viewer {
             lane.scale(painter, display, &channel.unit, color);
         }
         if link.is_some() {
-            self.paint_time_markers(ui, painter, lane.plot, link, false);
+            self.paint_time_markers(
+                ui,
+                painter,
+                lane.plot,
+                link,
+                false,
+                &[ScopeTrace::Filtered(index)],
+            );
             self.paint_filtered_probe(painter, lane.plot, index);
         }
         interaction

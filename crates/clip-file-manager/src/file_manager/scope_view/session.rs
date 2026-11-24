@@ -149,7 +149,8 @@ mod tests {
         view.cursors = [Some(0.0625), Some(0.125)];
         view.marks.push(MarkedRange {
             span: 0.0625..0.125,
-            peak_to_peak: Some((0.5, "V".into())),
+            peaks: Default::default(),
+            legacy_peak: Some((0.5, "V".into())),
         });
         view.add_filter(FilterKind::LowPass);
         view.active = 1;

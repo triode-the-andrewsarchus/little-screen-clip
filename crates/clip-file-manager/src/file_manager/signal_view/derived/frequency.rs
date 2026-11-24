@@ -178,6 +178,7 @@ impl Frequency {
             ui,
             matches!(lane, Lane::Analog { .. }),
             215.0,
+            false,
             |ui, part| match part {
                 SpectrumPane::Chart => target = self.chart(ui, frame, index, interval.clone()),
                 SpectrumPane::Filters => added = self.filter_controls(ui, index, rate, &interval),

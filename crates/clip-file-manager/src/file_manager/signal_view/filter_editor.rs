@@ -389,29 +389,56 @@ pub(in crate::file_manager) fn spectrum_workspace(
     ui: &mut Ui,
     filterable: bool,
     chart_height: f32,
+    docked: bool,
     mut render: impl FnMut(&mut Ui, SpectrumPane),
 ) {
     const EDITOR_WIDTH: f32 = 338.0;
     ui.scope(|ui| {
-        if filterable && ui.available_width() >= 910.0 {
-            let chart_width = ui.available_width() - EDITOR_WIDTH - ui.spacing().item_spacing.x;
+        let width = ui.available_width();
+        if filterable && width >= if docked { 565.0 } else { 910.0 } {
+            let editor_width = if docked {
+                (width * 0.31).clamp(240.0, EDITOR_WIDTH)
+            } else {
+                EDITOR_WIDTH
+            };
+            let chart_width = width - editor_width - ui.spacing().item_spacing.x;
             let layout = egui::Layout::top_down(egui::Align::Min);
             ui.horizontal_top(|ui| {
                 ui.allocate_ui_with_layout(vec2(chart_width, chart_height), layout, |ui| {
                     render(ui, SpectrumPane::Chart);
                 });
-                ui.allocate_ui_with_layout(vec2(EDITOR_WIDTH, chart_height), layout, |ui| {
+                ui.allocate_ui_with_layout(vec2(editor_width, chart_height), layout, |ui| {
                     egui::Frame::new()
                         .inner_margin(egui::Margin::symmetric(8, 4))
                         .show(ui, |ui| {
-                            render(ui, SpectrumPane::Filters);
+                            if docked {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("spectrum-filter-stages")
+                                    .min_scrolled_height(0.0)
+                                    .max_height(ui.available_height())
+                                    .show(ui, |ui| render(ui, SpectrumPane::Filters));
+                            } else {
+                                render(ui, SpectrumPane::Filters);
+                            }
                         });
                 });
             });
         } else {
-            if filterable {
+            if filterable && docked {
+                ui.collapsing("Filters", |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height((chart_height * 0.24).max(14.0))
+                        .min_scrolled_height(0.0)
+                        .show(ui, |ui| render(ui, SpectrumPane::Filters));
+                });
+            } else if filterable {
                 render(ui, SpectrumPane::Filters);
             }
+            let chart_height = if docked {
+                chart_height.min(ui.available_height())
+            } else {
+                chart_height
+            };
             ui.allocate_ui(vec2(ui.available_width(), chart_height), |ui| {
                 render(ui, SpectrumPane::Chart);
             });

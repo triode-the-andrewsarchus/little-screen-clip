@@ -10,6 +10,22 @@ use little_clip_core::engineering::{
 };
 use std::ops::Range;
 
+pub(in crate::file_manager) fn spectrum_dock(ui: &mut Ui, id: &str, content: impl FnOnce(&mut Ui)) {
+    let available = ui.available_height();
+    let height = (available * 0.48)
+        .clamp(258.0, 396.0)
+        .min((available - 85.0).max(0.0));
+    egui::Panel::bottom(ui.scope_id().with(id))
+        .resizable(false)
+        .exact_size(height)
+        .frame(egui::Frame::NONE)
+        .show(ui, |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+            ui.set_min_height(height);
+            content(ui);
+        });
+}
+
 pub(in crate::file_manager) fn spectrum_rect(
     ui: &mut Ui,
     min_height: f32,
@@ -243,13 +259,15 @@ pub(in crate::file_manager) fn paint_window(
     }
 }
 
+const FFT_WINDOWS: [SpectrumWindow; 3] = [
+    SpectrumWindow::Hann,
+    SpectrumWindow::Rectangular,
+    SpectrumWindow::BlackmanHarris,
+];
+
 pub(in crate::file_manager) fn choose_window(ui: &mut Ui, window: &mut SpectrumWindow) {
     ui.weak("Window");
-    for candidate in [
-        SpectrumWindow::Hann,
-        SpectrumWindow::Rectangular,
-        SpectrumWindow::BlackmanHarris,
-    ] {
+    for candidate in FFT_WINDOWS {
         if ui
             .add(
                 Button::new(window_name(candidate))
@@ -268,24 +286,49 @@ pub(in crate::file_manager) fn settings(
     region: &mut Region,
     window: &mut SpectrumWindow,
 ) {
+    let regions = [
+        (
+            Region::Current,
+            "Selection or view",
+            "Use the selected time range, or the visible range when there is no selection",
+        ),
+        (Region::Visible, "Visible", "Use the visible time range"),
+        (
+            Region::Whole,
+            "Whole lane",
+            "Use the full available span of this lane",
+        ),
+    ];
+    let compact = ui.available_width() < 820.0;
     ui.horizontal_wrapped(|ui| {
         let spacing = ui.spacing_mut();
         spacing.interact_size.y = 24.0;
         spacing.item_spacing.x = 3.0;
         ui.weak("FFT range");
-        for (candidate, label, help) in [
-            (
-                Region::Current,
-                "Selection or view",
-                "Use the selected time range, or the visible range when there is no selection",
-            ),
-            (Region::Visible, "Visible", "Use the visible time range"),
-            (
-                Region::Whole,
-                "Whole lane",
-                "Use the full available span of this lane",
-            ),
-        ] {
+        if compact {
+            let selected = regions
+                .iter()
+                .find(|(candidate, _, _)| candidate == region)
+                .map_or("Selection or view", |(_, label, _)| *label);
+            egui::ComboBox::from_id_salt("fft-range")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    for (candidate, label, help) in regions {
+                        ui.selectable_value(region, candidate, label)
+                            .on_hover_text(help);
+                    }
+                });
+            ui.weak("Window");
+            egui::ComboBox::from_id_salt("fft-window")
+                .selected_text(window_name(*window))
+                .show_ui(ui, |ui| {
+                    for candidate in FFT_WINDOWS {
+                        ui.selectable_value(window, candidate, window_name(candidate));
+                    }
+                });
+            return;
+        }
+        for (candidate, label, help) in regions {
             if ui
                 .add(Button::new(label).small().selected(*region == candidate))
                 .on_hover_text(help)

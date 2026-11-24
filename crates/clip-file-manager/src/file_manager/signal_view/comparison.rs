@@ -3,7 +3,7 @@ use super::{
 };
 use crate::file_manager::{
     preview_copy::Copies,
-    scope_view::{COLLAPSED_HEIGHT, move_trace, plot, trace_drop},
+    scope_view::{COLLAPSED_HEIGHT, move_trace, plot, scroll_trace_drag, trace_drop},
 };
 use egui::{Align, Button, Rect, Response, Sense, Ui, pos2, vec2};
 use std::collections::{HashMap, HashSet};
@@ -37,8 +37,6 @@ pub(super) struct Comparison {
     pub order: Vec<Trace>,
     pub active: Option<Trace>,
     pub spectrum: bool,
-    pub(super) reveal_spectrum: bool,
-    pub(super) return_to_trace: Option<Trace>,
     pub initialized: bool,
 }
 
@@ -79,22 +77,17 @@ impl Viewer {
         ui: &mut Ui,
         copies: &mut Copies,
         timeline: LinkedTimeline<'_>,
+        links: &HashMap<u64, Link>,
     ) -> (Option<f64>, Option<(usize, SourceAction)>) {
         let mut action = self.comparison_source_controls(ui, timeline.preview, timeline.reference);
-        let links = self.comparison_links(ui, timeline);
-        let available = ui.available_height().max(330.0);
-        let chart_height = if self.comparison.spectrum {
-            (available - 290.0).max(0.0) * 0.76
-        } else {
-            available - 164.0
-        };
+        let chart_height = (ui.available_height() - 85.0).max(0.0);
         let probe = ui
             .scope(|ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
-                self.comparison_lanes(ui, chart_height, &links)
+                self.comparison_lanes(ui, chart_height, links)
             })
             .inner;
-        if let Some(source_action) = self.selected_trace_tools(ui, copies, &links) {
+        if let Some(source_action) = self.selected_trace_tools(ui, copies, links) {
             action = Some(source_action);
         }
         for source in &mut self.sources {
@@ -126,49 +119,83 @@ impl Viewer {
             .iter()
             .position(|source| source.id == trace.source)?;
         let link = links.get(&trace.source)?;
-        let mut shared = None;
         let source = &mut self.sources[index];
+        let previous = source.capture.span().clone();
+        let selection = ui
+            .push_id(("selected-trace", trace.source), |ui| {
+                match &mut source.capture {
+                    Capture::Analog(view) => {
+                        view.comparison_select(trace.channel);
+                        view.comparison_overview(ui);
+                        view.comparison_tools(ui, copies, link)
+                    }
+                    Capture::Digital(view) => {
+                        view.comparison_tools(ui, copies, trace.channel, link)
+                    }
+                    Capture::Unavailable(_) => None,
+                }
+            })
+            .inner;
+        if *source.capture.span() != previous {
+            self.span = link.clock.workspace_range(source.capture.span());
+            ui.ctx().request_repaint();
+        }
+        selection.map(|range| (index, SourceAction::Share(range)))
+    }
+
+    pub(super) fn comparison_spectrum_dock(&mut self, ui: &mut Ui, links: &HashMap<u64, Link>) {
+        let Some(trace) = self.comparison.active else {
+            return;
+        };
+        let Some(source) = self
+            .sources
+            .iter_mut()
+            .find(|source| source.id == trace.source)
+        else {
+            return;
+        };
+        let Some(link) = links.get(&trace.source) else {
+            return;
+        };
+        if !self.comparison.spectrum {
+            if let Capture::Analog(view) = &mut source.capture {
+                view.suspend_comparison_spectrum();
+            }
+            return;
+        }
         let filename = source
             .path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy();
-        let previous = source.capture.span().clone();
-        let was_open = self.comparison.spectrum;
-        let spectrum = ui.push_id(trace.source, |ui| match &mut source.capture {
-            Capture::Analog(view) => {
-                view.comparison_select(trace.channel);
-                view.comparison_overview(ui);
-                if let Some(range) = view.comparison_tools(ui, copies, link) {
-                    shared = Some((index, SourceAction::Share(range)));
-                }
-                view.comparison_spectrum(ui, link, was_open, &filename)
-            }
-            Capture::Digital(view) => {
-                if let Some(range) =
-                    view.comparison_tools(ui, copies, trace.channel, link, was_open)
-                {
-                    shared = Some((index, SourceAction::Share(range)));
-                }
-                was_open
-            }
+        let previous = link.clock.native_range(&self.span);
+        *source.capture.span() = previous.clone();
+        let inspecting_time = match &source.capture {
+            Capture::Analog(view) => view.spectrum_time_evidence(),
+            Capture::Digital(view) => view.spectrum_time_evidence(),
             Capture::Unavailable(_) => false,
-        });
-        self.comparison.spectrum = spectrum.inner;
-        if was_open && !spectrum.inner {
-            self.comparison.return_to_trace = Some(trace);
-            ui.ctx().request_repaint();
-        }
-        if std::mem::take(&mut self.comparison.reveal_spectrum)
-            && spectrum.response.rect.top() > ui.clip_rect().bottom() - 100.0
-        {
-            spectrum.response.scroll_to_me(None);
+        };
+        let mut render = |ui: &mut Ui| {
+            ui.push_id(trace.source, |ui| {
+                self.comparison.spectrum = match &mut source.capture {
+                    Capture::Analog(view) => {
+                        view.comparison_select(trace.channel);
+                        view.comparison_spectrum(ui, link, true, &filename)
+                    }
+                    Capture::Digital(view) => view.comparison_spectrum(ui, trace.channel, link),
+                    Capture::Unavailable(_) => false,
+                };
+            });
+        };
+        if inspecting_time {
+            render(ui);
+        } else {
+            frequency_plot::spectrum_dock(ui, "comparison-spectrum", render);
         }
         if *source.capture.span() != previous {
             self.span = link.clock.workspace_range(source.capture.span());
             ui.ctx().request_repaint();
         }
-        shared
     }
 
     fn comparison_source_controls(
@@ -206,7 +233,7 @@ impl Viewer {
         action
     }
 
-    fn comparison_links(
+    pub(super) fn comparison_links(
         &mut self,
         ui: &mut Ui,
         timeline: LinkedTimeline<'_>,
@@ -233,17 +260,13 @@ impl Viewer {
     pub(super) fn comparison_toolbar(&mut self, ui: &mut Ui) {
         if ui
             .add_enabled(
-                self.comparison.active.is_some(),
+                self.comparison.spectrum || self.comparison.active.is_some(),
                 Button::new("Spectrum").selected(self.comparison.spectrum),
             )
             .on_disabled_hover_text("Show a trace to inspect its spectrum")
             .clicked()
         {
             self.comparison.spectrum = !self.comparison.spectrum;
-            self.comparison.reveal_spectrum = self.comparison.spectrum;
-            if !self.comparison.spectrum {
-                self.comparison.return_to_trace = self.comparison.active;
-            }
         }
     }
 
@@ -283,6 +306,7 @@ impl Viewer {
         chart_height: f32,
         links: &HashMap<u64, Link>,
     ) -> Option<f64> {
+        scroll_trace_drag::<Trace>(ui);
         for source in &mut self.sources {
             let Some(link) = links.get(&source.id) else {
                 continue;
@@ -296,23 +320,22 @@ impl Viewer {
         }
         let mut rows = self.comparison_rows();
         self.comparison.focus_visible(&rows);
+        const DIGITAL_HEIGHT: f32 = 86.0;
+        let visible_digital = rows.iter().filter(|row| row.digital && row.visible).count();
         let visibility = rows.iter().flat_map(TraceRow::lane_visibility);
         let (total, visible) = visibility.fold((0, 0), |(total, visible), shown| {
             (total + 1, visible + usize::from(shown))
         });
         let desired = chart_height
             - (total - visible) as f32 * COLLAPSED_HEIGHT
+            - visible_digital as f32 * DIGITAL_HEIGHT
             - total.saturating_sub(1) as f32 * ui.spacing().item_spacing.y;
-        let height = (desired / visible.max(1) as f32).max(88.0);
+        let height = (desired / (visible - visible_digital).max(1) as f32).max(116.0);
         let axis = (visible > 0).then(|| comparison_time_axis(ui, &self.span));
         let mut probe = None;
         let mut reorder = None;
         for row in &mut rows {
-            let lane_height = if row.digital {
-                height.min(53.0)
-            } else {
-                height
-            };
+            let lane_height = if row.digital { DIGITAL_HEIGHT } else { height };
             let (_, target) = reserve_trace_row(ui, lane_height, row.visible);
             let filter = row
                 .filtered
@@ -323,7 +346,8 @@ impl Viewer {
             probe = self
                 .comparison_row(ui, target.rect, filter, row, link)
                 .or(probe);
-            reorder = trace_drop(ui, target.rect, row.trace).or(reorder);
+            let row_bounds = filter.map_or(target.rect, |filtered| target.rect.union(filtered));
+            reorder = trace_drop(ui, row_bounds, row.trace).or(reorder);
         }
         if let Some(axis) = axis {
             self.paint_comparison_fft_window(ui, axis, links);
@@ -417,14 +441,6 @@ impl Viewer {
             ui.ctx().request_repaint();
         }
         Link::reveal_trace(Some(link), ui, rect, key.channel);
-        if self
-            .comparison
-            .return_to_trace
-            .take_if(|trace| *trace == key)
-            .is_some()
-        {
-            ui.scroll_to_rect(rect, Some(Align::TOP));
-        }
         if self.reveal_source.take_if(|id| *id == source.id).is_some() {
             ui.scroll_to_rect(rect, Some(Align::TOP));
         }

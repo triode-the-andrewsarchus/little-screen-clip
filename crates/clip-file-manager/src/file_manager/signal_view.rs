@@ -408,6 +408,11 @@ impl Viewer {
             evidence: &evidence,
             visiting: self.derived.visiting_input(),
         };
+        let grouped = self.compares_recordings();
+        let links = grouped.then(|| self.comparison_links(ui, timeline));
+        if let Some(links) = &links {
+            self.comparison_spectrum_dock(ui, links);
+        }
         let available = ui.available_height();
         let height = if matches!(
             self.sources.as_slice(),
@@ -421,14 +426,13 @@ impl Viewer {
         } else {
             (available / self.sources.len() as f32 - 50.0).max(205.0)
         };
-        let grouped = self.compares_recordings();
         let mut area = self.session.scroll.area(ui);
         if let Some(offset) = self.shared.return_scroll() {
             area = area.vertical_scroll_offset(offset);
         }
         let scroll = area.show(ui, |ui| {
-            if grouped {
-                (next_probe, action) = self.recording_comparison(ui, copies, timeline);
+            if let Some(links) = &links {
+                (next_probe, action) = self.recording_comparison(ui, copies, timeline, links);
             }
             for index in 0..self.sources.len() {
                 if grouped && !matches!(self.sources[index].capture, Capture::Unavailable(_)) {

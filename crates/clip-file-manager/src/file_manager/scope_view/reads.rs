@@ -108,8 +108,38 @@ pub(super) fn snap_window(
     recording.checked(cancel, |capture| read_raw(capture, channel, range, cancel))
 }
 
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+pub(super) struct RangePeak {
+    pub amplitude: f32,
+    pub observed: bool,
+}
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(super) struct RangePeaks {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_peaks: Vec<Option<RangePeak>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    math_peak: Option<RangePeak>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    filter_peaks: Vec<(usize, RangePeak)>,
+}
+
+impl RangePeaks {
+    pub fn get(&self, trace: super::ScopeTrace) -> Option<RangePeak> {
+        match trace {
+            super::ScopeTrace::Recorded(index) => self.channel_peaks.get(index).copied().flatten(),
+            super::ScopeTrace::Math => self.math_peak,
+            super::ScopeTrace::Filtered(index) => self
+                .filter_peaks
+                .iter()
+                .find_map(|&(channel, peak)| (channel == index).then_some(peak)),
+        }
+    }
+}
+
 pub(super) struct Measurements {
     pub frequencies: Vec<Option<f64>>,
+    pub peaks: RangePeaks,
     pub raw: RawChannel,
     pub extrema: Peak,
     pub valid_samples: usize,
@@ -122,6 +152,7 @@ pub(super) struct AnalysisRequest {
     pub span: Range<f64>,
     pub active: usize,
     pub math: Option<(Expression, Range<f64>)>,
+    pub filters: Vec<(usize, Arc<RawChannel>)>,
 }
 
 pub(super) fn analyze(
@@ -132,7 +163,6 @@ pub(super) fn analyze(
     recording.checked(cancel, |capture| {
         let (data, limited) = analysis_data(capture, &request.span, ANALYSIS_SAMPLES, cancel)?;
 
-        let raw = &data[request.active];
         let frequencies = data
             .iter()
             .map(|channel| analysis::fundamental_hz(&channel.samples, channel.step.recip()))
@@ -149,7 +179,21 @@ pub(super) fn analyze(
                 }
             })
             .transpose()?;
-        let stats = sample_extrema(&raw.samples);
+        let (stats, channel_peaks) =
+            range_peaks(capture, &request, &data).ok_or("Missing scope channel")?;
+        let peaks = RangePeaks {
+            channel_peaks,
+            math_peak: math
+                .as_ref()
+                .and_then(|(samples, _)| derived_peak(samples, &request.span)),
+            filter_peaks: request
+                .filters
+                .iter()
+                .filter_map(|(index, samples)| {
+                    Some((*index, derived_peak(samples, &request.span)?))
+                })
+                .collect(),
+        };
         let raw = data
             .into_iter()
             .nth(request.active)
@@ -157,6 +201,7 @@ pub(super) fn analyze(
         let power_totals = capture.power_totals(request.span, cancel).ok().flatten();
         Ok(Measurements {
             frequencies,
+            peaks,
             raw,
             extrema: stats.peak,
             valid_samples: stats.valid,
@@ -164,6 +209,54 @@ pub(super) fn analyze(
             limited,
             power_totals,
         })
+    })
+}
+
+fn range_peaks(
+    capture: &Capture,
+    request: &AnalysisRequest,
+    data: &[RawChannel],
+) -> Option<(SampleStats, Vec<Option<RangePeak>>)> {
+    let mut active = None;
+    let mut peaks = Vec::with_capacity(data.len());
+    for (index, (raw, channel)) in data.iter().zip(capture.channels()).enumerate() {
+        let measured = sample_extrema(&raw.samples);
+        let amplitude = measured.peak.max - measured.peak.min;
+        let observed = !raw.covers(&sample_span(channel, request.span.clone()))
+            || measured.valid != raw.samples.len()
+            || request.span.start < channel.start_seconds
+            || request.span.end > channel.time_at(channel.sample_count);
+        peaks.push(amplitude.is_finite().then_some(RangePeak {
+            amplitude,
+            observed,
+        }));
+        if index == request.active {
+            active = Some(measured);
+        }
+    }
+    Some((active?, peaks))
+}
+
+fn derived_peak(raw: &RawChannel, span: &Range<f64>) -> Option<RangePeak> {
+    let index = |at: f64| {
+        let lower = raw
+            .index_at(at)
+            .floor()
+            .clamp(0.0, raw.samples.len() as f64) as usize;
+        lower + usize::from(lower < raw.samples.len() && raw.time(lower) < at)
+    };
+    let measured = index(span.start) as u64..index(span.end) as u64;
+    let rows = centered_rows(measured.clone(), ANALYSIS_SAMPLES);
+    let samples = &raw.samples[rows.start as usize..rows.end as usize];
+    let stats = sample_extrema(samples);
+    let amplitude = stats.peak.max - stats.peak.min;
+    let observed = rows != measured
+        || stats.valid != samples.len()
+        || span.start < raw.start
+        || span.end > raw.time(raw.samples.len());
+    amplitude.is_finite().then_some(RangePeak {
+        amplitude,
+        observed,
     })
 }
 

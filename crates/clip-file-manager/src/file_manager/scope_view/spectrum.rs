@@ -17,9 +17,11 @@ impl Viewer {
         link: Option<&Link>,
         allow_frequency_only: bool,
         source: Option<&str>,
+        docked: bool,
     ) {
-        let panel = ui.scope(|ui| self.spectrum_panel(ui, link, allow_frequency_only, source));
-        if std::mem::take(&mut self.filters.reveal_spectrum) {
+        let panel =
+            ui.scope(|ui| self.spectrum_panel(ui, link, allow_frequency_only, source, docked));
+        if std::mem::take(&mut self.filters.reveal_spectrum) && !docked {
             panel.response.scroll_to_me(None);
         }
     }
@@ -44,6 +46,7 @@ impl Viewer {
         link: Option<&Link>,
         allow_frequency_only: bool,
         source: Option<&str>,
+        docked: bool,
     ) {
         if self.spectra.kind == LaneKind::Filtered && !self.filters.has_lane(self.active) {
             self.set_spectrum_kind(LaneKind::Recorded);
@@ -62,15 +65,15 @@ impl Viewer {
         self.spectra
             .update(ui.ctx(), input, interval, self.spectrum_window);
         let filterable = self.spectra.kind != LaneKind::Calculated;
-        let height = (ui.available_height() - 5.0).max(195.0);
-        spectrum_workspace(ui, filterable, height, |ui, part| match part {
-            SpectrumPane::Chart => self.spectrum_chart(ui, link, available),
+        let height = (ui.available_height() - 5.0).max(if docked { 0.0 } else { 195.0 });
+        spectrum_workspace(ui, filterable, height, docked, |ui, part| match part {
+            SpectrumPane::Chart => self.spectrum_chart(ui, link, available, docked),
             SpectrumPane::Filters => self.filter_controls(ui, Link::clock(link)),
         });
     }
 
-    fn spectrum_chart(&mut self, ui: &mut Ui, link: Option<&Link>, available: bool) {
-        let (rect, response) = spectrum_rect(ui, 145.0);
+    fn spectrum_chart(&mut self, ui: &mut Ui, link: Option<&Link>, available: bool, docked: bool) {
+        let (rect, response) = spectrum_rect(ui, if docked { 35.0 } else { 145.0 });
         let ready = self.spectra.ready();
         let shown = ready.or_else(|| self.spectra.latest());
         let rate = self.overview.channels[self.active].interval_seconds.recip();

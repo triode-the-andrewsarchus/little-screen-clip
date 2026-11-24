@@ -13,7 +13,7 @@ pub(super) mod lanes;
 pub(super) use comparison::TraceInteraction;
 pub(super) use lanes::COLLAPSED_HEIGHT;
 pub(super) use lanes::{Lane, trace_header};
-pub(super) use lanes::{move_trace, trace_drop};
+pub(super) use lanes::{move_trace, scroll_trace_drag, trace_drop};
 mod logic_export;
 mod math;
 pub(super) mod plot;
@@ -46,7 +46,7 @@ use little_clip_core::{
         },
     },
 };
-use reads::{AnalysisRequest, Measurements, RawChannel};
+use reads::{AnalysisRequest, Measurements, RangePeaks, RawChannel};
 use snap::CursorSnap;
 use std::{
     ops::Range,
@@ -62,7 +62,14 @@ const MATH_COLOR: Color32 = Color32::from_rgb(215, 153, 246);
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct MarkedRange {
     span: Range<f64>,
-    peak_to_peak: Option<(f32, String)>,
+    #[serde(flatten)]
+    peaks: RangePeaks,
+    #[serde(
+        default,
+        rename = "peak_to_peak",
+        skip_serializing_if = "Option::is_none"
+    )]
+    legacy_peak: Option<(f32, String)>,
 }
 
 #[derive(Clone, Copy)]
@@ -146,6 +153,7 @@ struct AnalysisKey {
     channel: usize,
     expression: String,
     math_span: Range<f64>,
+    filter_generations: Vec<(usize, u64)>,
 }
 
 impl Viewer {
@@ -274,23 +282,6 @@ impl Viewer {
         link: Option<&Link>,
         can_add_equation: bool,
     ) -> Interaction {
-        if link.is_none() {
-            return egui::ScrollArea::vertical()
-                .id_salt("scope-content")
-                .auto_shrink([false, false])
-                .show(ui, |ui| self.capture_ui(ui, copies, None, can_add_equation))
-                .inner;
-        }
-        self.capture_ui(ui, copies, link, can_add_equation)
-    }
-
-    fn capture_ui(
-        &mut self,
-        ui: &mut Ui,
-        copies: &mut Copies,
-        link: Option<&Link>,
-        can_add_equation: bool,
-    ) -> Interaction {
         self.poll(ui.ctx());
         if let Some(channel) = link.and_then(|link| link.reveal_input) {
             self.reveal_recorded(channel);
@@ -313,65 +304,86 @@ impl Viewer {
         );
         let showing_spectrum = self.spectrum && self.spectra.origin().is_none();
         let show_time = !showing_spectrum || !self.spectra.only;
-        let interaction = if show_time {
-            let clock = Link::clock(link);
-            let domain = link.map_or_else(|| self.domain.clone(), |link| link.domain.clone());
-            let selection = self.selection();
-            ui.scope(|ui| {
-                ui.spacing_mut().interact_size.y = 24.0;
-                ui.spacing_mut().button_padding.y = 2.0;
-                self.digital.content(
-                    ui,
-                    &self.recording,
-                    &mut self.span,
-                    &domain,
-                    clock,
-                    selection.as_ref(),
-                );
+        let docked = link.is_none() && showing_spectrum && show_time;
+        if docked {
+            super::signal_view::frequency_plot::spectrum_dock(ui, "scope-spectrum", |ui| {
+                self.spectrum_ui(ui, None, true, None, true);
             });
-            let available = ui.available_height();
-            let content = (available - 92.0 - self.digital.result_height()).max(100.0);
-            let height = if showing_spectrum {
-                // Leave a readable chart and spectrum controls beneath the time lanes.
-                (content * 0.60).min(content - 220.0).max(68.0)
+        }
+        let mut interaction = if show_time {
+            if link.is_none() {
+                egui::ScrollArea::vertical()
+                    .id_salt("scope-content")
+                    .auto_shrink([false, false])
+                    .min_scrolled_height(0.0)
+                    .show(ui, |ui| self.capture_time_content(ui, None, false))
+                    .inner
             } else {
-                content
-            };
-            let probe = self.waveform(ui, height, link);
-            self.overview_ui(ui);
-            let share = ui
-                .scope(|ui| {
-                    ui.spacing_mut().interact_size.y = 24.0;
-                    ui.spacing_mut().button_padding.y = 2.0;
-                    self.cursor_readout(ui, link)
-                })
-                .inner;
-            self.digital
-                .table(ui, &mut self.span, &domain, probe, clock);
-            Interaction {
-                probe,
-                share,
-                derive_predicate,
+                self.capture_time_content(ui, link, showing_spectrum)
             }
         } else {
             self.hover.time = None;
             self.digital.suspend();
-            Interaction {
-                derive_predicate,
-                ..Interaction::default()
-            }
+            Interaction::default()
         };
-        if self.spectrum && self.spectra.origin().is_none() {
-            let view = ui.scope(|ui| self.spectrum_ui(ui, link, true, None));
+        interaction.derive_predicate = derive_predicate;
+        if !docked && self.spectrum && self.spectra.origin().is_none() {
+            let view = ui.scope(|ui| self.spectrum_ui(ui, link, true, None, false));
             let near_edge = view.response.rect.top() > ui.clip_rect().bottom() - 166.0;
             if (spectrum_opened && near_edge) || returned {
                 view.response.scroll_to_me(Some(egui::Align::Min));
             }
-        } else {
+        } else if !self.spectrum || self.spectra.origin().is_some() {
             self.spectra.suspend();
         }
         self.update_source(ui);
         interaction
+    }
+
+    fn capture_time_content(
+        &mut self,
+        ui: &mut Ui,
+        link: Option<&Link>,
+        inline_spectrum: bool,
+    ) -> Interaction {
+        let clock = Link::clock(link);
+        let domain = link.map_or_else(|| self.domain.clone(), |link| link.domain.clone());
+        let selection = self.selection();
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = 24.0;
+            ui.spacing_mut().button_padding.y = 2.0;
+            self.digital.content(
+                ui,
+                &self.recording,
+                &mut self.span,
+                &domain,
+                clock,
+                selection.as_ref(),
+            );
+        });
+        let available = ui.available_height();
+        let content = (available - 92.0 - self.digital.result_height()).max(100.0);
+        let height = if inline_spectrum {
+            (content * 0.60).min(content - 220.0).max(68.0)
+        } else {
+            content
+        };
+        let probe = self.waveform(ui, height, link);
+        self.overview_ui(ui);
+        let share = ui
+            .scope(|ui| {
+                ui.spacing_mut().interact_size.y = 24.0;
+                ui.spacing_mut().button_padding.y = 2.0;
+                self.cursor_readout(ui, link)
+            })
+            .inner;
+        self.digital
+            .table(ui, &mut self.span, &domain, probe, clock);
+        Interaction {
+            probe,
+            share,
+            ..Interaction::default()
+        }
     }
 
     fn update_source(&mut self, ui: &Ui) {
@@ -525,6 +537,7 @@ impl Viewer {
     }
 
     fn waveform(&mut self, ui: &mut Ui, height: f32, link: Option<&Link>) -> Option<f64> {
+        lanes::scroll_trace_drag::<usize>(ui);
         self.inline_fft_evidence = None;
         let lane_height = if self.trace_fft.is_empty() {
             lanes::MIN_HEIGHT
@@ -620,48 +633,49 @@ impl Viewer {
         channels: &[PlottedChannel],
         fft_lanes: &[Rect],
     ) {
-        let clock = Link::clock(link);
-        if fft_lanes.is_empty() {
-            self.paint_time_markers(ui, clipped, rect, link, true);
-            self.paint_hover(
-                clipped,
-                rect,
-                ui.visuals().text_color(),
-                ui.visuals().window_fill(),
-                clock,
-                channels,
-            );
-        } else {
-            let mut labelled = false;
-            for lane in (0..self.lane_count())
-                .map(|slot| self.lane(rect, slot))
-                .filter(|lane| lane.plot.is_positive())
+        let mut show_summary = true;
+        let mut time_plots = Vec::new();
+        let physical = self.physical_lanes();
+        let math = self.math_state.numeric().is_some();
+        let derived = math
+            .then_some(ScopeTrace::Math)
+            .into_iter()
+            .chain(self.filters.visible_indices().map(ScopeTrace::Filtered))
+            .collect::<Vec<_>>();
+        for slot in 0..self.lane_count() {
+            let lane = self.lane(rect, slot);
+            if !lane.plot.is_positive()
+                || !ui.is_rect_visible(lane.plot)
+                || fft_lanes.iter().any(|fft| fft.contains(lane.plot.center()))
             {
-                if fft_lanes.iter().any(|fft| fft.contains(lane.plot.center()))
-                    || !ui.is_rect_visible(lane.frame)
-                {
-                    continue;
-                }
-                let painter = clipped.with_clip_rect(lane.frame.intersect(clipped.clip_rect()));
-                let time_rect = Rect::from_min_max(
-                    pos2(rect.left(), lane.frame.top()),
-                    lane.frame.right_bottom(),
-                );
-                if let Some(interval) = self.inline_fft_evidence() {
-                    paint_window(ui, &painter, lane.plot, &self.span, interval);
-                }
-                self.paint_time_markers(ui, &painter, time_rect, link, !labelled);
-                labelled = true;
-                self.paint_hover(
-                    &painter,
-                    rect,
-                    ui.visuals().text_color(),
-                    ui.visuals().window_fill(),
-                    clock,
-                    channels,
-                );
+                continue;
             }
+            time_plots.push(lane.plot);
+            let painter = clipped.with_clip_rect(lane.plot.intersect(clipped.clip_rect()));
+            if let Some(interval) = self.inline_fft_evidence() {
+                paint_window(ui, &painter, lane.plot, &self.span, interval);
+            }
+            let traces: Vec<_> = channels
+                .iter()
+                .filter(|channel| channel.plot == lane.plot)
+                .map(|channel| ScopeTrace::Recorded(channel.index))
+                .chain(
+                    slot.checked_sub(physical)
+                        .and_then(|i| derived.get(i).copied()),
+                )
+                .collect();
+            self.paint_time_markers(ui, &painter, lane.plot, link, show_summary, &traces);
+            show_summary = false;
         }
+        self.paint_hover(
+            clipped,
+            rect,
+            ui.visuals().text_color(),
+            ui.visuals().window_fill(),
+            Link::clock(link),
+            channels,
+            &time_plots,
+        );
     }
 
     fn paint_time_markers(
@@ -671,9 +685,10 @@ impl Viewer {
         rect: Rect,
         link: Option<&Link>,
         show_labels: bool,
+        traces: &[ScopeTrace],
     ) {
         let clock = Link::clock(link);
-        self.paint_marks(ui, clipped, rect, clock.scale(), show_labels);
+        self.paint_marks(ui, clipped, rect, clock.scale(), show_labels, traces);
         super::signal_view::frequency_plot::paint_origin(
             ui,
             clipped,
@@ -1090,55 +1105,92 @@ impl Viewer {
         painter: &egui::Painter,
         rect: Rect,
         time_scale: f64,
-        show_labels: bool,
+        show_summary: bool,
+        traces: &[ScopeTrace],
     ) {
-        let active = self.active_mark();
+        let selection = self.selection();
+        let active = selection
+            .as_ref()
+            .map(|span| (span, self.measurements_for(span).map(|data| &data.peaks)));
+        let marks = self
+            .marks
+            .iter()
+            .map(|mark| (&mark.span, Some(&mark.peaks)))
+            .chain(active);
         let ink = ui.visuals().text_color();
         let fill = ui.visuals().window_fill();
-        for (index, mark) in self.marks.iter().chain(active.iter()).enumerate() {
-            if mark.span.end <= self.span.start || mark.span.start >= self.span.end {
+        for (index, (span, peaks)) in marks.enumerate() {
+            if span.end <= self.span.start || span.start >= self.span.end {
                 continue;
             }
             let color = plot::color(index).gamma_multiply(0.25);
-            plot::highlight(painter, rect, &self.span, mark.span.clone(), color);
-            if !show_labels {
-                continue;
-            }
-            let length = (mark.span.end - mark.span.start) * time_scale;
-            let mut label = format!(
-                "{}  Δt {}  1/Δt {}",
-                index + 1,
-                display_value(length, "s"),
-                display_value(length.recip(), "Hz")
-            );
-            if let Some((peak, unit)) = &mark.peak_to_peak {
-                label.push_str(&format!(
-                    "  Pk–Pk {}",
-                    display_value(f64::from(*peak), unit)
-                ));
-            }
-            let x = plot::x_at(rect, &self.span, mark.span.start).max(rect.left());
+            plot::highlight(painter, rect, &self.span, span.clone(), color);
+            let x = plot::x_at(rect, &self.span, span.start).max(rect.left());
             let y = (rect.bottom() - 21.0 - (index % 3) as f32 * 18.0).max(rect.top());
-            hover::selection_label(painter, rect, x, y, &label, ink, fill);
+            if show_summary {
+                let length = (span.end - span.start) * time_scale;
+                let caption = format!(
+                    "{}  Δt {}  1/Δt {}",
+                    index + 1,
+                    display_value(length, "s"),
+                    display_value(length.recip(), "Hz")
+                );
+                hover::selection_label(
+                    painter,
+                    rect,
+                    x,
+                    rect.top() + 16.0 + 18.0 * (index % 3) as f32,
+                    &caption,
+                    ink,
+                    fill,
+                );
+            }
+            for (offset, &trace) in traces.iter().enumerate() {
+                let Some(peak) = peaks.and_then(|peaks| peaks.get(trace)) else {
+                    continue;
+                };
+                let (name, unit) = match trace {
+                    ScopeTrace::Recorded(index) | ScopeTrace::Filtered(index) => {
+                        let channel = &self.overview.channels[index];
+                        (
+                            channel.name.as_str(),
+                            std::borrow::Cow::Borrowed(channel.unit.as_str()),
+                        )
+                    }
+                    ScopeTrace::Math => ("Math", std::borrow::Cow::Owned(self.math_unit())),
+                };
+                let value = display_value(f64::from(peak.amplitude), &unit);
+                let statistic = if peak.observed {
+                    "Observed Pk–Pk"
+                } else {
+                    "Pk–Pk"
+                };
+                let name = if traces.len() == 1 { "" } else { name };
+                let caption = format!("{name} {statistic} {value}");
+                hover::selection_label(
+                    painter,
+                    rect,
+                    x,
+                    y - offset as f32 * 16.0,
+                    caption.trim_start(),
+                    ink,
+                    fill,
+                );
+            }
         }
     }
 
     fn active_mark(&self) -> Option<MarkedRange> {
         let span = self.selection()?;
-        let peak_to_peak = self
+        let peaks = self
             .measurements_for(&span)
-            .filter(|data| {
-                data.extrema.valid()
-                    && !data.limited
-                    && data.valid_samples == data.raw.samples.len()
-            })
-            .map(|data| {
-                (
-                    data.extrema.max - data.extrema.min,
-                    self.overview.channels[self.active].unit.clone(),
-                )
-            });
-        Some(MarkedRange { span, peak_to_peak })
+            .map(|data| data.peaks.clone())
+            .unwrap_or_default();
+        Some(MarkedRange {
+            span,
+            peaks,
+            legacy_peak: None,
+        })
     }
 
     fn archive_mark(&mut self) {
@@ -1518,6 +1570,15 @@ impl Viewer {
         if let Some(result) = self.analysis_job.as_ref().and_then(Task::poll) {
             self.analysis_job = None;
             if let Ok(Ok(data)) = result {
+                if let Some(key) = &self.analysis_key {
+                    for mark in self
+                        .marks
+                        .iter_mut()
+                        .filter(|mark| mark.span == key.span && mark.peaks.channel_peaks.is_empty())
+                    {
+                        mark.peaks = data.peaks.clone();
+                    }
+                }
                 self.measurements = Some(data);
                 self.measurement_key = self.analysis_key.clone();
             }
@@ -1594,8 +1655,17 @@ impl Viewer {
 
     fn request_analysis(&mut self, ctx: &Context) {
         let now = ctx.input(|input| input.time);
+        let selection = self.selection();
+        let filtered: Vec<_> = selection
+            .as_ref()
+            .into_iter()
+            .flat_map(|_| {
+                self.filtered_channels()
+                    .filter_map(|filter| Some((filter.channel, filter.samples?)))
+            })
+            .collect();
         let key = AnalysisKey {
-            span: self.selection().unwrap_or_else(|| self.span.clone()),
+            span: selection.unwrap_or_else(|| self.span.clone()),
             channel: self.active,
             math_span: if self.math_state.numeric().is_some() {
                 self.span.clone()
@@ -1606,6 +1676,10 @@ impl Viewer {
                 .math_state
                 .numeric()
                 .map_or_else(String::new, |_| self.math.clone()),
+            filter_generations: filtered
+                .iter()
+                .map(|(index, samples)| (*index, samples.generation))
+                .collect(),
         };
         if self.analysis_key.as_ref() == Some(&key) {
             return;
@@ -1626,6 +1700,10 @@ impl Viewer {
                 .numeric()
                 .cloned()
                 .map(|expression| (expression, key.math_span.clone())),
+            filters: filtered
+                .into_iter()
+                .map(|(index, samples)| (index, samples.raw))
+                .collect(),
         };
         self.analysis_key = Some(key);
         let recording = self.recording.clone();

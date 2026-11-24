@@ -6,7 +6,7 @@ use little_clip_core::engineering::waveforms::Peak;
 
 const HEADER_HEIGHT: f32 = 24.0;
 pub(in crate::file_manager) const COLLAPSED_HEIGHT: f32 = 25.0;
-pub(super) const MIN_HEIGHT: f32 = 68.0;
+pub(super) const MIN_HEIGHT: f32 = 108.0;
 
 #[derive(Clone, Copy)]
 pub(in crate::file_manager) struct Lane {
@@ -132,6 +132,28 @@ pub(in crate::file_manager) fn trace_header<T: Copy + Send + Sync + 'static>(
     (selected, visibility)
 }
 
+pub(in crate::file_manager) fn scroll_trace_drag<T: Send + Sync + 'static>(ui: &Ui) {
+    if egui::DragAndDrop::payload::<T>(ui.ctx()).is_none() {
+        return;
+    }
+    let clip = ui.clip_rect();
+    let pointer = ui.input(|input| {
+        input
+            .pointer
+            .primary_down()
+            .then(|| input.pointer.latest_pos())
+            .flatten()
+    });
+    if let Some(pointer) = pointer.filter(|pointer| clip.contains(*pointer)) {
+        let up = (28.0 - (pointer.y - clip.top())).max(0.0);
+        let down = (28.0 - (clip.bottom() - pointer.y)).max(0.0);
+        if up != down {
+            ui.scroll_with_delta(vec2(0.0, (up - down) * 0.8));
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
 pub(in crate::file_manager) fn trace_drop<T: Copy + Eq + Send + Sync + 'static>(
     ui: &Ui,
     rect: Rect,
@@ -139,13 +161,22 @@ pub(in crate::file_manager) fn trace_drop<T: Copy + Eq + Send + Sync + 'static>(
 ) -> Option<(T, T, bool)> {
     let payload = egui::DragAndDrop::payload::<T>(ui.ctx())?;
     let pointer = ui.input(|input| input.pointer.latest_pos())?;
-    if *payload == target || !rect.intersect(ui.clip_rect()).contains(pointer) {
+    let slot = rect.expand2(vec2(0.0, 2.0));
+    if *payload == target || !slot.intersect(ui.clip_rect()).contains(pointer) {
         return None;
     }
     let after = pointer.y >= rect.center().y;
-    let edge = if after { rect.bottom() } else { rect.top() };
-    ui.painter()
-        .hline(rect.x_range(), edge, ui.visuals().selection.stroke);
+    let edge = if after { slot.bottom() } else { slot.top() };
+    let indicator = ui
+        .ctx()
+        .layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            ui.scope_id().with("trace-insertion"),
+        ))
+        .with_clip_rect(ui.clip_rect());
+    let ink = ui.visuals().selection.bg_fill;
+    indicator.hline(slot.x_range(), edge, egui::Stroke::new(2.5, ink));
+    indicator.circle_filled(pos2(slot.left() + 2.0, edge), 3.5, ink);
     if ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)) {
         egui::DragAndDrop::take_payload::<T>(ui.ctx()).map(|payload| (*payload, target, after))
     } else {

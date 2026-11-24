@@ -152,7 +152,6 @@ impl Viewer {
         copies: &mut Copies,
         index: usize,
         link: &Link,
-        spectrum: bool,
     ) -> Option<std::ops::Range<f64>> {
         if self.active != index {
             self.active = index;
@@ -164,18 +163,35 @@ impl Viewer {
         }
         self.decoder_controls(ui);
         self.decode_events(ui, Some(link));
-        self.frequency.visible = spectrum;
+        share
+    }
+
+    pub(in crate::file_manager) fn spectrum_time_evidence(&self) -> bool {
+        self.frequency.spectra.origin().is_some()
+    }
+
+    pub(in crate::file_manager) fn comparison_spectrum(
+        &mut self,
+        ui: &mut Ui,
+        index: usize,
+        link: &Link,
+    ) -> bool {
+        self.active = index;
+        self.frequency.visible = true;
+        ui.horizontal(|ui| {
+            if ui.small_button("Close spectrum").clicked() {
+                self.frequency.visible = false;
+            }
+        });
         super::super::signal_view::frequency_plot::origin_controls(
             ui,
             &mut self.frequency.spectra,
             &mut self.span,
             link.clock,
         );
-        if spectrum && self.frequency.spectra.origin().is_none() {
+        if self.frequency.visible && self.frequency.spectra.origin().is_none() {
             self.frequency(ui, Some(link));
-        } else {
-            self.frequency.spectra.suspend();
         }
-        share
+        self.frequency.visible
     }
 }
