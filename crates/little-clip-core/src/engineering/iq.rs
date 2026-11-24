@@ -4,7 +4,7 @@ mod samples;
 mod spectra;
 
 pub use samples::Encoding;
-pub use spectra::{PowerBin, PowerOverview, Spectrum, Waterfall};
+pub use spectra::{DBFS_FLOOR, PowerBin, PowerOverview, Spectrum, Waterfall};
 
 use crate::file_source::{FileSource, ReadCheck};
 use rustfft::num_complex::Complex32;

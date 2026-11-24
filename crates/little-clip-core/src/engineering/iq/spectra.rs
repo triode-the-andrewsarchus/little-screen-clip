@@ -14,7 +14,9 @@ const MAX_ROWS: usize = 2048;
 const MAX_OVERVIEW_COLUMNS: usize = 1024;
 const OVERVIEW_WINDOW: u64 = 256;
 const OVERVIEW_WINDOWS_PER_BIN: u64 = 4;
-const DB_FLOOR: f32 = -180.0;
+
+/// Lower reporting limit for I/Q power measurements in dBFS.
+pub const DBFS_FLOOR: f32 = -180.0;
 
 /// Bounded power observations for a horizontal portion of an I/Q recording.
 #[derive(Clone, Debug)]
@@ -371,7 +373,7 @@ impl Transform {
 }
 
 fn dbfs(power: f64) -> f32 {
-    ((10.0 * power.log10()) as f32).max(DB_FLOOR)
+    ((10.0 * power.log10()) as f32).max(DBFS_FLOOR)
 }
 
 fn boundary(range: &Range<u64>, index: u64, count: u64) -> u64 {

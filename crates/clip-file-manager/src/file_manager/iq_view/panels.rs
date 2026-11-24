@@ -7,7 +7,10 @@ use crate::file_manager::preview_copy;
 use egui::{
     Align2, Color32, FontId, PointerButton, Pos2, Rect, Response, Sense, Stroke, Ui, pos2, vec2,
 };
-use little_clip_core::engineering::waveforms::display_value;
+use little_clip_core::engineering::{
+    iq::{DBFS_FLOOR, Spectrum},
+    waveforms::{display_axis_value, display_value},
+};
 use std::ops::Range;
 
 const MEASURED: Color32 = Color32::from_rgb(247, 150, 203);
@@ -65,7 +68,7 @@ impl Viewer {
             ui.label("Burst threshold");
             ui.add(
                 egui::DragValue::new(&mut self.threshold_dbfs)
-                    .range(-180.0..=30.0)
+                    .range(DBFS_FLOOR..=30.0)
                     .speed(0.35)
                     .suffix(" dBFS"),
             );
@@ -253,21 +256,32 @@ impl Viewer {
     fn waterfall_panel(&mut self, ui: &mut Ui, width: f32, height: f32) {
         let heading = ui.horizontal_wrapped(|ui| {
             ui.strong("Waterfall");
-            if let Some(Ok(measurement)) = self.current_spectrum()
-                && let Some((_, origin)) = peak_source(measurement, self.frequency)
-            {
+            if let Some(frame) = self.displays.waterfall.as_ref().filter(|frame| {
+                frame.data.samples.end > self.view.start && frame.data.samples.start < self.view.end
+            }) {
                 ui.weak(format!(
-                    "Peak window · {}",
-                    sample_span(origin, self.rate()),
-                ));
-            } else if let Some(cursor) = self.cursor {
-                ui.weak(format!(
-                    "Cursor {}",
-                    plot::sample_label(cursor, self.rate())
+                    "{} · dBFS",
+                    plot::frequency_axis(&frame.data.rows[0], frame.has_absolute_axis)
                 ));
             }
         });
-        let caption = heading.response.rect.height();
+        let first_y = heading.response.rect.top();
+        if let Some(Ok(measurement)) = self.current_spectrum()
+            && let Some((bin, origin)) = peak_source(measurement, self.frequency)
+        {
+            let kind = if measurement.frame.bins_dbfs[bin] <= DBFS_FLOOR {
+                "FFT source"
+            } else {
+                "Peak window"
+            };
+            ui.weak(format!("{kind} · {}", sample_span(origin, self.rate())));
+        } else if let Some(cursor) = self.cursor {
+            ui.weak(format!(
+                "Cursor {}",
+                plot::sample_label(cursor, self.rate())
+            ));
+        }
+        let caption = ui.next_widget_position().y - first_y;
         let (outer, _) = ui.allocate_exact_size(
             vec2(width, (height - caption - 14.0).max(65.0)),
             Sense::hover(),
@@ -440,9 +454,8 @@ impl Viewer {
             spacing.button_padding = vec2(4.0, 2.0);
             spacing.item_spacing = vec2(5.0, 4.0);
             self.spectrum_controls(ui);
-            self.peak_controls(ui);
             match self.current_spectrum() {
-                Some(Ok(measurement)) => show_measurement(ui, measurement),
+                Some(Ok(measurement)) => show_measurement(ui, measurement, self.show_density),
                 Some(Err(error)) => {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
@@ -454,6 +467,7 @@ impl Viewer {
                     });
                 }
             }
+            self.peak_controls(ui);
         });
         let measurement = self.current_spectrum();
         let controls_height = ui.next_widget_position().y - first_y;
@@ -472,8 +486,8 @@ impl Viewer {
         let density = self.show_density && frame.noise_bandwidth_hz.is_some();
         let bins = &frame.bins_dbfs;
         let marker = self.frequency.or_else(|| {
-            let bin = measurement.coverage.as_ref()?.strongest()?;
-            Some(plot::bin_fraction(bin, bins.len()))
+            measurement.coverage.as_ref()?;
+            Some(plot::bin_fraction(measurement.strongest?, bins.len()))
         });
         let pointed = response
             .hover_pos()
@@ -495,17 +509,11 @@ impl Viewer {
             density,
         );
         if let Some(bin) = pointed {
-            let (level, unit) = if density {
-                (frame.density_dbfs_at(bin), "dBFS/Hz")
-            } else {
-                (Some(bins[bin]), "dBFS")
-            };
-            if let Some(level) = level {
-                response.clone().on_hover_text(format!(
-                    "{} · {level:.1} {unit}",
-                    plot::frequency_label(frame, bin, true),
-                ));
-            }
+            response.clone().on_hover_text(format!(
+                "{} · {}",
+                plot::frequency_label(frame, bin, true),
+                spectrum_level(frame, bin, density),
+            ));
         }
         let clicked = response
             .interact_pointer_pos()
@@ -528,28 +536,48 @@ impl Viewer {
 
     fn peak_controls(&mut self, ui: &mut Ui) {
         let inspecting = self.peak_view_before.is_some();
-        let origin = self
-            .current_spectrum()
-            .and_then(Result::ok)
-            .and_then(|measurement| {
-                let (bin, window) = peak_source(measurement, self.frequency)?;
-                Some((&measurement.frame, bin, window.clone()))
-            });
-        let Some((frame, bin, window)) = origin else {
+        let Some(Ok(measurement)) = self.current_spectrum() else {
             return;
         };
-        let prefix = if self.frequency.is_some() {
-            "Marked"
-        } else {
-            "Strongest"
+        let frame = &measurement.frame;
+        let Some(bin) = spectrum_bin(measurement, self.frequency) else {
+            return;
         };
-        ui.strong(format!(
-            "{prefix} · {} · {:.1} dBFS",
-            plot::frequency_label(frame, bin, true),
-            frame.bins_dbfs[bin],
-        ));
+        let at_floor = frame.bins_dbfs[bin] <= DBFS_FLOOR;
+        if !at_floor && measurement.coverage.is_none() && self.frequency.is_none() {
+            return;
+        }
+        let prefix = match (self.frequency.is_some(), at_floor) {
+            (true, true) => "Marked bin at FFT floor",
+            (false, true) => "Maximum at FFT floor",
+            (true, false) => "Marked",
+            (false, false) => "Strongest",
+        };
+        let density = self.show_density && frame.noise_bandwidth_hz.is_some();
+        if at_floor {
+            ui.strong(format!(
+                "{prefix} · {}",
+                spectrum_level(frame, bin, density)
+            ));
+        } else {
+            ui.strong(format!(
+                "{prefix} · {} · {}",
+                plot::frequency_label(frame, bin, true),
+                spectrum_level(frame, bin, density),
+            ));
+        }
+        let Some(window) = measurement
+            .coverage
+            .as_ref()
+            .and_then(|coverage| coverage.source(bin))
+            .cloned()
+        else {
+            return;
+        };
         let action = if inspecting {
             "Back to waterfall view"
+        } else if at_floor {
+            "Show FFT window"
         } else {
             "Show peak window"
         };
@@ -612,12 +640,28 @@ impl Viewer {
     }
 }
 
+fn spectrum_level(frame: &Spectrum, bin: usize, density: bool) -> String {
+    if density && let Some(level) = frame.density_dbfs_at(bin) {
+        format!("{level:.1} dBFS/Hz")
+    } else {
+        format!("{:.1} dBFS", frame.bins_dbfs[bin])
+    }
+}
+
+fn spectrum_bin(measurement: &Measurement, marker: Option<f32>) -> Option<usize> {
+    match marker {
+        Some(fraction) => {
+            let bins = &measurement.frame.bins_dbfs;
+            let bin = plot::bin_at_fraction(fraction, bins.len());
+            bins[bin].is_finite().then_some(bin)
+        }
+        None => measurement.strongest,
+    }
+}
+
 fn peak_source(measurement: &Measurement, marker: Option<f32>) -> Option<(usize, &Range<u64>)> {
     let coverage = measurement.coverage.as_ref()?;
-    let bin = match marker {
-        Some(fraction) => plot::bin_at_fraction(fraction, measurement.frame.bins_dbfs.len()),
-        None => coverage.strongest()?,
-    };
+    let bin = spectrum_bin(measurement, marker)?;
     Some((bin, coverage.source(bin)?))
 }
 
@@ -647,7 +691,7 @@ fn paint_peak_window(
     );
 }
 
-fn show_measurement(ui: &mut Ui, measurement: &Measurement) {
+fn show_measurement(ui: &mut Ui, measurement: &Measurement, show_density: bool) {
     let frame = &measurement.frame;
     let ink = if ui.visuals().dark_mode {
         MEASURED
@@ -682,22 +726,30 @@ fn show_measurement(ui: &mut Ui, measurement: &Measurement) {
             ),
         );
     }
-    let tuning = if frame.crosses_tuning && frame.center_hz.is_none() {
-        "Spans a retune · Relative frequencies"
-    } else if frame.center_hz.zip(frame.sample_rate_hz).is_some() {
-        "Absolute RF frequencies"
+    let unit = if show_density && frame.noise_bandwidth_hz.is_some() {
+        "dBFS/Hz"
     } else {
-        "Relative frequencies"
+        "dBFS"
     };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("{} · {unit}", plot::frequency_axis(frame, true)));
+        if let Some(center) = frame.center_hz {
+            let center = frame.sample_rate_hz.map_or_else(
+                || display_value(center, "Hz"),
+                |rate| display_axis_value(center, rate / frame.bins_dbfs.len() as f64, "Hz"),
+            );
+            ui.weak(format!("Center {center}"));
+        } else if frame.crosses_tuning {
+            ui.weak("Spans a retune");
+        }
+    });
     let has_invalid_samples = measurement.coverage.as_ref().map_or_else(
         || frame.finite_samples < frame.samples.end - frame.samples.start,
         |coverage| coverage.has_invalid_samples,
     );
-    ui.weak(if has_invalid_samples {
-        format!("{tuning} · Contains invalid samples")
-    } else {
-        tuning.to_owned()
-    });
+    if has_invalid_samples {
+        ui.weak("Contains invalid samples");
+    }
 }
 
 fn sample_span(samples: &Range<u64>, rate: Option<f64>) -> String {

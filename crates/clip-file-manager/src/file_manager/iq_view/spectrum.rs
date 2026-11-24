@@ -14,6 +14,7 @@ pub(super) enum Request {
 pub(super) struct Measurement {
     pub(super) frame: Spectrum,
     pub(super) coverage: Option<Coverage>,
+    pub(super) strongest: Option<usize>,
 }
 
 pub(super) struct Coverage {
@@ -22,7 +23,6 @@ pub(super) struct Coverage {
     pub(super) observed_samples: u64,
     pub(super) has_invalid_samples: bool,
     source_rows: Vec<Option<usize>>,
-    strongest: Option<usize>,
 }
 
 impl Request {
@@ -32,10 +32,15 @@ impl Request {
         cancel: &AtomicBool,
     ) -> Result<Measurement, String> {
         match self {
-            Self::Window(range) => Ok(Measurement {
-                frame: capture.spectrum(range, cancel)?,
-                coverage: None,
-            }),
+            Self::Window(range) => {
+                let frame = capture.spectrum(range, cancel)?;
+                let strongest = strongest_bin(&frame.bins_dbfs, 0..frame.bins_dbfs.len());
+                Ok(Measurement {
+                    frame,
+                    coverage: None,
+                    strongest,
+                })
+            }
             Self::PeakHold { selection, fft } => {
                 let center = shared_center(capture, &selection).map_err(
                     |()| "Peak hold needs one tuning center. Select a range within one tuning.",
@@ -68,7 +73,6 @@ impl Measurement {
                 .iter()
                 .map(|level| level.is_finite().then_some(0))
                 .collect(),
-            strongest: None,
         };
         coverage.add(&frame);
         for row in rows {
@@ -86,7 +90,7 @@ impl Measurement {
                 }
             }
         }
-        coverage.strongest = strongest_bin(&frame.bins_dbfs, 0..frame.bins_dbfs.len());
+        let strongest = strongest_bin(&frame.bins_dbfs, 0..frame.bins_dbfs.len());
         // The aggregate is calibrated coherent amplitude. Its windows may have different
         // noise bandwidths when samples are invalid, so there is no single density offset.
         frame.center_hz = center;
@@ -95,6 +99,7 @@ impl Measurement {
         Ok(Self {
             frame,
             coverage: Some(coverage),
+            strongest,
         })
     }
 
@@ -130,10 +135,6 @@ impl Coverage {
     pub(super) fn source(&self, bin: usize) -> Option<&Range<u64>> {
         self.windows
             .get(self.source_rows.get(bin).copied().flatten()?)
-    }
-
-    pub(super) fn strongest(&self) -> Option<usize> {
-        self.strongest
     }
 
     pub(super) fn sampled(&self) -> bool {
@@ -213,7 +214,7 @@ mod tests {
         assert!(centered.frame.bins_dbfs[bin] < -120.0);
         assert!((peak_hold.frame.bins_dbfs[bin] + 6.0206).abs() < 0.001);
         assert_eq!(peak_hold.frame.frequency_hz_at(bin), Some(915_004_096.0));
-        assert_eq!(coverage.strongest(), Some(bin));
+        assert_eq!(peak_hold.strongest, Some(bin));
         assert_eq!(coverage.source(bin), Some(&burst));
         assert_eq!(coverage.source(64), Some(&second));
         assert_eq!(peak_hold.frame.frequency_hz_at(64), Some(914_991_808.0));
@@ -247,7 +248,7 @@ mod tests {
         assert_eq!(coverage.source(0), Some(&(8..16)));
         assert_eq!(coverage.source(1), Some(&(0..8)));
         assert_eq!(coverage.source(2), None);
-        assert_eq!(coverage.strongest(), Some(0));
+        assert_eq!(measurement.strongest, Some(0));
     }
 
     #[test]

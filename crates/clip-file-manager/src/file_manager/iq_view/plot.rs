@@ -2,7 +2,7 @@
 use super::spectrum::strongest_bin;
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, pos2};
 use little_clip_core::engineering::{
-    iq::{PowerOverview, Spectrum},
+    iq::{DBFS_FLOOR, PowerOverview, Spectrum},
     waveforms::{display_axis_value, display_value},
 };
 use std::ops::Range;
@@ -166,7 +166,7 @@ pub(super) fn spectrum(
         .iter()
         .copied()
         .filter(|value| value.is_finite());
-    let peak = finite.clone().fold(-180.0_f32, f32::max) + shift;
+    let peak = finite.clone().fold(DBFS_FLOOR, f32::max) + shift;
     let scale = (peak - 85.0)..(peak + 4.0);
     for fraction in [0.0, 0.25, 0.5, 0.75, 1.0] {
         let y = egui::lerp(rect.y_range(), fraction);
@@ -271,6 +271,14 @@ pub(super) fn frequency_ticks(
             FONT,
             ink,
         );
+    }
+}
+
+pub(super) fn frequency_axis(spectrum: &Spectrum, absolute: bool) -> &'static str {
+    match (spectrum.sample_rate_hz, spectrum.frequency_hz_at(0)) {
+        (Some(_), Some(_)) if absolute => "RF frequency",
+        (Some(_), _) => "Baseband offset",
+        (None, _) => "Normalized baseband",
     }
 }
 
