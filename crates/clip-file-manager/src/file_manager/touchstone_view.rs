@@ -379,7 +379,6 @@ impl Viewer {
         painter.rect_filled(rect, 3.0, colors.recessed);
         if self.projection == Projection::Smith {
             self.smith(&painter, rect, &response, colors);
-            response.on_hover_text("Scroll to zoom · Middle-drag to pan · Double-click to reset · Click a point to select its source frequency");
         } else {
             self.frequency_plot(ui, &painter, rect, &response, colors);
             response.on_hover_text("Scroll to zoom · Middle-drag to pan · Click or drag to place a marker · Shift-drag to select a band");
@@ -484,20 +483,7 @@ impl Viewer {
             );
         }
         if let Some(point) = picked {
-            smith.mark(&clipped, point.value, "", colors.text_secondary);
-            if let Some(impedance) =
-                reference.and_then(|reference| antenna::impedance(point.value, reference))
-            {
-                response.clone().on_hover_text(format!(
-                    "{} · {:.3} {:+.3}j Ω",
-                    little_clip_core::engineering::waveforms::display_value(
-                        point.frequency_hz,
-                        "Hz"
-                    ),
-                    impedance.re,
-                    impedance.im,
-                ));
-            }
+            antenna::smith_probe(&clipped, &smith, point, reference, colors.text_secondary);
             if response.clicked_by(PointerButton::Primary)
                 && !response.double_clicked_by(PointerButton::Primary)
             {

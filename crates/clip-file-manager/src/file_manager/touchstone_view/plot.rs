@@ -496,7 +496,7 @@ impl Smith {
         }
     }
 
-    fn screen(&self, value: Complex64) -> Pos2 {
+    pub fn screen(&self, value: Complex64) -> Pos2 {
         let coordinate = |value: f64| value.clamp(-100.0, 100.0) as f32;
         self.center + vec2(coordinate(value.re), -coordinate(value.im)) * self.radius
     }

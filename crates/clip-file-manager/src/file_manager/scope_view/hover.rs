@@ -371,19 +371,19 @@ pub(in crate::file_manager) fn paint_trace_readout(
     let visuals = &painter.ctx().global_style().visuals;
     let text = visuals.text_color();
     painter.vline(x, layout.visible.y_range(), Stroke::new(1.0, text));
-    if let Some(caption) = caption
-        && let Some(label) = layout.label_at(
-            &painter,
-            intersection,
-            rect.center().y,
-            || caption,
-            accent,
-            text,
-        )
-    {
-        let height = label.1.size().y + PANEL_PADDING;
-        let top = panel_top(label.0, height, layout.visible.y_range());
-        layout.paint_panel(&painter, visuals.window_fill(), &[label], top, height);
+    if let Some(caption) = caption {
+        layout.paint_readout(&painter, intersection, rect.center().y, caption, accent);
+    }
+}
+
+pub(in crate::file_manager) fn paint_point_readout(
+    painter: &Painter,
+    point: egui::Pos2,
+    caption: String,
+    accent: Color32,
+) {
+    if let Some(layout) = ProbeLayout::new(painter, painter.clip_rect(), point.x) {
+        layout.paint_readout(painter, Some(point.y), point.y, caption, accent);
     }
 }
 
@@ -410,6 +410,29 @@ impl ProbeLayout {
             to_right: right >= left,
             text_width: (left.max(right) - 19.0).max(1.0),
         })
+    }
+
+    fn paint_readout(
+        &self,
+        painter: &Painter,
+        intersection: Option<f32>,
+        fallback_y: f32,
+        caption: String,
+        accent: Color32,
+    ) {
+        let visuals = &painter.ctx().global_style().visuals;
+        if let Some(label) = self.label_at(
+            painter,
+            intersection,
+            fallback_y,
+            || caption,
+            accent,
+            visuals.text_color(),
+        ) {
+            let height = label.1.size().y + PANEL_PADDING;
+            let top = panel_top(label.0, height, self.visible.y_range());
+            self.paint_panel(painter, visuals.window_fill(), &[label], top, height);
+        }
     }
 
     fn label(

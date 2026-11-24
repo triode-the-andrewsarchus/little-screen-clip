@@ -102,6 +102,26 @@ pub(super) fn readout(hz: f64, value: Complex64, reference: f64) -> String {
     format!("{} · {db} · VSWR {vswr} · {z}", frequency(hz))
 }
 
+pub(super) fn smith_probe(
+    painter: &egui::Painter,
+    chart: &Smith,
+    point: TracePoint,
+    reference: Option<f64>,
+    color: Color32,
+) {
+    let units = if reference.is_some() { "Ω" } else { "Z/Z₀" };
+    let z = impedance(point.value, reference.unwrap_or(1.0)).map_or_else(
+        || "Z —".to_owned(),
+        |z| format!("{:.3} {:+.3}j {units}", z.re, z.im),
+    );
+    crate::file_manager::scope_view::hover::paint_point_readout(
+        painter,
+        chart.screen(point.value),
+        format!("{} · {z}", display_value(point.frequency_hz, "Hz")),
+        color,
+    );
+}
+
 pub(super) fn best_button(ui: &mut Ui, point: TracePoint) -> Response {
     let vswr = Projection::Vswr.coordinate(point.value);
     ui.small_button(format!(
@@ -216,19 +236,24 @@ fn smith_chart(
             marker.label == "A",
         );
     }
-    let pointer = hit.hover_pos()?;
-    let points = sweeps
+    let pointer = hit.hover_pos().filter(|pointer| rect.contains(*pointer))?;
+    let (picked, sweep) = sweeps
         .iter()
-        .flat_map(|sweep| plot::visible(sweep.points, band, false));
-    let picked = chart.nearest(pointer, points.copied())?;
-    if !hit.clicked_by(PointerButton::Primary) || hit.double_clicked_by(PointerButton::Primary) {
-        hit.on_hover_text(format!(
-            "Select source point · {:.6} MHz\nScroll to zoom · Middle-drag to pan · Double-click to reset",
-            picked.frequency_hz * 1e-6
-        ));
-        return None;
-    }
-    Some(picked)
+        .filter_map(|sweep| {
+            let points = plot::visible(sweep.points, band, false);
+            chart
+                .nearest(pointer, points.iter().copied())
+                .map(|point| (point, sweep))
+        })
+        .min_by(|(a, _), (b, _)| {
+            chart
+                .screen(a.value)
+                .distance_sq(pointer)
+                .total_cmp(&chart.screen(b.value).distance_sq(pointer))
+        })?;
+    smith_probe(&painter, &chart, picked, Some(sweep.reference), sweep.color);
+    (hit.clicked_by(PointerButton::Primary) && !hit.double_clicked_by(PointerButton::Primary))
+        .then_some(picked)
 }
 
 fn impedance_plot(
