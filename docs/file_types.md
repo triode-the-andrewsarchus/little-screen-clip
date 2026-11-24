@@ -564,7 +564,8 @@ Select two to eight ordinary files and choose **File → Compare selected files*
       - [ ] Embedded document summary, sheet parameters, layer definitions
     - [x] `.cir`, `.sp`, `.spice` — SPICE circuit simulation netlist
       - [x] Subcircuit definitions, node count, component count, analysis directives
-    - [x] `.raw`, `.plt` — SPICE / LTspice simulation output waveforms (transient timing, AC frequency sweep, and DC operating point response curves)
+    - [x] `.raw` — SPICE / LTspice waveform data (transient, AC and DC sweeps, and operating points)
+    - [x] `.plt` — LTspice plot settings (pane layout and configured trace names)
     - [x] `.gbr`, `.ger` — Gerber PCB fabrication layer
       - [x] RS-274X header attributes (layer type, copper thickness, polarity, units)
     - [x] `.gbrjob` — KiCad Gerber Job specification (JSON board outline dimensions, multi-layer stackup [copper, dielectric, solder mask colors, silkscreen thicknesses], finish type, and layer-to-file mapping)

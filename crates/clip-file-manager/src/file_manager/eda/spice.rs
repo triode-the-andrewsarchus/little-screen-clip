@@ -159,6 +159,7 @@ pub(super) fn render_raw_details(ui: &mut Ui, raw: &SpiceRawDocument, state: &mu
 
 pub(super) fn render_plt_details(ui: &mut Ui, plt: &LtspicePlotDocument) {
     ui.strong("LTspice Plot Settings");
+    ui.label("Waveform samples are stored in the .raw file.");
     ui.label(format!("Analysis: {}", plt.analysis));
     ui.label(format!(
         "Panes: {} · Traces: {}",

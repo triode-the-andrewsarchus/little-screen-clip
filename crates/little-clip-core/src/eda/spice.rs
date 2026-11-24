@@ -430,7 +430,7 @@ impl LtspicePlotDocument {
         format!(
             "LTspice Plot · {} · {} panes · {} traces",
             self.analysis,
-            self.panes.len().max(1),
+            self.panes.len(),
             self.trace_count
         )
     }
@@ -1655,60 +1655,20 @@ fn extract_quoted_or_csv_traces(raw: &str) -> Vec<String> {
 fn draw_ltspice_plt_panes(pixmap: &mut Pixmap, doc: &LtspicePlotDocument) {
     let w = pixmap.width() as f32;
     let h = pixmap.height() as f32;
-    let panes = doc.panes.len().clamp(1, 4);
-    let pane_h = h / panes as f32;
-
-    for p in 0..panes {
-        let top = p as f32 * pane_h;
-        let mut grid = Paint::default();
-        grid.set_color_rgba8(48, 56, 70, 220);
-        let mut pb = PathBuilder::new();
-        pb.move_to(0.0, top + pane_h * 0.5);
-        pb.line_to(w, top + pane_h * 0.5);
-        if let Some(path) = pb.finish() {
-            pixmap.stroke_path(
-                &path,
-                &grid,
-                &Stroke {
-                    width: 1.0,
-                    ..Stroke::default()
-                },
-                Transform::identity(),
-                None,
-            );
+    let panes = doc.panes.len().min(4);
+    for (index, pane) in doc.panes.iter().take(panes).enumerate() {
+        let height = h / panes as f32;
+        let top = index as f32 * height;
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(38, 46, 58, 255);
+        if let Some(box_rect) = Rect::from_xywh(3.0, top + 2.0, w - 6.0, height - 4.0) {
+            pixmap.fill_rect(box_rect, &paint, Transform::identity(), None);
         }
-        let traces = doc
-            .panes
-            .get(p)
-            .map_or(1, |pane| pane.traces.len().clamp(1, 3));
-        for t in 0..traces {
-            let [r, g, b] = TRACE_PALETTE[(p * 2 + t) % TRACE_PALETTE.len()];
-            let mut paint = Paint::default();
+        for trace in 0..pane.traces.len().min(8) {
+            let [r, g, b] = TRACE_PALETTE[trace];
             paint.set_color_rgba8(r, g, b, 230);
-            paint.anti_alias = true;
-            let mut cpb = PathBuilder::new();
-            for step in 0..=40 {
-                let u = step as f32 / 40.0;
-                let px = 4.0 + (w - 8.0) * u;
-                let phase = u * std::f32::consts::TAU * (1.2 + t as f32 * 0.7);
-                let py = top + pane_h * (0.5 - 0.32 * phase.sin() * (-1.4 * u).exp());
-                if step == 0 {
-                    cpb.move_to(px, py);
-                } else {
-                    cpb.line_to(px, py);
-                }
-            }
-            if let Some(path) = cpb.finish() {
-                pixmap.stroke_path(
-                    &path,
-                    &paint,
-                    &Stroke {
-                        width: 1.4,
-                        ..Stroke::default()
-                    },
-                    Transform::identity(),
-                    None,
-                );
+            if let Some(swatch) = Rect::from_xywh(8.0 + trace as f32 * 6.0, top + 5.0, 4.0, 4.0) {
+                pixmap.fill_rect(swatch, &paint, Transform::identity(), None);
             }
         }
     }
