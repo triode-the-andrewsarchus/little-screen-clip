@@ -1618,12 +1618,11 @@ fn draw_waveform_curves(
         paint.set_color_rgba8(r, g, b, 235);
         paint.anti_alias = true;
         let mut pb = PathBuilder::new();
-        for i in 0..n {
-            let yv = trace.values[i];
-            if !yv.is_finite() || !x_mapped[i].is_finite() {
+        for (i, (&xv, &yv)) in x_mapped.iter().zip(&trace.values).enumerate() {
+            if !yv.is_finite() || !xv.is_finite() {
                 continue;
             }
-            let px = pad + ((x_mapped[i] - xmin) / xspan) as f32 * uw;
+            let px = pad + ((xv - xmin) / xspan) as f32 * uw;
             let py = pad + (1.0 - (yv - ymin) / yspan) as f32 * uh;
             if i == 0 {
                 pb.move_to(px, py);
@@ -1714,8 +1713,7 @@ fn draw_ltspice_plt_panes(pixmap: &mut Pixmap, doc: &LtspicePlotDocument) {
         if let Some(box_rect) = Rect::from_xywh(3.0, top + 2.0, w - 6.0, height - 4.0) {
             pixmap.fill_rect(box_rect, &paint, Transform::identity(), None);
         }
-        for trace in 0..pane.traces.len().min(8) {
-            let [r, g, b] = TRACE_PALETTE[trace];
+        for (trace, &[r, g, b]) in TRACE_PALETTE.iter().take(pane.traces.len()).enumerate() {
             paint.set_color_rgba8(r, g, b, 230);
             if let Some(swatch) = Rect::from_xywh(8.0 + trace as f32 * 6.0, top + 5.0, 4.0, 4.0) {
                 pixmap.fill_rect(swatch, &paint, Transform::identity(), None);
