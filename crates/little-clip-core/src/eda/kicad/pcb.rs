@@ -4,7 +4,7 @@ use super::super::{
     StripSummary, allocate_canvas_with_y_flip, bounded_source_text, check_cancelled,
     extend_arc_bounds, pixmap_to_thumbnail, update_bounds,
 };
-use super::scene_render::append_arc_points;
+use super::scene_render::{append_arc_points, draw_obround, obround_axis};
 use crate::ImageThumbnail;
 use eda_view::kicad::sexp::{SExp, Value, parse as parse_sexp};
 use std::collections::{BTreeMap, BTreeSet};
@@ -112,6 +112,12 @@ pub enum PcbPrim {
         fill: bool,
         stroke: f64,
     },
+    Obround {
+        layer: PcbLayerBucket,
+        center: [f64; 2],
+        size: [f64; 2],
+        rot_deg: f64,
+    },
     Polygon {
         layer: PcbLayerBucket,
         points: Vec<[f64; 2]>,
@@ -134,6 +140,7 @@ impl PcbPrim {
             Self::Segment { layer, .. }
             | Self::Rect { layer, .. }
             | Self::Circle { layer, .. }
+            | Self::Obround { layer, .. }
             | Self::Polygon { layer, .. }
             | Self::Arc { layer, .. } => *layer,
         }
@@ -153,6 +160,19 @@ impl PcbPrim {
             Self::Circle { center, radius, .. } => {
                 update_bounds(bounds, center[0] - radius, center[1] - radius);
                 update_bounds(bounds, center[0] + radius, center[1] + radius);
+            }
+            Self::Obround {
+                center,
+                size,
+                rot_deg,
+                ..
+            } => {
+                let (axis, diameter) = obround_axis(*center, *size, (-rot_deg).to_radians());
+                let radius = diameter * 0.5;
+                for [x, y] in axis {
+                    update_bounds(bounds, x - radius, y - radius);
+                    update_bounds(bounds, x + radius, y + radius);
+                }
             }
             Self::Arc {
                 center,
@@ -785,6 +805,13 @@ fn collect_pad(node: &SExp, fp_xf: [f64; 3], out: &mut Vec<PcbPrim>) -> Option<P
     let pos_mm = transform_point(fp_xf, [lx, ly]);
     let size = xy_child(node, "size").unwrap_or([1.0, 1.0]);
     let drill = parse_pad_drill(node);
+    // KiCad's drill offset locates the copper shape in the pad's rotated
+    // frame. The drill itself stays centered on the pad anchor.
+    let copper_offset = node
+        .get("drill")
+        .and_then(|drill| xy_child(drill, "offset"))
+        .unwrap_or([0.0, 0.0]);
+    let copper_center = transform_point([pos_mm[0], pos_mm[1], rot_deg], copper_offset);
     let layers_vec: Vec<&str> = node
         .get("layers")
         .map(|l| l.atoms().filter_map(Value::as_str).collect())
@@ -792,32 +819,37 @@ fn collect_pad(node: &SExp, fp_xf: [f64; 3], out: &mut Vec<PcbPrim>) -> Option<P
 
     if pad_type != "np_thru_hole" {
         let bucket = pad_layer_bucket(&layers_vec);
-        if shape == "circle" {
-            out.push(PcbPrim::Circle {
+        let prim = match shape.as_str() {
+            "circle" => PcbPrim::Circle {
                 layer: bucket,
-                center: pos_mm,
+                center: copper_center,
                 radius: size[0].max(size[1]) * 0.5,
                 fill: true,
                 stroke: 0.0,
-            });
-        } else {
-            out.push(PcbPrim::Rect {
+            },
+            "oval" => PcbPrim::Obround {
                 layer: bucket,
-                center: pos_mm,
+                center: copper_center,
+                size,
+                rot_deg,
+            },
+            _ => PcbPrim::Rect {
+                layer: bucket,
+                center: copper_center,
                 size,
                 rot_deg,
                 fill: true,
                 stroke: 0.0,
-            });
-        }
+            },
+        };
+        out.push(prim);
     }
-    if let Some([dx, dy]) = drill {
-        out.push(PcbPrim::Circle {
+    if let Some(size) = drill.filter(|size| size.iter().all(|x| x.is_finite() && *x > 0.0)) {
+        out.push(PcbPrim::Obround {
             layer: PcbLayerBucket::Drills,
             center: pos_mm,
-            radius: dx.max(dy) * 0.5,
-            fill: true,
-            stroke: 0.0,
+            size,
+            rot_deg,
         });
     }
 
@@ -1045,6 +1077,22 @@ fn draw_pcb_prim(
             let pts = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(|p| transform_point(xf, p));
             fill_or_stroke_poly(pixmap, &pts, *fill, *stroke, min_stroke, &paint, transform);
         }
+        PcbPrim::Obround {
+            center,
+            size,
+            rot_deg,
+            ..
+        } => {
+            draw_obround(
+                pixmap,
+                *center,
+                *size,
+                (-rot_deg).to_radians(),
+                min_stroke,
+                rgba,
+                transform,
+            );
+        }
         PcbPrim::Polygon {
             points,
             fill,
@@ -1198,6 +1246,54 @@ mod tests {
             assert_eq!((*center, *rot_deg), expected);
         }
         assert_eq!(doc.primitives.len(), 2);
+    }
+
+    #[test]
+    fn rotated_slot_and_offset_oval_pad_match_kicad_fabrication_exports() {
+        let board = br#"(kicad_pcb
+            (footprint "Inspection:Connector" (layer "F.Cu") (at 10 20 90)
+              (pad "1" thru_hole oval (at 2 0 30) (size 4 2)
+                (drill oval 3 1 (offset 0 0.5)) (layers "*.Cu" "*.Mask"))))"#;
+        // KiCad 10.0.8 exports a copper flash at (10.250000, -18.433013)
+        // and routes the 1 mm drill from (9.134, -18.5) to (10.866, -17.5).
+        let cancel = AtomicBool::new(false);
+        let doc = KicadPcbDocument::parse(board, &cancel).unwrap();
+        let [
+            PcbPrim::Obround {
+                center: copper,
+                size: copper_size,
+                ..
+            },
+            PcbPrim::Obround {
+                layer: PcbLayerBucket::Drills,
+                center,
+                size,
+                rot_deg,
+            },
+        ] = doc.primitives.as_slice()
+        else {
+            panic!("expected copper and drill obrounds");
+        };
+        assert_eq!(*copper_size, [4.0, 2.0]);
+        assert_eq!(
+            copper.map(|v| (v * 1e6).round() as i64),
+            [10250000, 18433013]
+        );
+        let (axis, diameter) = obround_axis(*center, *size, (-rot_deg).to_radians());
+        assert_eq!(diameter, 1.0);
+        assert_eq!(
+            axis.map(|pos| pos.map(|mm| (mm * 1e3).round() as i32)),
+            [[9134, 18500], [10866, 17500]]
+        );
+        let copper_layers = [PcbLayerBucket::FrontCopper].into_iter().collect();
+        let without_drill = doc
+            .render_layers([150, 150], &copper_layers, &cancel)
+            .unwrap();
+        let with_drill = doc.render_thumbnail([150, 150], &cancel).unwrap();
+        assert_ne!(
+            with_drill.premultiplied_rgba,
+            without_drill.premultiplied_rgba
+        );
     }
 
     #[test]

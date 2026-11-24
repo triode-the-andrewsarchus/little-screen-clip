@@ -168,7 +168,7 @@ fn draw_scene_prim(
             size,
             rotation,
         } => {
-            draw_hole(
+            draw_obround(
                 pixmap, *center, *size, *rotation, min_stroke, rgba, transform,
             );
         }
@@ -339,7 +339,30 @@ fn draw_arc(
     }
 }
 
-fn draw_hole(
+/// Centerline and diameter of an obround in the given coordinate frame.
+pub(super) fn obround_axis(
+    center: [f64; 2],
+    size: [f64; 2],
+    rotation: f64,
+) -> ([[f64; 2]; 2], f64) {
+    let [w, h] = size.map(f64::abs);
+    let (s, c) = rotation.sin_cos();
+    let half_span = (w - h).abs() * 0.5;
+    let (dx, dy) = if w >= h {
+        (half_span * c, half_span * s)
+    } else {
+        (-half_span * s, half_span * c)
+    };
+    (
+        [
+            [center[0] - dx, center[1] - dy],
+            [center[0] + dx, center[1] + dy],
+        ],
+        w.min(h),
+    )
+}
+
+pub(super) fn draw_obround(
     pixmap: &mut Pixmap,
     center: [f64; 2],
     size: [f64; 2],
@@ -348,8 +371,7 @@ fn draw_hole(
     rgba: [u8; 4],
     transform: Transform,
 ) {
-    let w = size[0].abs();
-    let h = size[1].abs();
+    let [w, h] = size.map(f64::abs);
     if (w - h).abs() < 1e-6 {
         draw_circle(
             pixmap,
@@ -363,22 +385,6 @@ fn draw_hole(
         );
         return;
     }
-    let (s, c) = rotation.sin_cos();
-    let half_span = ((w - h).abs() * 0.5).max(0.01);
-    let r = (w.min(h) * 0.5).max(min_stroke * 0.5);
-    let (dx, dy) = if w >= h {
-        (half_span * c, half_span * s)
-    } else {
-        (-half_span * s, half_span * c)
-    };
-    draw_open_polyline(
-        pixmap,
-        &[
-            [center[0] - dx, center[1] - dy],
-            [center[0] + dx, center[1] + dy],
-        ],
-        r * 2.0,
-        rgba,
-        transform,
-    );
+    let (axis, diameter) = obround_axis(center, size, rotation);
+    draw_open_polyline(pixmap, &axis, diameter.max(min_stroke), rgba, transform);
 }
