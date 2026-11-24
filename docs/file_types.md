@@ -565,6 +565,7 @@ Select two to eight ordinary files and choose **File → Compare selected files*
     - [x] `.cir`, `.sp`, `.spice` — SPICE circuit simulation netlist
       - [x] Subcircuit definitions, node count, component count, analysis directives
     - [x] `.raw` — SPICE / LTspice waveform data (transient, AC and DC sweeps, and operating points)
+    - [x] `.asc` — LTspice schematic (content-probed drawing with local symbol definitions)
     - [x] `.plt` — LTspice plot settings (pane layout and configured trace names)
     - [x] `.gbr`, `.ger` — Gerber PCB fabrication layer
       - [x] RS-274X header attributes (layer type, copper thickness, polarity, units)
