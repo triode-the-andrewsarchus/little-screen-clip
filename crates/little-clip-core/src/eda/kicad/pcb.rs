@@ -2,13 +2,13 @@
 
 use super::super::{
     StripSummary, allocate_canvas_with_y_flip, bounded_source_text, check_cancelled,
-    pixmap_to_thumbnail, update_bounds,
+    extend_arc_bounds, pixmap_to_thumbnail, update_bounds,
 };
 use super::scene_render::append_arc_points;
 use crate::ImageThumbnail;
 use eda_view::kicad::sexp::{SExp, Value, parse as parse_sexp};
 use std::collections::BTreeSet;
-use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::f64::consts::PI;
 use std::sync::atomic::AtomicBool;
 use tiny_skia::{
     Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform,
@@ -161,18 +161,7 @@ impl PcbPrim {
                 end_rad,
                 ..
             } => {
-                let lo = start_rad.min(*end_rad);
-                let hi = start_rad.max(*end_rad);
-                let extremes = (0..4)
-                    .map(|quarter| f64::from(quarter) * FRAC_PI_2)
-                    .filter(|&angle| (angle - lo).rem_euclid(TAU) <= hi - lo);
-                for angle in [lo, hi].into_iter().chain(extremes) {
-                    update_bounds(
-                        bounds,
-                        center[0] + radius * angle.cos(),
-                        center[1] + radius * angle.sin(),
-                    );
-                }
+                extend_arc_bounds(bounds, *center, *radius, *start_rad, *end_rad);
             }
             Self::Polygon { points, .. } => {
                 for p in points {

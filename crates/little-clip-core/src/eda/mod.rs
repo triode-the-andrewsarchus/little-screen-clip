@@ -472,3 +472,26 @@ pub(crate) fn update_bounds(bounds: &mut Option<[f64; 4]>, x: f64, y: f64) {
         None => *bounds = Some([x, y, x, y]),
     }
 }
+
+// Arc endpoints and any cardinal extrema visited by the unwrapped sweep.
+pub(crate) fn extend_arc_bounds(
+    bounds: &mut Option<[f64; 4]>,
+    center: [f64; 2],
+    radius: f64,
+    start: f64,
+    end: f64,
+) {
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    let lo = start.min(end);
+    let hi = start.max(end);
+    let extremes = (0..4)
+        .map(|quarter| f64::from(quarter) * FRAC_PI_2)
+        .filter(|&angle| (angle - lo).rem_euclid(TAU) <= hi - lo);
+    for angle in [lo, hi].into_iter().chain(extremes) {
+        update_bounds(
+            bounds,
+            center[0] + radius * angle.cos(),
+            center[1] + radius * angle.sin(),
+        );
+    }
+}
