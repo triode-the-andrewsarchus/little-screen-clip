@@ -7,19 +7,19 @@ use little_clip_core::{BackgroundJobs, JobError};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
 use std::time::{Duration, Instant};
 use x11rb::{
     COPY_DEPTH_FROM_PARENT, CURRENT_TIME,
-    connection::Connection as _,
+    connection::{Connection as _, RequestConnection as _},
     protocol::{
         Event as XEvent,
         xproto::{
             self, Atom, AtomEnum, ClientMessageData, ClientMessageEvent, ConnectionExt as _,
-            KeyButMask, MapState, PropMode, SelectionRequestEvent, Window,
+            KeyButMask, PropMode, SelectionRequestEvent, Window,
         },
     },
     rust_connection::RustConnection,
@@ -27,6 +27,7 @@ use x11rb::{
 };
 
 const MAX_WALK_DEPTH: u8 = 32;
+const DROP_STATUS_TIMEOUT: Duration = Duration::from_millis(500);
 const DROP_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
 
 type SnapshotResult = Result<BTreeMap<PathBuf, Identity>, String>;
@@ -45,6 +46,7 @@ x11rb::atom_manager! {
         XdndSelection,
         XdndActionCopy,
         XdndActionMove,
+        XdndActionPrivate,
         TEXT_URI_LIST: b"text/uri-list",
         TARGETS,
         ATOM,
@@ -59,20 +61,20 @@ struct XdndTarget {
 }
 
 struct OutgoingDrag {
-    payload: Arc<Vec<u8>>,
+    source: Window,
+    payload: Arc<[u8]>,
     identities: BTreeMap<PathBuf, Option<Identity>>,
-    snapshot: Arc<Mutex<BTreeMap<PathBuf, Identity>>>,
-    snapshot_done: bool,
+    snapshot: Option<BTreeMap<PathBuf, Identity>>,
     snapshot_job: Option<SnapshotReceiver>,
     pending_requests: Vec<SelectionRequestEvent>,
     cancelled: Arc<AtomicBool>,
-    written: Arc<AtomicBool>,
+    written: bool,
     movable: bool,
     search_guards: HashMap<PathBuf, SourceGuard>,
     target: Option<XdndTarget>,
-    accepted: bool,
+    waiting_status: bool,
+    release: Option<(Instant, (i16, i16), bool)>,
     accepted_action: Atom,
-    last_desired_action: Atom,
     last_sent_pos: Option<(i16, i16)>,
     last_sent_action: Option<Atom>,
     dropped_at: Option<Instant>,
@@ -81,8 +83,8 @@ struct OutgoingDrag {
 pub(super) struct X11Drag {
     conn: RustConnection,
     root: Window,
+    uri_limit: usize,
     host_window: Window,
-    source_window: Window,
     atoms: Atoms,
     incoming_hover: Option<egui::Pos2>,
     outgoing: Option<OutgoingDrag>,
@@ -94,30 +96,16 @@ pub(super) struct X11Drag {
 
 impl X11Drag {
     pub(super) fn new(host_window: Window) -> Option<Self> {
-        let (conn, screen_num) = RustConnection::connect(None).ok()?;
+        let (conn, _) = RustConnection::connect(None).ok()?;
         let atoms = Atoms::new(&conn).ok()?.reply().ok()?;
-        let root = conn.setup().roots[screen_num].root;
-        let source_window = conn.generate_id().ok()?;
-        conn.create_window(
-            COPY_DEPTH_FROM_PARENT,
-            source_window,
-            root,
-            0,
-            0,
-            1,
-            1,
-            0,
-            xproto::WindowClass::INPUT_ONLY,
-            x11rb::COPY_FROM_PARENT,
-            &xproto::CreateWindowAux::new(),
-        )
-        .ok()?;
-        let _ = conn.flush();
+        let root = conn.get_geometry(host_window).ok()?.reply().ok()?.root;
+        // Query once before the first drag. Selection data is sent in one property.
+        let uri_limit = io::LIMIT.min(conn.maximum_request_bytes().saturating_sub(28));
         Some(Self {
             conn,
             root,
+            uri_limit,
             host_window,
-            source_window,
             atoms,
             incoming_hover: None,
             outgoing: None,
@@ -236,36 +224,57 @@ impl X11Drag {
         let payload = little_clip_core::file_uri_list(&paths)
             .map_err(|e| e.to_string())?
             .into_bytes();
-        if payload.len() > io::LIMIT {
-            return Err("Desktop file references exceed 1 MiB".into());
+        if payload.len() > self.uri_limit {
+            return Err(format!(
+                "Desktop file references exceed the {}-byte X11 limit",
+                self.uri_limit
+            ));
         }
 
         let movable = !copy && identities.values().all(Option::is_some);
+        let source = self.conn.generate_id().map_err(|e| e.to_string())?;
         self.conn
-            .set_selection_owner(self.source_window, self.atoms.XdndSelection, CURRENT_TIME)
+            .create_window(
+                COPY_DEPTH_FROM_PARENT,
+                source,
+                self.root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                xproto::WindowClass::INPUT_ONLY,
+                x11rb::COPY_FROM_PARENT,
+                &xproto::CreateWindowAux::new(),
+            )
+            .map_err(|e| e.to_string())?
+            .check()
             .map_err(|e| e.to_string())?;
-        let _ = self.conn.flush();
+        let ownership = self
+            .conn
+            .set_selection_owner(source, self.atoms.XdndSelection, CURRENT_TIME)
+            .map_err(|e| e.to_string())
+            .and_then(|cookie| cookie.check().map_err(|e| e.to_string()));
+        if let Err(error) = ownership {
+            let _ = self.conn.destroy_window(source);
+            return Err(error);
+        }
 
-        let initial_action = if movable && !ptr.mask.contains(KeyButMask::CONTROL) {
-            self.atoms.XdndActionMove
-        } else {
-            self.atoms.XdndActionCopy
-        };
         self.outgoing = Some(OutgoingDrag {
-            payload: Arc::new(payload),
+            source,
+            payload: payload.into(),
             identities,
-            snapshot: Arc::new(Mutex::new(BTreeMap::new())),
-            snapshot_done: false,
+            snapshot: None,
             snapshot_job: None,
             pending_requests: Vec::new(),
             cancelled: Arc::new(AtomicBool::new(false)),
-            written: Arc::new(AtomicBool::new(false)),
+            written: false,
             movable,
             search_guards,
             target: None,
-            accepted: false,
+            waiting_status: false,
+            release: None,
             accepted_action: x11rb::NONE,
-            last_desired_action: initial_action,
             last_sent_pos: None,
             last_sent_action: None,
             dropped_at: None,
@@ -319,12 +328,10 @@ impl X11Drag {
         let pending = std::mem::take(&mut outgoing.pending_requests);
         match result {
             Ok(entries) => {
-                *outgoing.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = entries;
-                outgoing.snapshot_done = true;
+                outgoing.snapshot = Some(entries);
                 let payload = Arc::clone(&outgoing.payload);
-                let written = Arc::clone(&outgoing.written);
                 for req in pending {
-                    self.write_uri_selection(&req, &payload, &written);
+                    self.write_uri_selection(&req, &payload);
                 }
             }
             Err(error) => {
@@ -344,7 +351,7 @@ impl X11Drag {
             XEvent::ClientMessage(msg) => self.on_client_message(msg),
             XEvent::SelectionClear(ev) if ev.selection == self.atoms.XdndSelection => {
                 if let Some(outgoing) = &self.outgoing
-                    && outgoing.dropped_at.is_none()
+                    && outgoing.source == ev.owner
                 {
                     self.cancel_outgoing();
                 }
@@ -358,29 +365,42 @@ impl X11Drag {
             self.send_selection_notify(&req, x11rb::NONE);
             return;
         };
+        if req.owner != outgoing.source || outgoing.target.is_none() {
+            self.send_selection_notify(&req, x11rb::NONE);
+            return;
+        }
         if req.target == self.atoms.TARGETS {
             let dest = dest_property(&req);
-            let _ = self.conn.change_property32(
-                PropMode::REPLACE,
-                req.requestor,
-                dest,
-                self.atoms.ATOM,
-                &[self.atoms.TARGETS, self.atoms.TEXT_URI_LIST],
-            );
-            self.send_selection_notify(&req, dest);
+            let result = self
+                .conn
+                .change_property32(
+                    PropMode::REPLACE,
+                    req.requestor,
+                    dest,
+                    self.atoms.ATOM,
+                    &[self.atoms.TARGETS, self.atoms.TEXT_URI_LIST],
+                )
+                .is_ok_and(|cookie| cookie.check().is_ok());
+            self.send_selection_notify(&req, if result { dest } else { x11rb::NONE });
             return;
         }
         if req.target != self.atoms.TEXT_URI_LIST {
             self.send_selection_notify(&req, x11rb::NONE);
             return;
         }
-        let move_active = outgoing.accepted_action == self.atoms.XdndActionMove
-            || outgoing.last_desired_action == self.atoms.XdndActionMove;
-        let need_snapshot = outgoing.movable && !outgoing.snapshot_done && move_active;
+        let move_active = [
+            outgoing.accepted_action,
+            outgoing.last_sent_action.unwrap_or(x11rb::NONE),
+        ]
+        .contains(&self.atoms.XdndActionMove);
+        let need_snapshot = outgoing.movable && outgoing.snapshot.is_none() && move_active;
         if !need_snapshot {
             let payload = Arc::clone(&outgoing.payload);
-            let written = Arc::clone(&outgoing.written);
-            self.write_uri_selection(&req, &payload, &written);
+            self.write_uri_selection(&req, &payload);
+            return;
+        }
+        if outgoing.pending_requests.len() >= 8 {
+            self.send_selection_notify(&req, x11rb::NONE);
             return;
         }
         outgoing.pending_requests.push(req);
@@ -396,23 +416,16 @@ impl X11Drag {
         }
     }
 
-    fn write_uri_selection(
-        &self,
-        req: &SelectionRequestEvent,
-        payload: &[u8],
-        written: &AtomicBool,
-    ) {
+    fn write_uri_selection(&mut self, req: &SelectionRequestEvent, payload: &[u8]) {
         let dest = dest_property(req);
-        if self
+        let written = self
             .conn
             .change_property8(PropMode::REPLACE, req.requestor, dest, req.target, payload)
-            .is_ok()
-        {
-            written.store(true, Ordering::Release);
-            self.send_selection_notify(req, dest);
-        } else {
-            self.send_selection_notify(req, x11rb::NONE);
+            .is_ok_and(|cookie| cookie.check().is_ok());
+        if written && let Some(outgoing) = &mut self.outgoing {
+            outgoing.written = true;
         }
+        self.send_selection_notify(req, if written { dest } else { x11rb::NONE });
     }
 
     fn send_selection_notify(&self, req: &SelectionRequestEvent, property: Atom) {
@@ -431,54 +444,45 @@ impl X11Drag {
     }
 
     fn on_client_message(&mut self, msg: ClientMessageEvent) {
-        if msg.type_ == self.atoms.XdndStatus {
-            let Some(outgoing) = &mut self.outgoing else {
-                return;
-            };
-            let data = msg.data.as_data32();
-            if !target_matches(outgoing.target, data[0]) {
-                return;
-            }
-            let accepted = (data[1] & 1) != 0;
-            let action = data[4];
-            if !outgoing.movable && action == self.atoms.XdndActionMove {
-                // Copy-only drags cannot accept or be upgraded into a source move.
-                outgoing.accepted = false;
-                outgoing.accepted_action = x11rb::NONE;
-            } else {
-                outgoing.accepted = accepted;
-                outgoing.accepted_action = action;
-            }
+        let Some(outgoing) = &mut self.outgoing else {
+            return;
+        };
+        let data = msg.data.as_data32();
+        if msg.format != 32
+            || msg.window != outgoing.source
+            || !target_matches(outgoing.target, data[0])
+        {
             return;
         }
-        if msg.type_ == self.atoms.XdndFinished {
-            let data = msg.data.as_data32();
-            let Some(outgoing) = &self.outgoing else {
-                return;
-            };
-            if outgoing.dropped_at.is_none() || !target_matches(outgoing.target, data[0]) {
-                return;
-            }
-            let outgoing = self.outgoing.take().expect("checked outgoing");
-            let version = outgoing.target.map_or(5, |t| t.version);
-            let finished_ok = (data[1] & 1) != 0;
-            let final_action = if version >= 5 {
-                data[2]
+        if msg.type_ == self.atoms.XdndStatus && outgoing.waiting_status {
+            outgoing.waiting_status = false;
+            let action = data[4];
+            outgoing.accepted_action = if (data[1] & 1) != 0
+                && (action == self.atoms.XdndActionCopy
+                    || outgoing.last_sent_action == Some(action))
+            {
+                action
             } else {
-                outgoing.accepted_action
+                x11rb::NONE
             };
-            let snapshot = outgoing
-                .snapshot
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone();
+        } else if msg.type_ == self.atoms.XdndFinished
+            && outgoing.dropped_at.is_some()
+            && let Some(mut outgoing) = self.outgoing.take()
+        {
+            outgoing.cancelled.store(true, Ordering::Relaxed);
+            let _ = self.conn.destroy_window(outgoing.source);
+            let move_action = self.atoms.XdndActionMove;
             if should_remove_after_finished(
-                outgoing.movable,
-                finished_ok,
-                outgoing.written.load(Ordering::Acquire),
-                final_action == self.atoms.XdndActionMove,
-                outgoing.snapshot_done && !snapshot.is_empty(),
-            ) {
+                outgoing.movable && outgoing.target.is_some_and(|target| target.version >= 5),
+                (data[1] & 1) != 0,
+                outgoing.written,
+                data[2] == move_action && outgoing.accepted_action == move_action,
+                outgoing
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| !snapshot.is_empty()),
+            ) && let Some(snapshot) = outgoing.snapshot.take()
+            {
                 self.events.push(Event::Remove(
                     outgoing.identities,
                     snapshot,
@@ -507,101 +511,129 @@ impl X11Drag {
             self.cancel_outgoing();
             return;
         }
-        let Ok(ptr) = self
-            .conn
-            .query_pointer(self.root)
-            .ok()
-            .and_then(|c| c.reply().ok())
-            .ok_or(())
-        else {
-            self.cancel_outgoing();
-            return;
+        let (pos, copy_requested) = match outgoing.release {
+            Some((released, pos, copy)) if released.elapsed() < DROP_STATUS_TIMEOUT => (pos, copy),
+            Some(_) => {
+                self.cancel_outgoing();
+                return;
+            }
+            None => match self.update_outgoing_pointer() {
+                Some(pointer) => pointer,
+                None => {
+                    self.cancel_outgoing();
+                    return;
+                }
+            },
         };
+        self.advance_drop_target(pos, copy_requested);
+    }
 
-        let next_target = self.find_xdnd_target(i32::from(ptr.root_x), i32::from(ptr.root_y));
-        self.sync_target_change(next_target);
+    fn update_outgoing_pointer(&mut self) -> Option<((i16, i16), bool)> {
+        let ptr = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
+        let pos = (ptr.root_x, ptr.root_y);
+        let copy = ptr.mask.contains(KeyButMask::CONTROL);
+        let target = if ptr.same_screen {
+            self.find_xdnd_target(pos.0, pos.1)
+        } else {
+            None
+        };
+        self.sync_target_change(target);
+        if !ptr.mask.contains(KeyButMask::BUTTON1) {
+            self.outgoing.as_mut()?.release = Some((Instant::now(), pos, copy));
+        }
+        Some((pos, copy))
+    }
 
+    fn advance_drop_target(&mut self, pos: (i16, i16), copy_requested: bool) {
         let Some(outgoing) = &mut self.outgoing else {
             return;
         };
-        let desired_action = if outgoing.movable && !ptr.mask.contains(KeyButMask::CONTROL) {
+        let Some(target) = outgoing.target else {
+            if outgoing.release.is_some() {
+                self.cancel_outgoing();
+            }
+            return;
+        };
+        let desired_action = if outgoing.movable && target.version >= 5 && !copy_requested {
             self.atoms.XdndActionMove
         } else {
             self.atoms.XdndActionCopy
         };
-        outgoing.last_desired_action = desired_action;
-
-        if !ptr.mask.contains(KeyButMask::BUTTON1) {
-            if let (Some(target), true) = (outgoing.target, outgoing.accepted) {
-                send_xdnd_msg(
-                    &self.conn,
-                    target,
-                    self.atoms.XdndDrop,
-                    [self.source_window, 0, CURRENT_TIME, 0, 0],
-                );
-                outgoing.dropped_at = Some(Instant::now());
-            } else {
-                self.cancel_outgoing();
-            }
+        if outgoing.waiting_status {
             return;
         }
-
-        if let Some(target) = outgoing.target {
-            let pos = (ptr.root_x, ptr.root_y);
-            if outgoing.last_sent_pos != Some(pos)
-                || outgoing.last_sent_action != Some(desired_action)
-            {
-                send_xdnd_msg(
-                    &self.conn,
-                    target,
-                    self.atoms.XdndPosition,
-                    [
-                        self.source_window,
-                        0,
-                        pack_xdnd_coords(pos.0, pos.1),
-                        CURRENT_TIME,
-                        desired_action,
-                    ],
-                );
-                outgoing.last_sent_pos = Some(pos);
-                outgoing.last_sent_action = Some(desired_action);
+        if outgoing.last_sent_pos != Some(pos) || outgoing.last_sent_action != Some(desired_action)
+        {
+            send_xdnd_msg(
+                &self.conn,
+                target,
+                self.atoms.XdndPosition,
+                [
+                    outgoing.source,
+                    0,
+                    pack_xdnd_coords(pos.0, pos.1),
+                    CURRENT_TIME,
+                    desired_action,
+                ],
+            );
+            outgoing.last_sent_pos = Some(pos);
+            outgoing.last_sent_action = Some(desired_action);
+            outgoing.waiting_status = true;
+            return;
+        }
+        if outgoing.release.is_some() {
+            if outgoing.accepted_action == x11rb::NONE {
+                self.cancel_outgoing();
+                return;
             }
+            send_xdnd_msg(
+                &self.conn,
+                target,
+                self.atoms.XdndDrop,
+                [outgoing.source, 0, CURRENT_TIME, 0, 0],
+            );
+            outgoing.dropped_at = Some(Instant::now());
         }
     }
 
     fn sync_target_change(&mut self, next: Option<XdndTarget>) {
-        let prev = self.outgoing.as_ref().and_then(|o| o.target);
-        if prev == next {
+        let Some(outgoing) = &mut self.outgoing else {
+            return;
+        };
+        if outgoing.target == next {
             return;
         }
-        if let Some(old) = prev {
+        if let Some(old) = outgoing.target {
             send_xdnd_msg(
                 &self.conn,
                 old,
                 self.atoms.XdndLeave,
-                [self.source_window, 0, 0, 0, 0],
+                [outgoing.source, 0, 0, 0, 0],
             );
         }
-        if let Some(outgoing) = &mut self.outgoing {
-            outgoing.target = next;
-            outgoing.accepted = false;
-            outgoing.accepted_action = x11rb::NONE;
-            outgoing.last_sent_pos = None;
-            outgoing.last_sent_action = None;
-        }
+        let pending = std::mem::take(&mut outgoing.pending_requests);
+        outgoing.target = next;
+        outgoing.waiting_status = false;
+        outgoing.accepted_action = x11rb::NONE;
+        outgoing.last_sent_pos = None;
+        outgoing.last_sent_action = None;
+        outgoing.written = false;
         if let Some(target) = next {
             send_xdnd_msg(
                 &self.conn,
                 target,
                 self.atoms.XdndEnter,
                 [
-                    self.source_window,
+                    outgoing.source,
                     xdnd_enter_flags(target.version),
                     self.atoms.TEXT_URI_LIST,
                     0,
                     0,
                 ],
             );
+        }
+        for req in pending {
+            self.send_selection_notify(&req, x11rb::NONE);
         }
     }
 
@@ -616,55 +648,33 @@ impl X11Drag {
                     &self.conn,
                     target,
                     self.atoms.XdndLeave,
-                    [self.source_window, 0, 0, 0, 0],
+                    [outgoing.source, 0, 0, 0, 0],
                 );
             }
+            let _ = self.conn.destroy_window(outgoing.source);
             self.events.push(Event::Refresh);
         }
     }
 
-    fn find_xdnd_target(&self, root_x: i32, root_y: i32) -> Option<XdndTarget> {
-        let skip = [self.host_window, self.source_window];
-        self.walk_xdnd_window(self.root, root_x, root_y, 0, &skip)
-    }
-
-    fn walk_xdnd_window(
-        &self,
-        parent: Window,
-        rel_x: i32,
-        rel_y: i32,
-        depth: u8,
-        skip: &[Window],
-    ) -> Option<XdndTarget> {
-        if depth >= MAX_WALK_DEPTH {
-            return None;
-        }
-        let tree = self.conn.query_tree(parent).ok()?.reply().ok()?;
-        for child in tree.children.into_iter().rev().take(256) {
-            if skip.contains(&child) {
-                continue;
-            }
-            let Ok(attrs) = self.conn.get_window_attributes(child).ok()?.reply() else {
-                continue;
-            };
-            if attrs.map_state != MapState::VIEWABLE {
-                continue;
-            }
-            let Ok(geom) = self.conn.get_geometry(child).ok()?.reply() else {
-                continue;
-            };
-            let bw = i32::from(geom.border_width);
-            let cx = rel_x - i32::from(geom.x) - bw;
-            let cy = rel_y - i32::from(geom.y) - bw;
-            if cx < 0 || cy < 0 || cx >= i32::from(geom.width) || cy >= i32::from(geom.height) {
-                continue;
-            }
-            if let Some(found) = self.walk_xdnd_window(child, cx, cy, depth + 1, skip) {
-                return Some(found);
+    fn find_xdnd_target(&self, root_x: i16, root_y: i16) -> Option<XdndTarget> {
+        let mut parent = self.root;
+        for _ in 0..MAX_WALK_DEPTH {
+            // The server returns the topmost mapped child at the pointer. An
+            // obscured window must never receive the drop through its cover.
+            let child = self
+                .conn
+                .translate_coordinates(self.root, parent, root_x, root_y)
+                .ok()?
+                .reply()
+                .ok()?
+                .child;
+            if child == x11rb::NONE || child == self.host_window {
+                return None;
             }
             if let Some(target) = self.inspect_xdnd_target(child) {
                 return Some(target);
             }
+            parent = child;
         }
         None
     }
@@ -707,10 +717,7 @@ impl X11Drag {
 
 impl Drop for X11Drag {
     fn drop(&mut self) {
-        if let Some(outgoing) = &self.outgoing {
-            outgoing.cancelled.store(true, Ordering::Relaxed);
-        }
-        let _ = self.conn.destroy_window(self.source_window);
+        self.cancel_outgoing();
         let _ = self.conn.flush();
     }
 }
@@ -755,13 +762,13 @@ pub(super) fn xdnd_enter_flags(version: u8) -> u32 {
 }
 
 pub(super) fn should_remove_after_finished(
-    movable: bool,
+    confirms_success: bool,
     finished_ok: bool,
     written: bool,
     action_is_move: bool,
     snapshot_ready: bool,
 ) -> bool {
-    movable && finished_ok && written && action_is_move && snapshot_ready
+    confirms_success && finished_ok && written && action_is_move && snapshot_ready
 }
 
 #[cfg(test)]
@@ -772,7 +779,7 @@ mod tests {
     fn remove_requires_movable_written_accepted_move_and_verified_snapshot() {
         assert!(should_remove_after_finished(true, true, true, true, true));
         for case in [
-            (false, true, true, true, true), // Copy-only cannot be upgraded into source removal.
+            (false, true, true, true, true), // Older targets do not report successful completion.
             (true, false, true, true, true),
             (true, true, false, true, true),
             (true, true, true, false, true),
