@@ -158,9 +158,18 @@ impl BinaryDiffViewState {
 
                 ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
-                // Zone 3: Main Layout
-                let footer_h = if self.hovered_cell.is_some() { 64.0 } else { 32.0 };
-                let avail_h = (ui.available_height() - footer_h - 4.0).max(100.0);
+                let footer_height = if self.hovered_cell.is_some() { 110.0 } else { 52.0 };
+                egui::Panel::bottom(ui.scope_id().with("binary-diff-footer"))
+                    .resizable(false)
+                    .min_size(footer_height)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        self.render_footer_inspection(ui, palette);
+                        let toast = self.status_toast.active(now).cloned();
+                        shell.render_footer(ui, &toast, now);
+                    });
+
+                let avail_h = ui.available_height().max(100.0);
 
                 ui.horizontal(|ui| {
                     let diff_panel_w = if self.panel_state.right_collapsed {
@@ -177,13 +186,15 @@ impl BinaryDiffViewState {
 
                     // 1. Hex Table
                     ui.push_id("binary_hex_table_section", |ui| {
-                        ui.allocate_ui_with_layout(
-                            Vec2::new(table_w, avail_h),
-                            egui::Layout::top_down(egui::Align::LEFT),
-                            |ui| {
-                                self.render_hex_table(ui, palette, avail_h);
-                            },
+                        let (table_rect, _) =
+                            ui.allocate_exact_size(Vec2::new(table_w, avail_h), egui::Sense::hover());
+                        let mut table = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(table_rect)
+                                .layout(egui::Layout::top_down(egui::Align::LEFT)),
                         );
+                        table.set_clip_rect(table_rect.intersect(ui.clip_rect()));
+                        self.render_hex_table(&mut table, palette, avail_h);
                     });
 
                     // 2. Minimap Track
@@ -200,10 +211,6 @@ impl BinaryDiffViewState {
                     }
                 });
 
-                // Zone 5: Footer & Cell Inspection
-                self.render_footer_inspection(ui, palette);
-                let toast_tuple = self.status_toast.active(now).cloned();
-                shell.render_footer(ui, &toast_tuple, now);
             });
     }
 
@@ -321,76 +328,60 @@ impl BinaryDiffViewState {
                         Some(hex_to_c32(&palette.harmonies.warm_attention)),
                         palette,
                     );
-
-                    // Keep the search field reachable when the status pills fill the row.
-                    let nav_width = if search_len > 0 { 465.0 } else { 365.0 };
-                    if ui.available_width() < nav_width {
-                        ui.end_row();
+                });
+                ui.horizontal_wrapped(|ui| {
+                    let next_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                        Some(Icon::ArrowDown),
+                        "Next [J]",
+                        palette,
+                    );
+                    if ui.add(next_btn).clicked() {
+                        next_diff = true;
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let next_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
-                            Some(Icon::ArrowDown),
-                            "Next [J]",
-                            palette,
-                        );
-                        if ui.add(next_btn).clicked() {
-                            next_diff = true;
-                        }
-                        let prev_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
-                            Some(Icon::ArrowUp),
-                            "Prev [K]",
-                            palette,
-                        );
-                        if ui.add(prev_btn).clicked() {
-                            prev_diff = true;
-                        }
+                    let prev_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+                        Some(Icon::ArrowUp),
+                        "Prev [K]",
+                        palette,
+                    );
+                    if ui.add(prev_btn).clicked() {
+                        prev_diff = true;
+                    }
 
-                        ui.add_space(crate::ui_ext::SPACE_SM);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
-                        if search_len > 0 {
-                            let canvas = hex_to_c32(&palette.colors.canvas);
-                            ui.label(
-                                egui::RichText::new(format!("{}/{}", search_idx + 1, search_len))
-                                    .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
-                                    .color(crate::ui_ext::contrast_text_c32_on(
-                                        canvas,
-                                        canvas,
-                                        Some(hex_to_c32(&palette.harmonies.base)),
-                                        palette,
-                                    )),
-                            );
-                            let down_btn = crate::ui_ext::icon_button(
-                                Icon::ArrowDown,
-                                14.0,
-                                b_med,
-                                None,
-                                palette,
-                            );
-                            if ui.add(down_btn).clicked() {
-                                next_search = true;
-                            }
-                            let up_btn = crate::ui_ext::icon_button(
-                                Icon::ArrowUp,
-                                14.0,
-                                b_med,
-                                None,
-                                palette,
-                            );
-                            if ui.add(up_btn).clicked() {
-                                prev_search = true;
-                            }
-                        }
-
-                        let search_edit = ui.add_sized(
-                            [180.0, crate::ui_ext::CONTROL_HEIGHT],
-                            egui::TextEdit::singleline(&mut self.search_query)
-                                .id(egui::Id::unique("binary_diff_search_field"))
-                                .hint_text("Search Hex / ASCII..."),
+                    if search_len > 0 {
+                        let canvas = hex_to_c32(&palette.colors.canvas);
+                        ui.label(
+                            egui::RichText::new(format!("{}/{}", search_idx + 1, search_len))
+                                .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
+                                .color(crate::ui_ext::contrast_text_c32_on(
+                                    canvas,
+                                    canvas,
+                                    Some(hex_to_c32(&palette.harmonies.base)),
+                                    palette,
+                                )),
                         );
-                        if search_edit.changed() {
-                            do_search = true;
+                        let down_btn =
+                            crate::ui_ext::icon_button(Icon::ArrowDown, 14.0, b_med, None, palette);
+                        if ui.add(down_btn).clicked() {
+                            next_search = true;
                         }
-                    });
+                        let up_btn =
+                            crate::ui_ext::icon_button(Icon::ArrowUp, 14.0, b_med, None, palette);
+                        if ui.add(up_btn).clicked() {
+                            prev_search = true;
+                        }
+                    }
+
+                    let search_edit = ui.add_sized(
+                        [180.0, crate::ui_ext::CONTROL_HEIGHT],
+                        egui::TextEdit::singleline(&mut self.search_query)
+                            .id(egui::Id::unique("binary_diff_search_field"))
+                            .hint_text("Search Hex / ASCII..."),
+                    );
+                    if search_edit.changed() {
+                        do_search = true;
+                    }
                 });
             });
 

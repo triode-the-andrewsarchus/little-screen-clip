@@ -561,7 +561,7 @@ fn test_layout_fits_window() {
 }
 
 #[test]
-fn wide_rows_fit_without_horizontal_scrolling() {
+fn wide_rows_keep_readable_text_and_scroll_to_the_right_offset() {
     let left: Vec<u8> = (0x41..0x61).collect();
     let mut right = left.clone();
     right[31] = b'z';
@@ -581,23 +581,22 @@ fn wide_rows_fit_without_horizontal_scrolling() {
     ));
     state.is_computing = false;
     state.receiver = None;
-    state.panel_state.right_collapsed = true;
 
     let palette = AppPalette::default();
     let ctx = egui::Context::default();
     let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1100.0, 760.0));
     let font_size = state.layout_metrics(32, 1050.0).2;
-    assert!(font_size < crate::ui_ext::MONO_FONT_SIZE);
+    assert_eq!(font_size, BinaryDiffViewState::MIN_HEX_FONT_SIZE);
 
     let mut time = 0.0;
-    let mut output = None;
-    for _ in 0..4 {
+    let mut render = |events| {
         time += 0.05;
-        output = Some(clip_ui::test_support::run_frame(
+        clip_ui::test_support::run_frame(
             &ctx,
             egui::RawInput {
                 screen_rect: Some(screen_rect),
                 time: Some(time),
+                events,
                 ..Default::default()
             },
             |ctx| {
@@ -607,9 +606,19 @@ fn wide_rows_fit_without_horizontal_scrolling() {
                     })
                 });
             },
-        ));
+        )
+    };
+    for _ in 0..4 {
+        let _ = render(Vec::new());
     }
-    let output = output.unwrap();
+    let _ = render(vec![
+        egui::Event::PointerMoved(egui::pos2(480.0, 410.0)),
+        clip_ui::test_support::scroll(egui::vec2(-10_000.0, 0.0)),
+    ]);
+    for _ in 0..12 {
+        let _ = render(Vec::new());
+    }
+    let output = render(Vec::new());
     assert!(
         output.shapes.iter().any(|clipped| match &clipped.shape {
             egui::Shape::Text(text) if text.galley.text() == "Offset R" => clipped
@@ -633,7 +642,7 @@ fn wide_rows_fit_without_horizontal_scrolling() {
             }
             _ => None,
         })
-        .expect("the final right-file ASCII byte should fit in the viewport");
+        .expect("scrolling should reveal the final right-file ASCII byte");
     assert!(final_byte.0.x + final_byte.1.x <= screen_rect.max.x);
     assert!(
         output.shapes.iter().any(|clipped| matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == "00000000"

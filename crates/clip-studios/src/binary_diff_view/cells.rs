@@ -32,7 +32,7 @@ pub(super) fn render_hex_table_header(
             .max_rect(header_ui_rect)
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
-    child_ui.set_clip_rect(header_rect);
+    child_ui.set_clip_rect(header_rect.intersect(ui.clip_rect()));
     child_ui.spacing_mut().item_spacing = Vec2::new(2.0 * scale, 0.0);
     child_ui.add_space(4.0 * scale);
 
@@ -95,12 +95,17 @@ pub(super) fn render_hex_table_header(
             Vec2::new(width, 28.0),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.label(
-                    egui::RichText::new(label)
-                        .font(FontId::monospace(font_size))
-                        .strong()
-                        .color(hex_to_c32(color)),
-                );
+                ui.set_min_width(width);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&label)
+                            .font(FontId::monospace(font_size))
+                            .strong()
+                            .color(hex_to_c32(color)),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(label);
             },
         );
     }

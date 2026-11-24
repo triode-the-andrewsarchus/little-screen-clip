@@ -418,15 +418,10 @@ impl BinaryDiffViewState {
         self.nav.prev_search_match();
     }
 
-    /// Fits the byte columns into the available width, shrinking their font when needed.
-    /// Returns: (cell_w, cell_h, font_size, ascii_w, offset_w, row_height)
-    pub fn layout_metrics(
-        &self,
-        bytes_per_row: usize,
-        available_width: f32,
-    ) -> (f32, f32, f32, f32, f32, f32) {
-        let base_font_size = crate::ui_ext::MONO_FONT_SIZE;
-        let base_glyph_width = base_font_size * 0.6;
+    const MIN_HEX_FONT_SIZE: f32 = 11.0;
+
+    fn natural_table_width(bytes_per_row: usize) -> f32 {
+        let base_glyph_width = crate::ui_ext::MONO_FONT_SIZE * 0.6;
         let bpr = bytes_per_row as f32;
         let groups = if bytes_per_row == 8 {
             1.0
@@ -440,8 +435,18 @@ impl BinaryDiffViewState {
         let hex_w = bpr * base_cell_w + (bpr - 1.0) * 2.0 + groups * 7.0;
         let ascii_w = bpr * base_ascii_w + (bpr - 1.0) * 2.0;
         let gaps = 42.0 + crate::ui_ext::SPACE_XS + crate::ui_ext::SPACE_SM * 2.0 + 18.0;
-        let natural_width = base_offset_w * 2.0 + hex_w * 2.0 + ascii_w * 2.0 + gaps;
-        let scale = (available_width.max(1.0) / natural_width).min(1.0);
+        base_offset_w * 2.0 + hex_w * 2.0 + ascii_w * 2.0 + gaps
+    }
+
+    /// Returns the cell geometry while retaining a readable minimum font size.
+    pub fn layout_metrics(
+        &self,
+        bytes_per_row: usize,
+        available_width: f32,
+    ) -> (f32, f32, f32, f32, f32, f32) {
+        let base_font_size = crate::ui_ext::MONO_FONT_SIZE;
+        let scale = (available_width / Self::natural_table_width(bytes_per_row))
+            .clamp(Self::MIN_HEX_FONT_SIZE / base_font_size, 1.0);
         let font_size = base_font_size * scale;
         let glyph_width = font_size * 0.6;
         (
