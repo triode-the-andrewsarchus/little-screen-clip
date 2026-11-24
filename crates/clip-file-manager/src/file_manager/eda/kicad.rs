@@ -227,7 +227,7 @@ fn render_symbol_list(
         let label = format!("{} ({} pins){suffix}", sym.name, sym.pins.len());
         if ui.selectable_label(selected, label).clicked() && !selected {
             state.selected_symbol = idx;
-            state.selected_unit = 1;
+            state.selected_unit = sym.units[0];
             state.raster = None;
         }
     }
@@ -236,10 +236,10 @@ fn render_symbol_list(
 fn render_selected_symbol_info(ui: &mut Ui, entry: &KicadSymbolEntry, state: &mut ViewerState) {
     ui.separator();
     ui.strong(&entry.name);
-    if entry.units > 1 {
+    if entry.units.len() > 1 {
         ui.horizontal_wrapped(|ui| {
             ui.label("Unit:");
-            for unit in 1..=entry.units {
+            for &unit in &entry.units {
                 if ui
                     .selectable_label(state.selected_unit == unit, format!("{unit}"))
                     .clicked()

@@ -210,10 +210,13 @@ impl Viewer {
     pub fn load(path: &Path, cancelled: &AtomicBool) -> Result<Self, String> {
         let doc = read_document(path, cancelled)?;
         let source_lines = index_source_lines(source_text_for(&doc));
-        Ok(Self {
-            doc,
-            state: ViewerState::new(source_lines),
-        })
+        let mut state = ViewerState::new(source_lines);
+        if let Document::KicadSymbolLib(lib) = &doc
+            && let Some(symbol) = lib.symbols.first()
+        {
+            state.selected_unit = symbol.units[0];
+        }
+        Ok(Self { doc, state })
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, close: &mut bool, palette: &AppPalette) {
