@@ -1,5 +1,5 @@
 use crate::ui_appearance::WorkbenchColors;
-use egui::{Color32, Painter, Rect, Stroke, pos2};
+use egui::{Align2, Color32, FontId, Painter, Rect, Stroke, pos2};
 use little_clip_core::engineering::tags::{Direction, FrameInfo, SampleBin, TraceBin};
 use std::ops::Range;
 
@@ -202,7 +202,7 @@ pub(super) fn samples(
     step: u64,
     bins: &[SampleBin],
     colors: WorkbenchColors,
-) {
+) -> Amplitude {
     painter.rect_filled(rect, 3.0, colors.recessed);
     let first = range
         .start
@@ -218,8 +218,13 @@ pub(super) fn samples(
     let [lo, hi] = visible.iter().fold([0, 0], |[lo, hi], peak| {
         [lo.min(peak.min), hi.max(peak.max)]
     });
-    let span = f32::from(hi - lo).max(1.0);
-    let y = |value| rect.bottom() - 2.0 - (rect.height() - 4.0) * f32::from(value - lo) / span;
+    let inset = (rect.height() * 0.07).clamp(2.0, 24.0);
+    let amplitude = Amplitude {
+        lo,
+        hi,
+        plot: rect.shrink2(egui::vec2(0.0, inset)),
+    };
+    let y = |value| amplitude.y(value);
     let clipped = painter.with_clip_rect(rect);
     let baseline = y(0);
     clipped.line_segment(
@@ -246,6 +251,48 @@ pub(super) fn samples(
         clipped.add(egui::Shape::line(path, Stroke::new(1.1, colors.accent)));
     } else if let Some(point) = path.first() {
         clipped.circle_filled(*point, 1.75, colors.accent);
+    }
+    amplitude
+}
+
+pub(super) struct Amplitude {
+    lo: i16,
+    hi: i16,
+    plot: Rect,
+}
+
+impl Amplitude {
+    fn y(&self, value: i16) -> f32 {
+        let lo = f32::from(self.lo);
+        let span = f32::from(self.hi) - lo;
+        if span == 0.0 {
+            self.plot.center().y
+        } else {
+            self.plot.bottom() - self.plot.height() * (f32::from(value) - lo) / span
+        }
+    }
+
+    pub(super) fn labels(&self, painter: &Painter, ink: Color32) {
+        painter.text(
+            self.plot.left_top() - egui::vec2(5.0, 13.0),
+            Align2::RIGHT_BOTTOM,
+            "Counts",
+            FontId::proportional(11.0),
+            ink,
+        );
+        for (index, value) in [self.hi, 0, self.lo].into_iter().enumerate() {
+            if (index == 0 && self.hi == 0) || (index == 2 && self.lo == 0) {
+                continue;
+            }
+            let y = self.y(value);
+            painter.text(
+                pos2(self.plot.left() - 5.0, y),
+                Align2::RIGHT_CENTER,
+                format!("{value}"),
+                FontId::monospace(11.0),
+                ink,
+            );
+        }
     }
 }
 

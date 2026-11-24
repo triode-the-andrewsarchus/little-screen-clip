@@ -432,25 +432,28 @@ fn row_contents(ui: &Ui, rect: egui::Rect, info: FrameInfo, colors: WorkbenchCol
 
 fn bytes(ui: &mut Ui, frame: &Frame) {
     ui.separator();
-    ui.strong("Captured bytes");
-    let len = frame.data.len() + frame.parity.len();
+    ui.strong("Payload");
     let columns = if ui.available_width() > 400.0 { 16 } else { 8 };
     let height = ui.text_style_height(&egui::TextStyle::Monospace);
+    let payload_rows = frame.data.len().div_ceil(columns);
+    let parity_rows = usize::from(!frame.parity.is_empty()) + frame.parity.len().div_ceil(columns);
     egui::ScrollArea::both()
         .id_salt(("trace bytes", frame.info.row))
         .max_height(ui.available_height().max(45.0))
-        .show_rows(ui, height, len.div_ceil(columns), |ui, range| {
+        .show_rows(ui, height, payload_rows + parity_rows, |ui, range| {
             for index in range {
-                let first = index * columns;
-                let end = (first + columns).min(len);
-                let data = (first..end).map(|offset| {
-                    frame
-                        .data
-                        .get(offset)
-                        .or_else(|| frame.parity.get(offset.saturating_sub(frame.data.len())))
-                        .copied()
-                });
-                ui.monospace(format!("{first:04X}  {}", super::hex(data)));
+                let (bytes, row) = if index < payload_rows {
+                    (frame.data.as_slice(), index)
+                } else if index == payload_rows {
+                    ui.strong("Captured parity");
+                    continue;
+                } else {
+                    (frame.parity.as_slice(), index - payload_rows - 1)
+                };
+                let first = row * columns;
+                let end = (first + columns).min(bytes.len());
+                let values = super::hex(bytes[first..end].iter().copied().map(Some));
+                ui.monospace(format!("{first:04X}  {values}"));
             }
         });
 }

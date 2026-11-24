@@ -3,7 +3,7 @@ use crate::{
     file_manager::preview_copy::{self, Copies},
     ui_appearance::WorkbenchColors,
 };
-use egui::{PointerButton, Rect, Sense, Ui, vec2};
+use egui::{Align2, FontId, PointerButton, Rect, Sense, Ui, pos2, vec2};
 use egui_extras::{Column, TableBuilder};
 use little_clip_core::engineering::tags::{self, SampleBin, SignalIndex, SignalPreview};
 use std::{fmt::Write as _, ops::Range, sync::Arc, time::Duration};
@@ -128,18 +128,21 @@ impl View {
     }
 
     fn graph(&mut self, ui: &mut Ui, height: f32, colors: WorkbenchColors) {
-        let (rect, response) =
+        let (area, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
+        let rect = Rect::from_min_max(area.min + vec2(61.0, 19.0), area.max - vec2(0.0, 18.0));
         self.navigate(ui, rect, &response);
-        let painter = ui.painter_at(rect);
+        let painter = ui.painter_at(area);
         let (start, step, bins) = self.visible_peaks();
-        plot::samples(&painter, rect, &self.viewport, start, step, bins, colors);
+        let amplitude = plot::samples(&painter, rect, &self.viewport, start, step, bins, colors);
+        amplitude.labels(&painter, colors.text_secondary);
         let modified = ui.input(|input| input.modifiers.command || input.modifiers.alt);
-        let (_, dragged) = preview_copy::drag_range(
+        let (_, dragged) = preview_copy::drag_range_by(
             ui,
             &response,
             egui::Id::unique("tag signal range"),
             modified,
+            |point| plot::fraction(rect, point.x),
         );
         if let Some((left, right)) = dragged {
             let first = plot::position(&self.viewport, left).min(self.samples() - 1);
@@ -162,8 +165,40 @@ impl View {
         if let Some(selected) = self.selected {
             plot::marker(&painter, rect, &self.viewport, selected, colors.focus);
         }
-        response
-            .on_hover_text("Scroll to zoom · Middle-drag to pan · Click a sample or drag a range");
+        let stride = if rect.width() < 430.0 { 2 } else { 4 };
+        for slot in 0..=stride {
+            let sample =
+                self.viewport.start + (self.viewport.end - self.viewport.start - 1) * slot / stride;
+            let align = match slot {
+                0 => Align2::LEFT_TOP,
+                last if last == stride => Align2::RIGHT_TOP,
+                _ => Align2::CENTER_TOP,
+            };
+            let x = egui::lerp(rect.x_range(), slot as f32 / stride as f32);
+            painter.text(
+                pos2(x, rect.bottom() + 2.0),
+                align,
+                format!("{}", sample + 1),
+                FontId::monospace(11.0),
+                colors.text_secondary,
+            );
+        }
+        if let Some(point) = response.hover_pos().filter(|point| rect.contains(*point)) {
+            let row = plot::position(&self.viewport, plot::fraction(rect, point.x))
+                .min(self.viewport.end - 1);
+            plot::marker(
+                &painter,
+                rect,
+                &self.viewport,
+                row,
+                colors.text_secondary.gamma_multiply(0.65),
+            );
+            let sample = self.value(row).map_or_else(
+                || "Sample detail unavailable at this zoom".to_owned(),
+                |value| format!("{value} counts"),
+            );
+            response.on_hover_text(format!("Sample {} · {sample}", row + 1));
+        }
     }
 
     fn navigate(&mut self, ui: &Ui, rect: Rect, response: &egui::Response) {
@@ -236,7 +271,20 @@ impl View {
                 ui.monospace(format!("Sample {} · {value}", selected + 1));
             }
             if let Some(selection) = self.selection.as_ref() {
-                ui.weak(format!("{} selected", selection.end - selection.start));
+                ui.strong(format!(
+                    "Selected samples {}–{}",
+                    selection.start + 1,
+                    selection.end
+                ));
+                if let Some(values) = self.recorded_slice(selection)
+                    && let Some((min, max)) = values.iter().copied().fold(None, |extrema, value| {
+                        Some(extrema.map_or((value, value), |(lo, hi): (i16, i16)| {
+                            (lo.min(value), hi.max(value))
+                        }))
+                    })
+                {
+                    ui.weak(format!("Min {min} · Max {max} counts"));
+                }
             }
         });
     }
@@ -295,6 +343,21 @@ impl View {
         })
     }
 
+    fn recorded_slice(&self, rows: &Range<u64>) -> Option<&[i16]> {
+        self.preview
+            .samples
+            .get(rows.start as usize..rows.end as usize)
+            .or_else(|| {
+                let window = self
+                    .window
+                    .as_ref()
+                    .filter(|window| covers(&window.range, rows))?;
+                let start = (rows.start - window.range.start) as usize;
+                let end = (rows.end - window.range.start) as usize;
+                window.values.get(start..end)
+            })
+    }
+
     fn bins(&self) -> (u64, &[SampleBin]) {
         self.index.as_ref().map_or((1, &self.prefix[..]), |index| {
             (index.bin_samples, index.bins.as_slice())
@@ -319,6 +382,12 @@ impl View {
     fn desired(&self) -> Range<u64> {
         if self.viewport.end - self.viewport.start <= MAX_RAW {
             self.viewport.clone()
+        } else if let Some(selection) = self
+            .selection
+            .as_ref()
+            .filter(|rows| rows.end - rows.start <= MAX_RAW)
+        {
+            selection.clone()
         } else {
             let point = self.selected.unwrap_or(self.viewport.start);
             point.saturating_sub(64)..(point + 64).min(self.samples())

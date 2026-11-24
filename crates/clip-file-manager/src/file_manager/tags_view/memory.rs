@@ -1,7 +1,7 @@
 use super::hex;
 use crate::ui_appearance::WorkbenchColors;
 use egui::{Align, Key, Layout, Modifiers, ScrollArea, Ui, vec2};
-use little_clip_core::engineering::tags::{Memory, MemoryRow, RowRole};
+use little_clip_core::engineering::tags::{Format, Memory, MemoryRow, RowRole};
 
 pub(super) struct View {
     memory: Memory,
@@ -42,6 +42,10 @@ impl View {
         self.navigate(ui);
         self.title(ui, colors);
         ui.separator();
+        if self.memory.rows.len() <= 1 {
+            self.details(ui, colors);
+            return;
+        }
         let width = ui.available_width();
         let height = ui.available_height().max(132.0);
         if width > 650.0 {
@@ -74,7 +78,7 @@ impl View {
         if delta == 0 {
             return;
         }
-        if !self.memory.rows.is_empty() && self.field.is_none() {
+        if self.memory.rows.len() > 1 && self.field.is_none() {
             let index = self
                 .selected
                 .unwrap_or_default()
@@ -100,7 +104,7 @@ impl View {
             if total > 0 {
                 ui.weak(format!("{known} / {total} bytes read"));
             }
-            if !self.memory.identifier.is_empty() {
+            if !self.memory.identifier.is_empty() && self.memory.format != Format::FlipperRfid {
                 ui.monospace(hex(self.memory.identifier.iter().copied()));
             }
             if let Some(rom) = self.memory.rom_check {
@@ -134,8 +138,15 @@ impl View {
         area.show_rows(ui, row_height, self.memory.rows.len(), |ui, range| {
             for index in range {
                 let row = &self.memory.rows[index];
-                let text = format!("{} · {} / {}", row.name, row.known_bytes(), row.bytes.len());
-                let known = if row.known_bytes() == 0 {
+                let read = row.known_bytes();
+                let text = if read < row.bytes.len() {
+                    format!("{} · {read} / {} read", row.name, row.bytes.len())
+                } else if row.role == RowRole::SectorTrailer {
+                    format!("{} · Trailer", row.name)
+                } else {
+                    row.name.clone()
+                };
+                let known = if read == 0 {
                     colors.text_muted
                 } else {
                     role_color(row.role, colors)
@@ -167,7 +178,18 @@ impl View {
             .selected
             .and_then(|selected| self.memory.rows.get(selected))
         {
-            row_detail(ui, row, &mut self.byte, colors);
+            if self.memory.format == Format::FlipperRfid {
+                let identifier = hex(row.bytes.iter().copied());
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong("Identifier");
+                    ui.monospace(&identifier);
+                    if ui.button("Copy identifier").clicked() {
+                        ui.ctx().copy_text(identifier);
+                    }
+                });
+            } else {
+                row_detail(ui, row, &mut self.byte, colors);
+            }
         }
         if !self.memory.fields.is_empty() {
             ui.separator();
@@ -211,8 +233,7 @@ fn row_detail(ui: &mut Ui, row: &MemoryRow, selected: &mut Option<usize>, colors
         let kind = match row.role {
             RowRole::Manufacturer => Some("Manufacturer data"),
             RowRole::SectorTrailer => Some("Sector trailer"),
-            RowRole::Rom => Some("ROM"),
-            RowRole::Data => None,
+            RowRole::Rom | RowRole::Data => None,
         };
         if let Some(kind) = kind {
             ui.colored_label(role_color(row.role, colors), kind);
