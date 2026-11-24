@@ -1033,6 +1033,9 @@ fn render_hpgl_details(
         hpgl.draw_count, hpgl.move_count
     ));
     ui.label(format!("Draw length: {:.1} mm", hpgl.draw_length_mm));
+    for note in &hpgl.preview_notes {
+        ui.label(note);
+    }
     ui.checkbox(&mut state.show_rapid_moves, "Show pen-up travel moves");
 
     if !hpgl.pens_used.is_empty() {

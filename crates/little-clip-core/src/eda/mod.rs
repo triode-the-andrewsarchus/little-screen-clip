@@ -258,7 +258,12 @@ fn hpgl_strip_summary(doc: &hpgl::HpglDocument, format: EdaFormat, detail: Strin
     StripSummary {
         format,
         headline: format!(
-            "HPGL Plot · {} pens · {} strokes",
+            "{} · {} pens · {} strokes",
+            if doc.preview_notes.is_empty() {
+                "HPGL Plot"
+            } else {
+                "Partial HPGL Plot"
+            },
             doc.pens_used.len().max(1),
             doc.draw_count
         ),

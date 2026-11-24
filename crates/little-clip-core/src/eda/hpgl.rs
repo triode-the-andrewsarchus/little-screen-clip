@@ -57,6 +57,7 @@ pub struct HpglDocument {
     pub move_count: usize,
     pub draw_length_mm: f64,
     pub bounds_mm: [f64; 4],
+    pub preview_notes: Vec<String>,
     pub source_excerpt: String,
 }
 
@@ -72,8 +73,13 @@ impl HpglDocument {
 
         let mut parser = Parser::new(text);
         parser.run(cancelled)?;
-        if parser.segments.is_empty() && parser.labels.is_empty() {
-            return Err("No plotter vector commands found in HPGL file".into());
+        if parser.labels.is_empty() && !parser.segments.iter().any(|seg| seg.pen_down) {
+            if let Some(note) = parser.stop_reason {
+                return Err(note);
+            }
+            if parser.segments.is_empty() {
+                return Err("No plotter vector commands found in HPGL file".into());
+            }
         }
 
         let mut bounds = None;
@@ -101,6 +107,10 @@ impl HpglDocument {
             }
         }
 
+        let mut preview_notes: Vec<_> = parser.stop_reason.into_iter().collect();
+        if parser.outlined_fills {
+            preview_notes.push("Filled rectangles and wedges are shown as outlines".into());
+        }
         Ok(Self {
             segments: parser.segments,
             labels: parser.labels,
@@ -110,6 +120,7 @@ impl HpglDocument {
             move_count,
             draw_length_mm,
             bounds_mm: bounds.unwrap_or([0.0, 0.0, 10.0, 10.0]),
+            preview_notes,
             source_excerpt: bounded_source_text(bytes),
         })
     }
@@ -118,7 +129,12 @@ impl HpglDocument {
         let w = (self.bounds_mm[2] - self.bounds_mm[0]).max(0.0);
         let h = (self.bounds_mm[3] - self.bounds_mm[1]).max(0.0);
         format!(
-            "HPGL · {} pens · {} draws ({:.1} mm) · {:.1}×{:.1} mm",
+            "{} · {} pens · {} draws ({:.1} mm) · {:.1}×{:.1} mm",
+            if self.preview_notes.is_empty() {
+                "HPGL"
+            } else {
+                "Partial HPGL"
+            },
             self.pens_used.len().max(1),
             self.draw_count,
             self.draw_length_mm,
@@ -212,7 +228,8 @@ struct Parser<'a> {
     p1_u: [f64; 2],
     p2_u: [f64; 2],
     scaling: Option<Scaling>,
-    polygon_mode: bool,
+    outlined_fills: bool,
+    stop_reason: Option<String>,
     segments: Vec<HpglSegment>,
     labels: Vec<HpglLabel>,
     pens_used: BTreeSet<u16>,
@@ -233,7 +250,8 @@ impl<'a> Parser<'a> {
             p1_u: [0.0, 0.0],
             p2_u: [10_000.0, 10_000.0],
             scaling: None,
-            polygon_mode: false,
+            outlined_fills: false,
+            stop_reason: None,
             segments: Vec::new(),
             labels: Vec::new(),
             pens_used: BTreeSet::new(),
@@ -243,9 +261,6 @@ impl<'a> Parser<'a> {
 
     fn run(&mut self, cancelled: &AtomicBool) -> Result<(), String> {
         while self.pos < self.src.len() {
-            if self.command_count >= MAX_COMMANDS || self.segments.len() >= MAX_SEGMENTS {
-                break;
-            }
             if self.command_count.is_multiple_of(512) {
                 check_cancelled(cancelled, "HPGL parse cancelled")?;
             }
@@ -267,9 +282,24 @@ impl<'a> Parser<'a> {
                 self.advance_byte();
                 continue;
             };
+            if self.command_count >= MAX_COMMANDS || self.segments.len() >= MAX_SEGMENTS {
+                self.stop_reason = Some("HPGL preview reached its command or segment limit".into());
+                break;
+            }
+            if matches!(&mnemonic, b"PM" | b"FP" | b"EP") {
+                let command = String::from_utf8_lossy(&mnemonic);
+                self.stop_reason = Some(format!(
+                    "HPGL preview stopped at {command} on line {} (polygon buffers are unsupported)",
+                    self.line
+                ));
+                break;
+            }
             self.command_count += 1;
             let cmd_line = self.line;
             self.dispatch(mnemonic, cmd_line);
+        }
+        if self.segments.len() >= MAX_SEGMENTS && self.stop_reason.is_none() {
+            self.stop_reason = Some("HPGL preview reached its segment limit".into());
         }
         Ok(())
     }
@@ -290,15 +320,6 @@ impl<'a> Parser<'a> {
             b"SP" => self.select_pen(),
             b"IP" => self.apply_ip(),
             b"SC" => self.apply_sc(),
-            b"PM" => {
-                let args = self.read_numbers();
-                let mode = args.first().copied().unwrap_or(0.0).round() as i32;
-                self.polygon_mode = mode != 2;
-            }
-            b"EP" | b"FP" => {
-                self.polygon_mode = false;
-                let _ = self.read_numbers();
-            }
             _ => return false,
         }
         true
@@ -327,10 +348,12 @@ impl<'a> Parser<'a> {
             b"EA" | b"ER" | b"RA" | b"RR" => {
                 let rel = matches!(&mnemonic, b"ER" | b"RR");
                 let args = self.read_numbers();
+                self.outlined_fills |= matches!(&mnemonic, b"RA" | b"RR") && args.len() >= 2;
                 self.apply_rect(&args, rel, line);
             }
             b"EW" | b"WG" => {
                 let args = self.read_numbers();
+                self.outlined_fills |= mnemonic == *b"WG" && args.len() >= 3;
                 self.apply_wedge(&args, line);
             }
             _ => return false,
@@ -355,7 +378,6 @@ impl<'a> Parser<'a> {
         self.pen_down = false;
         self.relative = false;
         self.label_term = 0x03;
-        self.polygon_mode = false;
         if reset_scaling {
             self.scaling = None;
             self.cursor_u = [0.0, 0.0];
@@ -545,6 +567,9 @@ impl<'a> Parser<'a> {
     }
 
     fn emit_segment(&mut self, from_u: [f64; 2], to_u: [f64; 2], pen_down: bool, line: usize) {
+        if self.segments.len() >= MAX_SEGMENTS {
+            return;
+        }
         let pen_active = pen_down && self.pen > 0;
         if pen_active {
             self.pens_used.insert(self.pen);
@@ -726,6 +751,23 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hpgl_polygon_buffer_stops_a_partial_preview_before_unpainted_edges() {
+        let cancel = AtomicBool::new(false);
+        let source = b"IN;SP1;PU0,0;PD400,0;PU;\nPM0;PD800,800,1600,0;PM2;FP;";
+        let doc = HpglDocument::parse(source, &cancel).unwrap();
+        assert_eq!(doc.draw_count, 1);
+        assert_eq!(doc.bounds_mm, [0.0, 0.0, 10.0, 0.0]);
+        assert!(doc.preview_notes[0].contains("PM on line 2"));
+        assert!(doc.summary_line().starts_with("Partial HPGL"));
+        let only_polygon = b"IN;SP1;PU0,0;PM0;PD800,800,1600,0;PM2;FP;";
+        assert!(
+            HpglDocument::parse(only_polygon, &cancel)
+                .unwrap_err()
+                .contains("polygon buffers are unsupported")
+        );
+    }
 
     #[test]
     fn scaling_changes_preserve_the_physical_pen_position() {
