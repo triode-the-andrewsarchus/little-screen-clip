@@ -14,19 +14,21 @@ const PREVIEW_COLUMNS: usize = 192;
 const PREVIEW_SAMPLES: u64 = 4096;
 
 const LANE_COLORS: [[u8; 3]; 8] = [
-    [80, 190, 248],
-    [249, 191, 72],
-    [104, 211, 143],
-    [238, 131, 184],
-    [171, 158, 250],
-    [243, 151, 93],
-    [67, 214, 202],
-    [218, 218, 131],
+    [182, 191, 202],
+    [238, 128, 73],
+    [235, 94, 110],
+    [239, 173, 68],
+    [229, 211, 72],
+    [96, 208, 136],
+    [86, 165, 245],
+    [185, 125, 230],
 ];
 
 /// Stable preview ink for a logic channel in source order.
 pub fn lane_rgb(index: usize) -> [u8; 3] {
+    let tint = (index / LANE_COLORS.len()).min(4) as u16 * 22;
     LANE_COLORS[index % LANE_COLORS.len()]
+        .map(|value| (u16::from(value) + u16::from(255 - value) * tint / 100) as u8)
 }
 
 pub struct Overview {

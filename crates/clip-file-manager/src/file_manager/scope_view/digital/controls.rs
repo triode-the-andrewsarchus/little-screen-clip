@@ -102,7 +102,7 @@ impl Digital {
                         "Mark samples in this voltage band as floating",
                     ),
                 ] {
-                    ui.selectable_value(&mut draft.rule.middle, band, label)
+                    clip_ui::buttons::choice(ui, &mut draft.rule.middle, band, label)
                         .on_hover_text(help);
                 }
                 ui.checkbox(&mut draft.rule.invert, "Invert");
@@ -130,11 +130,10 @@ impl Digital {
 fn edit_cutoffs(ui: &mut Ui, cutoffs: &mut Cutoffs, unit: &str) {
     let mut adaptive = matches!(*cutoffs, Cutoffs::Adaptive { .. });
     ui.horizontal_wrapped(|ui| {
-        ui.selectable_value(&mut adaptive, true, "Adaptive")
-            .on_hover_text(
-                "Set cutoffs as percentages of the observed range in the analyzed window",
-            );
-        ui.selectable_value(&mut adaptive, false, "Fixed");
+        clip_ui::buttons::choice(ui, &mut adaptive, true, "Adaptive").on_hover_text(
+            "Set cutoffs as percentages of the observed range in the analyzed window",
+        );
+        clip_ui::buttons::choice(ui, &mut adaptive, false, "Fixed");
         if adaptive != matches!(*cutoffs, Cutoffs::Adaptive { .. }) {
             *cutoffs = if adaptive {
                 Cutoffs::default()

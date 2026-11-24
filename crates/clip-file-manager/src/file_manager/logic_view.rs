@@ -1,5 +1,6 @@
 //! Offline logic timing and transition inspection.
 
+mod comparison;
 mod frequency;
 pub(super) mod plot;
 pub(super) mod protocols;
@@ -43,6 +44,8 @@ pub(super) struct Viewer {
     overview: Overview,
     span: Range<f64>,
     active: usize,
+    comparison_hidden: Vec<usize>,
+    comparison_lanes: Vec<usize>,
     channel_picker: Wiring,
     selected: Option<Range<f64>>,
     cursor: Option<f64>,
@@ -67,6 +70,8 @@ pub(in crate::file_manager) struct SessionSettings {
     selected: Option<Range<f64>>,
     cursor: Option<f64>,
     show_transitions: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    comparison_hidden: Vec<usize>,
     protocols: protocols::SessionSettings,
     frequency: frequency::SavedFrequency,
 }
@@ -106,6 +111,7 @@ impl Viewer {
             selected: self.selected.clone(),
             cursor: self.cursor,
             show_transitions: self.show_transitions,
+            comparison_hidden: self.comparison_hidden.clone(),
             protocols: self.protocols.session_settings(),
             frequency: self.frequency.save(),
         }
@@ -127,6 +133,11 @@ impl Viewer {
         self.selected = state.selected.filter(|range| !range.is_empty());
         self.cursor = state.cursor;
         self.show_transitions = state.show_transitions;
+        self.comparison_hidden = state
+            .comparison_hidden
+            .into_iter()
+            .filter(|&index| index < count)
+            .collect();
         self.frequency.restore(state.frequency, count);
         Ok(())
     }
@@ -140,6 +151,8 @@ impl Viewer {
             overview,
             recording: Arc::new(recording),
             active: 0,
+            comparison_hidden: Vec::new(),
+            comparison_lanes: Vec::new(),
             channel_picker: Wiring::default(),
             selected: None,
             cursor: None,
@@ -238,7 +251,7 @@ impl Viewer {
         if link.is_some_and(|link| link.reveal_input.is_some()) {
             self.frequency.visible = false;
         }
-        let share = self.toolbar(ui, copies, link);
+        let share = self.toolbar(ui, copies, link, true);
         self.channel_choices(ui);
         if let Some(message) = self.error.as_ref().or(self.overview.note.as_ref()) {
             ui.weak(message);
@@ -268,6 +281,15 @@ impl Viewer {
         let probe = self.waveforms(ui, height, link);
         self.overview(ui);
         self.request_window(ui.ctx());
+        self.decode_events(ui, link);
+        Interaction {
+            probe,
+            share,
+            ..Interaction::default()
+        }
+    }
+
+    fn decode_events(&mut self, ui: &mut Ui, link: Option<&Link>) {
         if self.show_transitions && self.sigrok.active {
             if let Some((time, step)) = self.sigrok.table(ui, Link::clock(link)) {
                 let origin = sigrok::View {
@@ -298,11 +320,6 @@ impl Viewer {
             if self.show_transitions {
                 self.transitions(ui);
             }
-        }
-        Interaction {
-            probe,
-            share,
-            ..Interaction::default()
         }
     }
 
@@ -364,6 +381,7 @@ impl Viewer {
         ui: &mut Ui,
         copies: &mut Copies,
         link: Option<&Link>,
+        standalone: bool,
     ) -> Option<Range<f64>> {
         let clock = Link::clock(link);
         ui.horizontal_wrapped(|ui| {
@@ -373,22 +391,20 @@ impl Viewer {
                 self.overview.span.end - self.overview.span.start,
                 "s",
             ));
-            if self.frequency.visible
-                || !self.show_transitions
-                || self.protocols.edges() && !self.sigrok.active
-            {
+            let showing_waves =
+                !self.frequency.visible || self.frequency.spectra.origin().is_some();
+            if standalone && (!showing_waves || self.overview.lanes.len() > LANES_PER_PAGE) {
                 self.channel_picker.button(
                     ui,
                     &Pin::required(Role::Channel, &mut self.active),
                     &self.overview.lanes,
                 );
-            } else {
-                self.channel_picker.close();
             }
-            if ui.button("Fit").clicked() {
+            if standalone && ui.button("Fit").clicked() {
                 self.span = self.overview.span.clone();
             }
-            if self.frequency.spectra.origin().is_none()
+            if standalone
+                && self.frequency.spectra.origin().is_none()
                 && ui
                     .add(egui::Button::new("Spectrum").selected(self.frequency.visible))
                     .clicked()
@@ -413,7 +429,7 @@ impl Viewer {
                 && let Some(range) = self.selected.clone()
             {
                 let recording = self.recording.clone();
-                let index = self.focused_lane();
+                let index = self.active;
                 copies.start(ui.ctx(), move |cancel| {
                     export(&recording, index, range, cancel)
                 });
@@ -449,8 +465,12 @@ impl Viewer {
             self.channel_picker
                 .choose(&mut [Pin::required(Role::Channel, &mut self.active)], lane);
             self.frequency.spectra.clear_result();
-        } else {
+        } else if self.protocols.wiring_active() {
             self.protocols.wire_lane(lane);
+        } else if lane != self.active {
+            self.active = lane;
+            self.followed_row = None;
+            self.frequency.spectra.clear_result();
         }
     }
 
@@ -471,6 +491,9 @@ impl Viewer {
         if visible.is_empty() {
             let first = self.active / LANES_PER_PAGE * LANES_PER_PAGE;
             visible.extend(first..(first + LANES_PER_PAGE).min(self.overview.lanes.len()));
+        }
+        if !visible.contains(&self.active) {
+            visible.push(self.active);
         }
         if let Some(index) = self.evidence_lane.filter(|index| !visible.contains(index)) {
             visible.push(index);
@@ -536,6 +559,7 @@ impl Viewer {
         timing::axes(&painter, rect, &axis, ink);
         let clipped = painter.with_clip_rect(rect);
         self.draw_channels(ui, &painter, &clipped, rect, ink, link);
+        self.pick_waveform_channel(ui, rect, &response);
         super::signal_view::frequency_plot::paint_origin(
             ui,
             &clipped,
@@ -584,6 +608,21 @@ impl Viewer {
         probe
     }
 
+    fn pick_waveform_channel(&mut self, ui: &Ui, rect: Rect, hit: &egui::Response) {
+        if !hit.clicked_by(PointerButton::Primary) {
+            return;
+        }
+        let Some(point) = hit.interact_pointer_pos() else {
+            return;
+        };
+        let visible = self.visible_lanes();
+        let row = ((point.y - rect.top()) / rect.height() * visible.len() as f32) as usize;
+        if let Some(&lane) = visible.get(row) {
+            self.pick_plotted_lane(lane);
+            ui.ctx().request_repaint();
+        }
+    }
+
     fn draw_channels(
         &mut self,
         ui: &Ui,
@@ -594,7 +633,7 @@ impl Viewer {
         link: Option<&Link>,
     ) {
         let visible = self.visible_lanes();
-        let selected = self.focused_lane();
+        let selected = self.active;
         let frame = self.frame.as_ref().filter(|frame| {
             frame.key.visible == visible
                 && frame.key.span.start <= self.span.start
@@ -607,24 +646,41 @@ impl Viewer {
             let lane = timing::lane(rect, offset, count);
             Link::reveal_trace(link, ui, lane, index);
             Link::paint_trace_evidence(link, clipped, lane, &self.span, index);
-            let color = if selected == index {
-                Color32::from_rgb(130, 225, 163)
-            } else {
-                ink
-            };
+            let color = plot::preview_color(index, ui.visuals().dark_mode);
             let name = &self.overview.lanes[index].name;
             if picking {
                 if plot::wire_label(ui, painter, lane, name, index) {
                     wired = Some(index);
                 }
             } else {
-                painter.text(
-                    pos2(lane.left() - 5.0, lane.center().y),
-                    egui::Align2::RIGHT_CENTER,
-                    name,
-                    egui::FontId::monospace(11.0),
-                    color,
+                let label = Rect::from_min_max(
+                    pos2(lane.left() - 77.0, lane.top()),
+                    pos2(lane.left() - 4.0, lane.bottom()),
                 );
+                let hit = ui.interact(
+                    label,
+                    ui.make_persistent_id(("logic trace", index)),
+                    Sense::click(),
+                );
+                if selected == index || hit.hovered() {
+                    painter.rect_filled(
+                        label.shrink2(vec2(0.0, 2.0)),
+                        3.0,
+                        ui.visuals().selection.bg_fill.gamma_multiply(0.35),
+                    );
+                }
+                painter
+                    .with_clip_rect(label.intersect(painter.clip_rect()))
+                    .text(
+                        label.right_center() - vec2(3.0, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        name.rsplit('.').next().unwrap_or(name),
+                        egui::FontId::monospace(11.0),
+                        color,
+                    );
+                if hit.on_hover_text(name).clicked() {
+                    wired = Some(index);
+                }
             }
             clipped.hline(
                 lane.x_range(),
@@ -632,24 +688,41 @@ impl Viewer {
                 Stroke::new(0.5, ink.gamma_multiply(0.24)),
             );
             let inner = lane.shrink2(vec2(0.0, lane.height() * 0.2));
-            match frame.and_then(|frame| frame.lanes.get(offset)) {
-                Some(Wave::Exact(trace, time)) => {
-                    plot::draw_trace(clipped, inner, &self.span, time, trace, color)
-                }
-                Some(Wave::Summary(envelope)) => {
-                    plot::draw_envelope(clipped, inner, &self.span, envelope, color)
-                }
-                Some(Wave::Empty) => {}
-                None => {
-                    if let Some(envelope) = self.overview.lanes_previewed.get(index) {
-                        plot::draw_envelope(clipped, inner, &self.span, envelope, color);
-                    }
-                }
-            }
+            self.draw_wave(
+                clipped,
+                inner,
+                index,
+                frame.and_then(|frame| frame.lanes.get(offset)),
+                color,
+            );
         }
         if let Some(lane) = wired {
             self.pick_plotted_lane(lane);
             ui.ctx().request_repaint();
+        }
+    }
+
+    fn draw_wave(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        index: usize,
+        wave: Option<&Wave>,
+        color: Color32,
+    ) {
+        match wave {
+            Some(Wave::Exact(trace, time)) => {
+                plot::draw_trace(painter, rect, &self.span, time, trace, color)
+            }
+            Some(Wave::Summary(envelope)) => {
+                plot::draw_envelope(painter, rect, &self.span, envelope, color)
+            }
+            Some(Wave::Empty) => {}
+            None => {
+                if let Some(envelope) = self.overview.lanes_previewed.get(index) {
+                    plot::draw_envelope(painter, rect, &self.span, envelope, color);
+                }
+            }
         }
     }
 
@@ -824,9 +897,13 @@ impl Viewer {
     }
 
     fn request_window(&mut self, ctx: &Context) {
+        self.request_lanes(ctx, self.visible_lanes());
+    }
+
+    fn request_lanes(&mut self, ctx: &Context, visible: Vec<usize>) {
         let key = WindowKey {
             span: self.span.clone(),
-            visible: self.visible_lanes(),
+            visible,
             active: self.focused_lane(),
             show_transitions: self.show_transitions && self.protocols.edges(),
         };

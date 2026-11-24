@@ -160,10 +160,10 @@ impl Viewer {
                 }
             }
             ui.separator();
-            ui.toggle_value(&mut self.spectrum_db, "dB")
+            clip_ui::buttons::toggle(ui, &mut self.spectrum_db, "dB")
                 .on_hover_text("Amplitude relative to one peak unit");
             if allow_frequency_only {
-                ui.toggle_value(&mut self.spectra.only, "Frequency only");
+                clip_ui::buttons::toggle(ui, &mut self.spectra.only, "Frequency only");
             }
             if ui.button("Fit frequencies").clicked() {
                 self.spectrum_span = None;

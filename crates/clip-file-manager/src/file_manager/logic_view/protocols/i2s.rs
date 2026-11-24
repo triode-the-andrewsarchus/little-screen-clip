@@ -46,7 +46,7 @@ impl I2sInputs {
                 .range(8..=32)
                 .suffix(" bits"),
         );
-        ui.toggle_value(&mut self.config.left_high, "WS high = left");
+        clip_ui::buttons::toggle(ui, &mut self.config.left_high, "WS high = left");
     }
 
     pub(super) fn validate(self) -> Result<Inputs, &'static str> {

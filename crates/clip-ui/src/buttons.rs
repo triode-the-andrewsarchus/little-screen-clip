@@ -50,6 +50,32 @@ impl ButtonRole {
     }
 }
 
+/// Presents a framed choice in a toolbar and updates the selected value.
+pub fn choice<'a, T: PartialEq>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    option: T,
+    label: impl egui::IntoAtoms<'a>,
+) -> egui::Response {
+    let selected = *value == option;
+    let mut response = ui.add(egui::Button::new(label).selected(selected));
+    if response.clicked() && !selected {
+        *value = option;
+        response.mark_changed();
+    }
+    response
+}
+
+/// Presents a framed toggle in a toolbar and updates its pressed state.
+pub fn toggle<'a>(
+    ui: &mut egui::Ui,
+    value: &mut bool,
+    label: impl egui::IntoAtoms<'a>,
+) -> egui::Response {
+    let next = !*value;
+    choice(ui, value, next, label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

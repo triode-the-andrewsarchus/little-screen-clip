@@ -3,7 +3,7 @@ use super::{
 };
 use crate::file_manager::{
     preview_copy::Copies,
-    scope_view::{COLLAPSED_HEIGHT, plot},
+    scope_view::{COLLAPSED_HEIGHT, move_trace, plot, trace_drop},
 };
 use egui::{Align, Button, Rect, Response, Sense, Ui, pos2, vec2};
 use std::collections::{HashMap, HashSet};
@@ -18,6 +18,7 @@ struct TraceRow {
     source_index: usize,
     trace: Trace,
     visible: bool,
+    digital: bool,
     filtered: Option<bool>,
 }
 
@@ -70,25 +71,10 @@ impl Comparison {
             .find(|row| row.has_visible_lane())
             .map(|row| row.trace);
     }
-
-    fn place(&mut self, from: Trace, to: Trace, after: bool) {
-        if from == to {
-            return;
-        }
-        let Some(index) = self.order.iter().position(|&trace| trace == from) else {
-            return;
-        };
-        self.order.remove(index);
-        if let Some(target) = self.order.iter().position(|&trace| trace == to) {
-            self.order.insert(target + usize::from(after), from);
-        } else {
-            self.order.insert(index, from);
-        }
-    }
 }
 
 impl Viewer {
-    pub(super) fn analog_comparison(
+    pub(super) fn recording_comparison(
         &mut self,
         ui: &mut Ui,
         copies: &mut Copies,
@@ -108,46 +94,8 @@ impl Viewer {
                 self.comparison_lanes(ui, chart_height, &links)
             })
             .inner;
-        if let Some(trace) = self.comparison.active
-            && let Some(index) = self
-                .sources
-                .iter()
-                .position(|source| source.id == trace.source)
-            && let Some(link) = links.get(&trace.source)
-        {
-            let source = &mut self.sources[index];
-            let filename = source
-                .path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy();
-            let Capture::Analog(view) = &mut source.capture else {
-                return (probe, action);
-            };
-            let previous = view.span().clone();
-            view.comparison_select(trace.channel);
-            view.comparison_overview(ui);
-            if let Some(range) = view.comparison_tools(ui, copies, link) {
-                action = Some((index, SourceAction::Share(range)));
-            }
-            let was_open = self.comparison.spectrum;
-            let spectrum = ui.push_id(trace.source, |ui| {
-                view.comparison_spectrum(ui, link, was_open, &filename)
-            });
-            self.comparison.spectrum = spectrum.inner;
-            if was_open && !spectrum.inner {
-                self.comparison.return_to_trace = Some(trace);
-                ui.ctx().request_repaint();
-            }
-            if std::mem::take(&mut self.comparison.reveal_spectrum)
-                && spectrum.response.rect.top() > ui.clip_rect().bottom() - 100.0
-            {
-                spectrum.response.scroll_to_me(None);
-            }
-            if *view.span() != previous {
-                self.span = link.clock.workspace_range(view.span());
-                ui.ctx().request_repaint();
-            }
+        if let Some(source_action) = self.selected_trace_tools(ui, copies, &links) {
+            action = Some(source_action);
         }
         for source in &mut self.sources {
             if let Capture::Analog(view) = &mut source.capture {
@@ -159,9 +107,68 @@ impl Viewer {
                     view.suspend_comparison_spectrum();
                 }
                 view.finish_comparison(ui);
+            } else if let Capture::Digital(view) = &mut source.capture {
+                view.finish_comparison(ui);
             }
         }
         (probe, action)
+    }
+
+    fn selected_trace_tools(
+        &mut self,
+        ui: &mut Ui,
+        copies: &mut Copies,
+        links: &HashMap<u64, Link>,
+    ) -> Option<(usize, SourceAction)> {
+        let trace = self.comparison.active?;
+        let index = self
+            .sources
+            .iter()
+            .position(|source| source.id == trace.source)?;
+        let link = links.get(&trace.source)?;
+        let mut shared = None;
+        let source = &mut self.sources[index];
+        let filename = source
+            .path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let previous = source.capture.span().clone();
+        let was_open = self.comparison.spectrum;
+        let spectrum = ui.push_id(trace.source, |ui| match &mut source.capture {
+            Capture::Analog(view) => {
+                view.comparison_select(trace.channel);
+                view.comparison_overview(ui);
+                if let Some(range) = view.comparison_tools(ui, copies, link) {
+                    shared = Some((index, SourceAction::Share(range)));
+                }
+                view.comparison_spectrum(ui, link, was_open, &filename)
+            }
+            Capture::Digital(view) => {
+                if let Some(range) =
+                    view.comparison_tools(ui, copies, trace.channel, link, was_open)
+                {
+                    shared = Some((index, SourceAction::Share(range)));
+                }
+                was_open
+            }
+            Capture::Unavailable(_) => false,
+        });
+        self.comparison.spectrum = spectrum.inner;
+        if was_open && !spectrum.inner {
+            self.comparison.return_to_trace = Some(trace);
+            ui.ctx().request_repaint();
+        }
+        if std::mem::take(&mut self.comparison.reveal_spectrum)
+            && spectrum.response.rect.top() > ui.clip_rect().bottom() - 100.0
+        {
+            spectrum.response.scroll_to_me(None);
+        }
+        if *source.capture.span() != previous {
+            self.span = link.clock.workspace_range(source.capture.span());
+            ui.ctx().request_repaint();
+        }
+        shared
     }
 
     fn comparison_source_controls(
@@ -176,7 +183,7 @@ impl Viewer {
         let mut action = None;
         let may_remove = self.sources.len() > 1;
         for (index, source) in self.sources.iter_mut().enumerate() {
-            if !matches!(source.capture, Capture::Analog(_)) {
+            if matches!(source.capture, Capture::Unavailable(_)) {
                 continue;
             }
             let is_reference = self
@@ -208,7 +215,7 @@ impl Viewer {
             .iter()
             .enumerate()
             .filter_map(|(index, source)| {
-                matches!(source.capture, Capture::Analog(_)).then_some((index, source.id))
+                (!matches!(source.capture, Capture::Unavailable(_))).then_some((index, source.id))
             })
             .collect::<Vec<_>>()
             .into_iter()
@@ -250,14 +257,21 @@ impl Viewer {
                     .sources
                     .iter()
                     .position(|source| source.id == trace.source)?;
-                let Capture::Analog(view) = &self.sources[source_index].capture else {
-                    return None;
+                let (visible, filtered, digital) = match &self.sources[source_index].capture {
+                    Capture::Analog(view) => (
+                        view.comparison_visible(trace.channel),
+                        view.comparison_filter_visible(trace.channel),
+                        false,
+                    ),
+                    Capture::Digital(view) => (view.comparison_visible(trace.channel), None, true),
+                    Capture::Unavailable(_) => return None,
                 };
                 Some(TraceRow {
                     source_index,
                     trace,
-                    visible: view.comparison_visible(trace.channel),
-                    filtered: view.comparison_filter_visible(trace.channel),
+                    visible,
+                    filtered,
+                    digital,
                 })
             })
             .collect()
@@ -270,10 +284,14 @@ impl Viewer {
         links: &HashMap<u64, Link>,
     ) -> Option<f64> {
         for source in &mut self.sources {
-            if let Capture::Analog(view) = &mut source.capture
-                && let Some(link) = links.get(&source.id)
-            {
-                view.prepare_comparison(ui, link.clock.native_range(&self.span), link);
+            let Some(link) = links.get(&source.id) else {
+                continue;
+            };
+            let span = link.clock.native_range(&self.span);
+            match &mut source.capture {
+                Capture::Analog(view) => view.prepare_comparison(ui, span, link),
+                Capture::Digital(view) => view.prepare_comparison(ui, link, span),
+                Capture::Unavailable(_) => {}
             }
         }
         let mut rows = self.comparison_rows();
@@ -290,7 +308,12 @@ impl Viewer {
         let mut probe = None;
         let mut reorder = None;
         for row in &mut rows {
-            let (_, target) = reserve_trace_row(ui, height, row.visible);
+            let lane_height = if row.digital {
+                height.min(53.0)
+            } else {
+                height
+            };
+            let (_, target) = reserve_trace_row(ui, lane_height, row.visible);
             let filter = row
                 .filtered
                 .map(|shown| reserve_trace_row(ui, height, shown).0);
@@ -300,14 +323,14 @@ impl Viewer {
             probe = self
                 .comparison_row(ui, target.rect, filter, row, link)
                 .or(probe);
-            reorder = trace_drop(ui, &target, row.trace).or(reorder);
+            reorder = trace_drop(ui, target.rect, row.trace).or(reorder);
         }
         if let Some(axis) = axis {
             self.paint_comparison_fft_window(ui, axis, links);
         }
         self.comparison.focus_visible(&rows);
         if let Some((from, to, after)) = reorder {
-            self.comparison.place(from, to, after);
+            move_trace(&mut self.comparison.order, (from, to, after));
             ui.ctx().request_repaint();
         }
         probe
@@ -341,35 +364,56 @@ impl Viewer {
             .file_name()
             .unwrap_or_default()
             .to_string_lossy();
-        let Capture::Analog(view) = &mut source.capture else {
-            return None;
-        };
-        *view.span() = link.clock.native_range(&self.span);
-        // The parent already reserved the row. Its child owns the widget IDs
-        // without claiming a second vertical slot.
+        *source.capture.span() = link.clock.native_range(&self.span);
         let mut trace_ui = ui.new_child(egui::UiBuilder::new().id_salt(key).max_rect(rect));
-        let interaction = view.comparison_trace(
-            &mut trace_ui,
-            rect,
-            key.channel,
-            &name,
-            self.comparison.active == Some(key),
-            link,
-            key,
-        );
-        let filtered = filter
-            .map(|area| {
-                view.comparison_filtered_trace(&mut trace_ui, area, key.channel, &name, link)
-            })
-            .unwrap_or_default();
-        row.visible = view.comparison_visible(key.channel);
-        row.filtered = view.comparison_filter_visible(key.channel);
+        let active = self.comparison.active == Some(key);
+        let (interaction, filtered) = match &mut source.capture {
+            Capture::Analog(view) => {
+                let interaction = view.comparison_trace(
+                    &mut trace_ui,
+                    rect,
+                    key.channel,
+                    &name,
+                    active,
+                    link,
+                    key,
+                );
+                let filtered = filter
+                    .map(|area| {
+                        view.comparison_filtered_trace(
+                            &mut trace_ui,
+                            area,
+                            key.channel,
+                            &name,
+                            link,
+                        )
+                    })
+                    .unwrap_or_default();
+                row.visible = view.comparison_visible(key.channel);
+                row.filtered = view.comparison_filter_visible(key.channel);
+                (interaction, filtered)
+            }
+            Capture::Digital(view) => {
+                let interaction = view.comparison_trace(
+                    &mut trace_ui,
+                    rect,
+                    key.channel,
+                    &name,
+                    active,
+                    link,
+                    key,
+                );
+                row.visible = view.comparison_visible(key.channel);
+                (interaction, Default::default())
+            }
+            Capture::Unavailable(_) => return None,
+        };
         if (interaction.selected || filtered.selected) && row.has_visible_lane() {
             self.comparison.active = Some(key);
         }
         self.comparison.spectrum |= filtered.edit_filters;
         if interaction.span_changed || filtered.span_changed {
-            self.span = link.clock.workspace_range(view.span());
+            self.span = link.clock.workspace_range(source.capture.span());
             ui.ctx().request_repaint();
         }
         Link::reveal_trace(Some(link), ui, rect, key.channel);
@@ -410,39 +454,42 @@ fn comparison_time_axis(ui: &mut Ui, span: &std::ops::Range<f64>) -> Rect {
     Rect::from_min_max(ruler.min, axis.max)
 }
 
-fn trace_drop(ui: &Ui, target: &Response, key: Trace) -> Option<(Trace, Trace, bool)> {
-    target
-        .dnd_hover_payload::<Trace>()
-        .filter(|dragged| **dragged != key)?;
-    let pointer = ui.input(|input| input.pointer.latest_pos())?;
-    let rect = target.rect;
-    let after = pointer.y >= rect.center().y;
-    let y = if after { rect.bottom() } else { rect.top() };
-    ui.painter()
-        .hline(rect.x_range(), y, ui.visuals().selection.stroke);
-    let dragged = target.dnd_release_payload::<Trace>()?;
-    Some((*dragged, key, after))
-}
-
 fn ordered_traces(sources: &[Source]) -> Vec<Trace> {
     let mut groups = HashMap::new();
     let mut traces = Vec::new();
-    for source in sources {
-        if let Capture::Analog(view) = &source.capture {
-            for (channel, data) in view.recording().channels().iter().enumerate() {
-                let count = groups.len();
-                let group = *groups.entry(data.name.to_lowercase()).or_insert(count);
-                traces.push((
-                    group,
-                    Trace {
-                        source: source.id,
-                        channel,
-                    },
-                ));
-            }
+    for (source_index, source) in sources.iter().enumerate() {
+        let names: Vec<&str> = match &source.capture {
+            Capture::Analog(view) => view
+                .recording()
+                .channels()
+                .iter()
+                .map(|lane| lane.name.as_str())
+                .collect(),
+            Capture::Digital(view) => view
+                .recording()
+                .1
+                .iter()
+                .map(|lane| lane.name.as_str())
+                .collect(),
+            Capture::Unavailable(_) => continue,
+        };
+        for (channel, name) in names.into_iter().enumerate() {
+            let group = name.to_lowercase();
+            let key = (channel, source_index);
+            groups
+                .entry(group.clone())
+                .and_modify(|first| *first = key.min(*first))
+                .or_insert(key);
+            traces.push((
+                group,
+                Trace {
+                    source: source.id,
+                    channel,
+                },
+            ));
         }
     }
-    traces.sort_by_key(|(group, _)| *group);
+    traces.sort_by_key(|(group, _)| groups[group]);
     traces.into_iter().map(|(_, key)| key).collect()
 }
 
@@ -462,6 +509,7 @@ mod tests {
                 source_index,
                 trace,
                 visible: true,
+                digital: false,
                 filtered: None,
             })
             .collect::<Vec<_>>();
@@ -506,7 +554,7 @@ mod tests {
             comparison.order,
             [trace(1, 0), trace(2, 0), trace(1, 1), trace(2, 1)]
         );
-        comparison.place(trace(1, 0), trace(1, 1), true);
+        move_trace(&mut comparison.order, (trace(1, 0), trace(1, 1), true));
         assert_eq!(
             comparison.order,
             [trace(2, 0), trace(1, 1), trace(1, 0), trace(2, 1)]

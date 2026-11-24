@@ -69,31 +69,16 @@ impl Viewer {
         let color = plot::color(index);
         lane.background(ui, &painter);
         let mut heading = lane.heading(ui, "trace-heading");
-        let handle = heading.add(egui::Label::new("↕").sense(Sense::drag()));
-        handle.dnd_set_drag_payload(key);
-        handle.on_hover_text("Drag to reorder traces");
-        let label = egui::RichText::new(self.channel_label(index));
-        let label = if active { label } else { label.color(color) };
-        let selected = heading
-            .add(egui::Button::selectable(active, label).small())
-            .on_hover_text("Use this trace for analysis and export")
-            .clicked();
-        let source_width = (heading.available_width() - 128.0).clamp(48.0, 224.0);
-        heading
-            .add_sized(
-                [source_width, heading.spacing().interact_size.y],
-                egui::Label::new(egui::RichText::new(source).weak()).truncate(),
-            )
-            .on_hover_text(source);
-        let action = if visible { "Hide" } else { "Show" };
-        if heading
-            .small_button(action)
-            .on_hover_text(format!(
-                "{action} {} · {source}",
-                self.overview.channels[index].name,
-            ))
-            .clicked()
-        {
+        let (selected, visibility) = super::lanes::trace_header(
+            &mut heading,
+            key,
+            &self.channel_label(index),
+            Some(source),
+            color,
+            active,
+            visible,
+        );
+        if visibility || (selected && !visible) {
             self.comparison_set_visible(index, !visible);
             ui.ctx().request_repaint();
         }
@@ -173,6 +158,13 @@ impl Viewer {
         lane.scale(&painter, bounds, &channel.unit, color);
         paint_time_grid(ui, &painter, rect);
         self.paint_channel(&painter, index, rect, bounds, color);
+        super::lanes::coverage_note(
+            &painter.with_clip_rect(rect.intersect(painter.clip_rect())),
+            rect,
+            &self.span,
+            channel.start_seconds..channel.time_at(channel.sample_count),
+            ui.visuals().weak_text_color(),
+        );
         Link::paint_trace_evidence(Some(link), &painter, rect, &self.span, index);
         if index == self.active {
             self.math_state.paint(

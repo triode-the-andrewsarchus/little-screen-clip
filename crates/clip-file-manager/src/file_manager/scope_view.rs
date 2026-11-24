@@ -10,7 +10,10 @@ pub(super) use filters::{FilterSamples, FilteredChannel};
 mod frame_benchmark;
 pub(super) mod hover;
 pub(super) mod lanes;
+pub(super) use comparison::TraceInteraction;
 pub(super) use lanes::COLLAPSED_HEIGHT;
+pub(super) use lanes::{Lane, trace_header};
+pub(super) use lanes::{move_trace, trace_drop};
 mod logic_export;
 mod math;
 pub(super) mod plot;
@@ -68,6 +71,14 @@ struct CursorDrag {
     origin: egui::Pos2,
 }
 
+#[derive(Default)]
+struct RecordedHeading {
+    select: bool,
+    visibility: bool,
+    fft: bool,
+    reorder: Option<(usize, usize, bool)>,
+}
+
 struct PlottedChannel {
     index: usize,
     plot: Rect,
@@ -85,6 +96,7 @@ pub(super) struct Viewer {
     marks: Vec<MarkedRange>,
     stacked: bool,
     visible: Vec<bool>,
+    channel_order: Vec<usize>,
     display_offsets: Vec<f32>,
     trace_fft: std::collections::BTreeMap<ScopeTrace, trace_fft::TraceSpectrum>,
     inline_fft_evidence: Option<Range<f64>>,
@@ -168,6 +180,7 @@ impl Viewer {
             cursors: [None; 2],
             marks: Vec::new(),
             stacked: true,
+            channel_order: (0..visible.len()).collect(),
             visible,
             display_offsets,
             trace_fft: Default::default(),
@@ -423,7 +436,9 @@ impl Viewer {
         if decoder_row {
             self.digital.decoder_buttons(ui, &mut self.span);
         }
-        self.channel_controls(ui);
+        if !self.stacked || self.recording.triggered_segments() {
+            self.channel_controls(ui);
+        }
         if self.filters.any() {
             ui.horizontal_wrapped(|ui| self.filters.visibility_controls(ui));
         }
@@ -516,7 +531,14 @@ impl Viewer {
         } else {
             95.0
         };
-        let height = height.max(lane_height * self.lane_count().max(1) as f32 + 20.0);
+        let collapsed = if self.has_collapsed_rows() {
+            self.visible.iter().filter(|&&visible| !visible).count()
+        } else {
+            0
+        };
+        let open = self.lane_count() - collapsed;
+        let height =
+            height.max(lane_height * open as f32 + COLLAPSED_HEIGHT * collapsed as f32 + 20.0);
         let (outer, frame) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
         let rect = Rect::from_min_max(
@@ -547,7 +569,7 @@ impl Viewer {
         let painter = ui.painter_at(outer);
         let lane_count = self.lane_count();
         let lanes = (0..lane_count)
-            .map(|slot| lanes::Lane::new(rect, slot, lane_count))
+            .map(|slot| self.lane(rect, slot))
             .filter(|lane| painter.clip_rect().intersects(lane.frame));
         for lane in lanes.clone() {
             lane.background(ui, &painter);
@@ -561,7 +583,7 @@ impl Viewer {
             "s",
             ink,
             lanes
-                .filter(|lane| !in_fft_lane(lane.plot.center()))
+                .filter(|lane| lane.plot.is_positive() && !in_fft_lane(lane.plot.center()))
                 .map(|lane| lane.plot.y_range()),
         );
         let clipped = painter.with_clip_rect(rect);
@@ -611,7 +633,10 @@ impl Viewer {
             );
         } else {
             let mut labelled = false;
-            for lane in (0..self.lane_count()).map(|slot| self.lane(rect, slot)) {
+            for lane in (0..self.lane_count())
+                .map(|slot| self.lane(rect, slot))
+                .filter(|lane| lane.plot.is_positive())
+            {
                 if fft_lanes.iter().any(|fft| fft.contains(lane.plot.center()))
                     || !ui.is_rect_visible(lane.frame)
                 {
@@ -696,6 +721,8 @@ impl Viewer {
         let mut plotted = Vec::with_capacity(order.len());
         let mut change = None;
         let mut overlay_axis = false;
+        let mut reorder = None;
+        let mut controls = None;
         for (slot, index) in order {
             let lane = self.lane(rect, slot);
             Link::reveal_trace(link, ui, lane.frame, index);
@@ -708,13 +735,17 @@ impl Viewer {
             let color = plot::color(index);
             let trace = ScopeTrace::Recorded(index);
             let fft = self.trace_fft.contains_key(&trace);
-            let raw = (self.stacked && !fft).then(|| self.channel_bounds(index));
-            if fft || self.stacked {
-                change = self
-                    .recorded_lane_controls(ui, lane, index, raw, Link::clock(link))
-                    .or(change);
+            let visible = self.visible[index];
+            let raw = (self.stacked && visible && !fft).then(|| self.channel_bounds(index));
+            let heading = self.recorded_heading(ui, lane, index, visible, fft, Link::clock(link));
+            if heading.select || heading.visibility {
+                controls = Some((index, heading.select, heading.visibility));
             }
-            if fft {
+            reorder = heading.reorder.or(reorder);
+            if heading.fft {
+                change = Some(index);
+            }
+            if !visible || fft {
                 continue;
             }
             let channel = &self.overview.channels[index];
@@ -746,30 +777,70 @@ impl Viewer {
                 display_offset: offset,
             });
         }
+        if let Some((index, select, visibility)) = controls {
+            self.apply_recorded_controls(index, select, visibility);
+            ui.ctx().request_repaint();
+        }
+        if let Some(movement) = reorder {
+            lanes::move_trace(&mut self.channel_order, movement);
+            ui.ctx().request_repaint();
+        }
         (plotted, change)
     }
 
-    fn recorded_lane_controls(
+    fn recorded_heading(
         &mut self,
         ui: &mut Ui,
         lane: lanes::Lane,
         index: usize,
-        raw: Option<Peak>,
+        visible: bool,
+        fft: bool,
         clock: Clock,
-    ) -> Option<usize> {
-        let mut heading = lane.heading(ui, ("scope-channel", index));
-        heading.colored_label(plot::color(index), &self.overview.channels[index].name);
-        let toggle = self.trace_fft_toggle(&mut heading, ScopeTrace::Recorded(index));
-        if raw.is_none() {
-            self.paint_trace_fft(
-                ui,
-                &mut heading,
-                lane.plot,
-                ScopeTrace::Recorded(index),
-                clock,
-            );
+    ) -> RecordedHeading {
+        let mut action = RecordedHeading::default();
+        if !self.stacked && !fft {
+            return action;
         }
-        toggle.then_some(index)
+        let mut heading = lane.heading(ui, ("scope-channel", index));
+        let label = self.channel_label(index);
+        let color = plot::color(index);
+        if self.stacked && !self.recording.triggered_segments() {
+            (action.select, action.visibility) = lanes::trace_header(
+                &mut heading,
+                index,
+                &label,
+                None,
+                color,
+                self.active == index,
+                visible,
+            );
+            action.reorder = lanes::trace_drop(ui, lane.frame, index);
+        } else {
+            heading.colored_label(color, label);
+        }
+        if visible {
+            let trace = ScopeTrace::Recorded(index);
+            action.fft = self.trace_fft_toggle(&mut heading, trace);
+            if fft {
+                self.paint_trace_fft(ui, &mut heading, lane.plot, trace, clock);
+            }
+        }
+        action
+    }
+
+    fn apply_recorded_controls(&mut self, index: usize, select: bool, visibility: bool) {
+        if visibility {
+            self.toggle_channel_visibility(index);
+        }
+        if select {
+            self.visible[index] = true;
+            self.activate_channel(index);
+        } else if !self.visible[self.active] {
+            let next = self.visible_channels().next();
+            if let Some(next) = next {
+                self.activate_channel(next);
+            }
+        }
     }
 
     fn overlay_scale(&self) -> Option<Peak> {
@@ -835,7 +906,9 @@ impl Viewer {
         let math = self.math_state.numeric().is_some();
         let physical = self.physical_lanes();
         self.channel_slots()
-            .filter(|&(_, index)| self.trace_fft.contains_key(&ScopeTrace::Recorded(index)))
+            .filter(|&(_, index)| {
+                self.visible[index] && self.trace_fft.contains_key(&ScopeTrace::Recorded(index))
+            })
             .map(|(slot, _)| slot)
             .chain((math && self.trace_fft.contains_key(&ScopeTrace::Math)).then_some(physical))
             .chain(
@@ -855,7 +928,12 @@ impl Viewer {
             self.visible_channels()
                 .any(|index| !self.trace_fft.contains_key(&ScopeTrace::Recorded(index))),
         );
-        self.visible_channels()
+        self.channel_order
+            .iter()
+            .copied()
+            .filter(|&index| {
+                (self.stacked && !self.recording.triggered_segments()) || self.visible[index]
+            })
             .enumerate()
             .map(move |(slot, index)| {
                 if self.stacked {
@@ -872,15 +950,25 @@ impl Viewer {
     }
 
     fn visible_channels(&self) -> impl Iterator<Item = usize> + '_ {
-        self.visible
+        self.channel_order
             .iter()
-            .enumerate()
-            .filter_map(|(index, &show)| show.then_some(index))
+            .copied()
+            .filter(|&index| self.visible[index])
+    }
+
+    fn has_collapsed_rows(&self) -> bool {
+        self.stacked
+            && !self.recording.triggered_segments()
+            && self.visible.iter().any(|shown| !shown)
     }
 
     fn physical_lanes(&self) -> usize {
         if self.stacked {
-            self.visible_channels().count()
+            if self.recording.triggered_segments() {
+                self.visible_channels().count()
+            } else {
+                self.channel_order.len()
+            }
         } else {
             let total = self.visible_channels().count();
             let spectra = self

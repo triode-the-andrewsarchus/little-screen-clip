@@ -9,16 +9,6 @@ pub(super) fn instrument_channel(name: &str) -> bool {
 
 impl Viewer {
     pub(super) fn channel_controls(&mut self, ui: &mut Ui) {
-        if self.recording.power_recording()
-            && self
-                .overview
-                .channels
-                .iter()
-                .any(|channel| instrument_channel(&channel.name))
-        {
-            self.power_channel_controls(ui);
-            return;
-        }
         let spacing = ui.spacing().item_spacing.x;
         let name_width = 141.0;
         let offset_width = if self.stacked { 0.0 } else { 189.0 };
@@ -40,28 +30,6 @@ impl Viewer {
                     self.channel_rows(ui, rows, columns, name_width);
                 });
         }
-    }
-
-    fn power_channel_controls(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| {
-            for index in 0..self.overview.channels.len() {
-                if !instrument_channel(&self.overview.channels[index].name) {
-                    self.channel_buttons(ui, index, 104.0);
-                }
-            }
-            ui.menu_button("Instrument channels", |ui| {
-                for index in 0..self.overview.channels.len() {
-                    let name = &self.overview.channels[index].name;
-                    if instrument_channel(name)
-                        && ui
-                            .add(egui::Button::selectable(self.visible[index], name))
-                            .clicked()
-                    {
-                        self.toggle_channel_visibility(index);
-                    }
-                }
-            });
-        });
     }
 
     fn channel_rows(&mut self, ui: &mut Ui, rows: Range<usize>, columns: usize, name_width: f32) {
@@ -117,7 +85,7 @@ impl Viewer {
         ui.add_space(7.0);
     }
 
-    fn toggle_channel_visibility(&mut self, index: usize) {
+    pub(super) fn toggle_channel_visibility(&mut self, index: usize) {
         self.visible[index] = !self.visible[index];
         if !self.visible[index]
             && let Some(spectrum) = self.trace_fft.get_mut(&ScopeTrace::Recorded(index))

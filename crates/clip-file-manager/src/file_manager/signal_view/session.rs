@@ -625,6 +625,7 @@ impl Viewer {
         let domain = extent(&sources);
         let mut viewer = Self {
             sources,
+            show_offsets: false,
             domain,
             span: recipe.span,
             reference: recipe.reference,

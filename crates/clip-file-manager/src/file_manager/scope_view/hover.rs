@@ -450,8 +450,7 @@ impl ProbeLayout {
             foreground,
             self.text_width,
         );
-        job.wrap.max_rows = 1;
-        job.wrap.break_anywhere = true;
+        job.wrap.max_rows = 2;
         Some((y, painter.layout_job(job)))
     }
 

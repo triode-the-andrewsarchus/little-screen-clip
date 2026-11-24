@@ -5,11 +5,11 @@ use egui::{
 use little_clip_core::engineering::waveforms::Peak;
 
 const HEADER_HEIGHT: f32 = 24.0;
-pub(in crate::file_manager) const COLLAPSED_HEIGHT: f32 = HEADER_HEIGHT + 6.0;
+pub(in crate::file_manager) const COLLAPSED_HEIGHT: f32 = 25.0;
 pub(super) const MIN_HEIGHT: f32 = 68.0;
 
 #[derive(Clone, Copy)]
-pub(super) struct Lane {
+pub(in crate::file_manager) struct Lane {
     pub plot: Rect,
     header: Rect,
     pub frame: Rect,
@@ -42,7 +42,7 @@ impl Lane {
                 1,
             );
         }
-        let frame = area.shrink2(vec2(0.0, 3.0));
+        let frame = area.shrink2(vec2(0.0, 1.0));
         Self {
             plot: Rect::NOTHING,
             header: frame,
@@ -83,6 +83,115 @@ impl Lane {
         child.spacing_mut().button_padding.y = 1.0;
         child
     }
+}
+
+pub(in crate::file_manager) fn trace_header<T: Copy + Send + Sync + 'static>(
+    ui: &mut Ui,
+    key: T,
+    label: &str,
+    source: Option<&str>,
+    color: Color32,
+    active: bool,
+    visible: bool,
+) -> (bool, bool) {
+    use egui::{Button, CursorIcon, Label, Sense};
+    let handle = ui.add_sized([21.0, 18.0], Button::new("⠿").sense(Sense::drag()));
+    handle.dnd_set_drag_payload(key);
+    if handle.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+    }
+    handle.on_hover_text("Drag to move this trace above or below another trace");
+    let size = ui.available_width();
+    let label_width = (size * 0.32).clamp(92.0, 148.0);
+    let label = if active {
+        RichText::new(label)
+    } else {
+        RichText::new(label).color(color)
+    };
+    let selected = ui
+        .add_sized(
+            [label_width, 18.0],
+            Button::new(label).selected(active).truncate(),
+        )
+        .on_hover_text("Select this trace for measurements, spectrum and export")
+        .clicked();
+    if let Some(source) = source {
+        let width = (size - label_width - 130.0).clamp(35.0, 188.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(width, 18.0), Sense::hover());
+        ui.new_child(
+            UiBuilder::new()
+                .max_rect(rect)
+                .layout(Layout::left_to_right(Align::Center))
+                .id_salt("trace-source"),
+        )
+        .add(Label::new(RichText::new(source).weak()).truncate())
+        .on_hover_text(source);
+    }
+    let caption = if visible { "Hide" } else { "Show" };
+    let visibility = ui.add_sized([48.0, 18.0], Button::new(caption)).clicked();
+    (selected, visibility)
+}
+
+pub(in crate::file_manager) fn trace_drop<T: Copy + Eq + Send + Sync + 'static>(
+    ui: &Ui,
+    rect: Rect,
+    target: T,
+) -> Option<(T, T, bool)> {
+    let payload = egui::DragAndDrop::payload::<T>(ui.ctx())?;
+    let pointer = ui.input(|input| input.pointer.latest_pos())?;
+    if *payload == target || !rect.intersect(ui.clip_rect()).contains(pointer) {
+        return None;
+    }
+    let after = pointer.y >= rect.center().y;
+    let edge = if after { rect.bottom() } else { rect.top() };
+    ui.painter()
+        .hline(rect.x_range(), edge, ui.visuals().selection.stroke);
+    if ui.input(|input| input.pointer.button_released(egui::PointerButton::Primary)) {
+        egui::DragAndDrop::take_payload::<T>(ui.ctx()).map(|payload| (*payload, target, after))
+    } else {
+        None
+    }
+}
+
+pub(in crate::file_manager) fn move_trace<T: Copy + Eq>(
+    order: &mut Vec<T>,
+    (from, to, after): (T, T, bool),
+) {
+    if from == to {
+        return;
+    }
+    if let Some(index) = order.iter().position(|&key| key == from)
+        && let Some(target) = order.iter().position(|&key| key == to)
+    {
+        let adjusted = target - usize::from(index < target);
+        order.remove(index);
+        order.insert(adjusted + usize::from(after), from);
+    }
+}
+
+pub(in crate::file_manager) fn coverage_note(
+    painter: &Painter,
+    rect: Rect,
+    viewport: &std::ops::Range<f64>,
+    recorded: std::ops::Range<f64>,
+    ink: Color32,
+) {
+    let start = recorded.start.max(viewport.start);
+    let end = recorded.end.min(viewport.end);
+    let note = if start >= end {
+        "Outside this time range"
+    } else if plot::x_at(rect, viewport, end) - plot::x_at(rect, viewport, start) < 2.0 {
+        "Zoom in to see this recording"
+    } else {
+        return;
+    };
+    painter.text(
+        rect.left_center() + vec2(8.0, 0.0),
+        Align2::LEFT_CENTER,
+        note,
+        FontId::proportional(11.0),
+        ink,
+    );
 }
 
 pub(in crate::file_manager) fn offset_control(
@@ -149,7 +258,31 @@ pub(in crate::file_manager) fn stacked_scale(mut bounds: Peak, offset: f32) -> P
 
 impl Viewer {
     pub(super) fn lane(&self, area: Rect, slot: usize) -> Lane {
-        Lane::new(area, slot, self.lane_count())
+        if !self.has_collapsed_rows() {
+            return Lane::new(area, slot, self.lane_count());
+        }
+        let hidden = self.visible.iter().filter(|&&visible| !visible).count();
+        let collapsed_before = self.channel_order[..slot.min(self.channel_order.len())]
+            .iter()
+            .filter(|&&index| !self.visible[index])
+            .count();
+        let open = (self.lane_count() - hidden).max(1);
+        let tall = (area.height() - hidden as f32 * COLLAPSED_HEIGHT) / open as f32;
+        let y = area.top()
+            + (slot - collapsed_before) as f32 * tall
+            + collapsed_before as f32 * COLLAPSED_HEIGHT;
+        let collapsed = self
+            .channel_order
+            .get(slot)
+            .is_some_and(|&index| !self.visible[index]);
+        let height = if collapsed { COLLAPSED_HEIGHT } else { tall };
+        Lane::comparison(
+            Rect::from_min_size(
+                pos2(area.left() - 78.0, y),
+                vec2(area.width() + 78.0, height),
+            ),
+            !collapsed,
+        )
     }
 }
 

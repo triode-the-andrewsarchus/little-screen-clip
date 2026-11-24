@@ -36,6 +36,7 @@ pub(super) struct Viewer {
     derived: derived::Derived,
     alignment: alignment::Alignment,
     comparison: comparison::Comparison,
+    show_offsets: bool,
     domain: Range<f64>,
     span: Range<f64>,
     probe: Option<f64>,
@@ -128,7 +129,22 @@ impl Viewer {
                     .map_err(|error| format!("{}: {error}", path.display()))
             })
             .collect::<Result<_, _>>()
-            .map(Self::new)
+            .map(|sources| {
+                let mut viewer = Self::new(sources);
+                let full = viewer.domain.end - viewer.domain.start;
+                let shortest = viewer
+                    .sources
+                    .iter()
+                    .map(|source| source.capture.domain())
+                    .filter(|span| !span.is_empty())
+                    .min_by(|a, b| (a.end - a.start).total_cmp(&(b.end - b.start)));
+                if let Some(shortest) = shortest
+                    && (shortest.end - shortest.start) * 64.0 < full
+                {
+                    viewer.span = shortest;
+                }
+                viewer
+            })
     }
 
     fn new(mut sources: Vec<Source>) -> Self {
@@ -141,6 +157,7 @@ impl Viewer {
             derived: derived::Derived::default(),
             alignment: alignment::Alignment::default(),
             comparison: comparison::Comparison::default(),
+            show_offsets: false,
             span: domain.clone(),
             domain,
             probe: None,
@@ -196,12 +213,17 @@ impl Viewer {
         palette: &AppPalette,
         copies: &mut Copies,
     ) {
-        let mut shell = crate::shell::StudioShell::new(
-            "Signal analysis",
-            crate::icons::Icon::Waves,
-            palette,
-            close,
-        );
+        let multi = self.sources.len() > 1 && self.session.file.is_none();
+        let title = if multi {
+            format!("Signal analysis · {} recordings", self.sources.len())
+        } else {
+            "Signal analysis".to_owned()
+        };
+        let mut shell =
+            crate::shell::StudioShell::new(&title, crate::icons::Icon::Waves, palette, close);
+        if multi {
+            shell = shell.with_session_title();
+        }
         if self.session_dirty() {
             shell = shell.with_badge("Modified", Some(ui.visuals().warn_fg_color));
         }
@@ -241,7 +263,7 @@ impl Viewer {
     }
 
     fn controls(&mut self, ui: &mut Ui) {
-        let grouped = self.compares_analog();
+        let grouped = self.compares_recordings();
         if grouped {
             self.comparison.reconcile(&self.sources);
         }
@@ -262,10 +284,7 @@ impl Viewer {
             }
             if self.sources.len() > 1 {
                 if ui
-                    .add(egui::Button::selectable(
-                        self.alignment.open,
-                        "Clock alignment",
-                    ))
+                    .add(egui::Button::new("Clock alignment").selected(self.alignment.open))
                     .clicked()
                 {
                     let pinned = self.reference_time();
@@ -274,6 +293,7 @@ impl Viewer {
                 if ui.button("Fit all").clicked() {
                     self.span = extent_on(&self.sources, self.alignment.preview(&self.sources));
                 }
+                clip_ui::buttons::toggle(ui, &mut self.show_offsets, "Time offsets");
                 if grouped {
                     self.comparison_toolbar(ui);
                 }
@@ -285,7 +305,28 @@ impl Viewer {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
         });
+        if self.show_offsets && self.sources.len() > 1 {
+            self.offset_controls(ui);
+        }
         self.save_form(ui);
+    }
+
+    fn offset_controls(&mut self, ui: &mut Ui) {
+        egui::Grid::new("recording-offsets").show(ui, |ui| {
+            for source in &mut self.sources {
+                if matches!(source.capture, Capture::Unavailable(_)) {
+                    continue;
+                }
+                ui.label(source.name().as_ref());
+                ui.push_id(("offset", source.id), |ui| {
+                    ui.horizontal(|ui| source.clock_control(ui, None));
+                });
+                if ui.small_button("Fit recording").clicked() {
+                    self.span = source.clock.workspace_range(&source.capture.domain());
+                }
+                ui.end_row();
+            }
+        });
     }
 
     fn align_recordings(&mut self, ui: &mut Ui) {
@@ -330,12 +371,12 @@ impl Viewer {
         }
     }
 
-    fn compares_analog(&self) -> bool {
+    fn compares_recordings(&self) -> bool {
         self.sources.len() > 1
             && self
                 .sources
                 .iter()
-                .any(|source| matches!(source.capture, Capture::Analog(_)))
+                .any(|source| !matches!(source.capture, Capture::Unavailable(_)))
     }
 
     fn linked(&mut self, ui: &mut Ui, copies: &mut Copies) {
@@ -380,17 +421,17 @@ impl Viewer {
         } else {
             (available / self.sources.len() as f32 - 50.0).max(205.0)
         };
-        let grouped = self.compares_analog();
+        let grouped = self.compares_recordings();
         let mut area = self.session.scroll.area(ui);
         if let Some(offset) = self.shared.return_scroll() {
             area = area.vertical_scroll_offset(offset);
         }
         let scroll = area.show(ui, |ui| {
             if grouped {
-                (next_probe, action) = self.analog_comparison(ui, copies, timeline);
+                (next_probe, action) = self.recording_comparison(ui, copies, timeline);
             }
             for index in 0..self.sources.len() {
-                if grouped && matches!(self.sources[index].capture, Capture::Analog(_)) {
+                if grouped && !matches!(self.sources[index].capture, Capture::Unavailable(_)) {
                     continue;
                 }
                 let id = self.sources[index].id;
@@ -753,6 +794,7 @@ impl Source {
             .add(
                 egui::DragValue::new(&mut offset)
                     .speed(speed)
+                    .min_decimals(9)
                     .max_decimals(12)
                     .suffix(" s")
                     .update_while_editing(false),

@@ -19,6 +19,8 @@ pub(in crate::file_manager) struct Settings {
     marks: Vec<MarkedRange>,
     stacked: bool,
     visible: Vec<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    channel_order: Vec<usize>,
     display_offsets: Vec<f32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     fft_traces: Vec<ScopeTrace>,
@@ -50,6 +52,7 @@ impl Viewer {
             marks: self.marks.clone(),
             stacked: self.stacked,
             visible: self.visible.clone(),
+            channel_order: self.channel_order.clone(),
             display_offsets: self.display_offsets.clone(),
             fft_traces: self.trace_fft.keys().copied().collect(),
             math: self.math.clone(),
@@ -91,6 +94,11 @@ impl Viewer {
                 .windows(2)
                 .any(|pair| pair[0].unit != pair[1].unit);
         self.visible = state.visible;
+        let mut ordered = state.channel_order.clone();
+        ordered.sort_unstable();
+        if ordered.into_iter().eq(0..count) {
+            self.channel_order = state.channel_order;
+        }
         self.display_offsets = state.display_offsets;
         self.trace_fft = state
             .fft_traces

@@ -128,9 +128,9 @@ impl SpiInputs {
                 .range(1..=32)
                 .suffix(" bits"),
         );
-        ui.toggle_value(&mut self.config.lsb_first, "LSB first");
+        clip_ui::buttons::toggle(ui, &mut self.config.lsb_first, "LSB first");
         if self.select.is_some() {
-            ui.toggle_value(&mut self.config.active_high, "Select active high");
+            clip_ui::buttons::toggle(ui, &mut self.config.active_high, "Select active high");
         }
     }
 
@@ -1041,7 +1041,7 @@ fn decoded_controls(
             if ui.button(plot.copy_label()).clicked() {
                 ui.ctx().copy_text(plot.tsv(events));
             }
-            ui.toggle_value(show_samples, plot.label());
+            clip_ui::buttons::toggle(ui, show_samples, plot.label());
             if let Some((pins, key)) = pins.zip(request) {
                 let recipe = PinRecipe {
                     inputs: key.inputs,
