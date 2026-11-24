@@ -4,7 +4,7 @@ use egui::{Color32, Mesh, Painter, Rect, Response, Stroke, Ui, pos2};
 use little_clip_core::engineering::{
     logic::{Envelope, Level, Trace},
     logic_decode::Event,
-    logic_preview::Overview,
+    logic_preview::{Overview, lane_rgb},
 };
 use std::ops::Range;
 
@@ -23,17 +23,52 @@ pub(in crate::file_manager) fn highlight_event(
     );
 }
 
-pub(super) fn draw_overview(painter: &Painter, rect: Rect, overview: &Overview, color: Color32) {
+pub(super) fn preview_color(index: usize, dark: bool) -> Color32 {
+    let [r, g, b] = lane_rgb(index).map(|value| {
+        if dark {
+            value
+        } else {
+            (u16::from(value) * 3 / 5) as u8
+        }
+    });
+    Color32::from_rgb(r, g, b)
+}
+
+pub(super) fn draw_overview(
+    painter: &Painter,
+    rect: Rect,
+    overview: &Overview,
+    dark: bool,
+) -> Rect {
     let count = overview.lanes_previewed.len();
-    for (index, envelope) in overview.lanes_previewed.iter().enumerate() {
-        draw_envelope(
-            painter,
-            lane(rect, index, count).shrink2(egui::vec2(0.0, 1.0)),
-            &overview.span,
-            envelope,
-            color,
-        );
+    let labels = rect.height() / count.max(1) as f32 >= 9.0 && rect.width() >= 150.0;
+    let mut axis = rect;
+    if labels {
+        axis.min.x += 54.0;
     }
+    for (index, envelope) in overview.lanes_previewed.iter().enumerate() {
+        let row = lane(rect, index, count);
+        let color = preview_color(index, dark);
+        let mut trace = row.shrink2(egui::vec2(0.0, 1.0));
+        if labels {
+            let name = &overview.lanes[index].name;
+            trace.min.x = axis.min.x;
+            painter
+                .with_clip_rect(Rect::from_min_max(
+                    row.min,
+                    pos2(trace.left() - 3.0, row.bottom()),
+                ))
+                .text(
+                    row.left_center(),
+                    egui::Align2::LEFT_CENTER,
+                    name.rsplit('.').next().unwrap_or(name),
+                    egui::FontId::monospace(9.0),
+                    color,
+                );
+        }
+        draw_envelope(painter, trace, &overview.span, envelope, color);
+    }
+    axis
 }
 
 pub(in crate::file_manager) fn draw_envelope(

@@ -9,7 +9,7 @@ use crate::{
     },
     ui_appearance::WorkbenchColors,
 };
-use egui::{Color32, Id, Rect, Sense, Ui, vec2};
+use egui::{Id, Rect, Sense, Ui, vec2};
 use little_clip_core::engineering::{
     logic_preview::{Overview, Recording},
     waveforms::display_value,
@@ -59,10 +59,10 @@ pub(in crate::file_manager) fn show(
     let Some(capture) = ready.and_then(|ready| ready.data.logic.as_ref()) else {
         return (None, false);
     };
-    let color = Color32::from_rgb(130, 225, 163);
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2.0, colors.recessed);
-    plot::draw_overview(&painter, rect.shrink2(vec2(3.0, 1.0)), capture, color);
+    let dark = ui.visuals().dark_mode;
+    let rect = plot::draw_overview(&painter, rect.shrink2(vec2(3.0, 1.0)), capture, dark);
     let id = Id::unique(("logic-strip", &entry.path, entry.revision));
     let (response, engaged, selected) = preview_copy::strip_range(ui, rect, id, row_response);
     let hovered = response
@@ -70,14 +70,26 @@ pub(in crate::file_manager) fn show(
         .map(|pos| timing::at(rect, &capture.span, pos.x));
     if !response.dragged() {
         response.on_hover_ui(|ui| {
-            ui.strong(capture.label);
+            ui.horizontal(|ui| {
+                ui.strong(capture.label);
+                if let Some(time) = hovered {
+                    ui.monospace(display_value(time, "s"));
+                }
+            });
             let channels = capture.lanes_previewed.len();
             for index in 0..channels {
                 ui.horizontal(|ui| {
+                    let name = &capture.lanes[index].name;
+                    let color = plot::preview_color(index, dark);
                     ui.add_sized(
-                        [76.0, 20.0],
-                        egui::Label::new(&capture.lanes[index].name).truncate(),
-                    );
+                        [114.0, 20.0],
+                        egui::Label::new(
+                            egui::RichText::new(name.rsplit('.').next().unwrap_or(name))
+                                .color(color),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text(name);
                     let (rect, _) = ui.allocate_exact_size(vec2(280.0, 18.0), Sense::hover());
                     plot::draw_envelope(
                         &ui.painter_at(rect),
@@ -86,7 +98,21 @@ pub(in crate::file_manager) fn show(
                         &capture.lanes_previewed[index],
                         color,
                     );
+                    if let Some(time) = hovered {
+                        let x = super::timing::x_at(rect, &capture.span, time);
+                        ui.painter_at(rect).vline(
+                            x,
+                            rect.y_range(),
+                            egui::Stroke::new(1.0, colors.text_secondary),
+                        );
+                    }
                 });
+            }
+            if capture.lanes.len() > channels {
+                ui.weak(format!(
+                    "Showing {channels} of {} channels",
+                    capture.lanes.len()
+                ));
             }
             if let Some(note) = &capture.note {
                 ui.weak(note);

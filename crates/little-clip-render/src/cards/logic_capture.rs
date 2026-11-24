@@ -1,5 +1,8 @@
 use crate::ScreenRenderer;
-use little_clip_core::engineering::{logic_preview::Overview, waveforms::display_value};
+use little_clip_core::engineering::{
+    logic_preview::{Overview, lane_rgb},
+    waveforms::display_value,
+};
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 impl ScreenRenderer {
@@ -40,14 +43,19 @@ impl ScreenRenderer {
         let shown = capture.lanes_previewed.len().min(4);
         let lane_height = height / shown.max(1) as f32;
         let chart_left = left + (width * 0.24).clamp(38.0, 80.0);
-        let color = Color::from_rgba8(130, 225, 163, 255);
         let mut paint = Paint::default();
-        paint.set_color(color);
         for (index, envelope) in capture.lanes_previewed.iter().take(shown).enumerate() {
+            let [r, g, b] = lane_rgb(index);
+            let color = Color::from_rgba8(r, g, b, 255);
+            paint.set_color(color);
             let center = top + (index as f32 + 0.5) * lane_height;
             self.draw_text_clipped(
                 pixmap,
-                &capture.lanes[index].name,
+                capture.lanes[index]
+                    .name
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(&capture.lanes[index].name),
                 left + 4.0,
                 center - 6.0,
                 12.0,

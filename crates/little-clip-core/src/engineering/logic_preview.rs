@@ -13,6 +13,22 @@ const PREVIEW_LANES: usize = 8;
 const PREVIEW_COLUMNS: usize = 192;
 const PREVIEW_SAMPLES: u64 = 4096;
 
+const LANE_COLORS: [[u8; 3]; 8] = [
+    [80, 190, 248],
+    [249, 191, 72],
+    [104, 211, 143],
+    [238, 131, 184],
+    [171, 158, 250],
+    [243, 151, 93],
+    [67, 214, 202],
+    [218, 218, 131],
+];
+
+/// Stable preview ink for a logic channel in source order.
+pub fn lane_rgb(index: usize) -> [u8; 3] {
+    LANE_COLORS[index % LANE_COLORS.len()]
+}
+
 pub struct Overview {
     pub label: &'static str,
     pub lanes: Vec<Lane>,
