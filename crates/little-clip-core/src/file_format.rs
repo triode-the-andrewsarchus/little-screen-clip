@@ -243,6 +243,25 @@ pub fn is_midi(path: &Path) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn snort_capture_names_require_a_valid_packet_header() {
+        let directory = tempfile::tempdir().unwrap();
+        let capture = directory.path().join("snort.log.1427587208");
+        let log = directory.path().join("snort.log");
+        let header = [
+            0xd4, 0xc3, 0xb2, 0xa1, 2, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 1, 0, 0,
+            0,
+        ];
+        std::fs::write(&capture, header).unwrap();
+        std::fs::write(&log, b"Text rule messages").unwrap();
+        let cancel = AtomicBool::new(false);
+        assert_eq!(
+            recognize_engineering(&capture, &cancel),
+            Some(Format::PacketCapture)
+        );
+        assert_eq!(recognize_engineering(&log, &cancel), None);
+    }
+
+    #[test]
     fn shared_suffixes_route_to_engineering_only_after_content_checks() {
         let directory = tempfile::tempdir().unwrap();
         let cancel = AtomicBool::new(false);

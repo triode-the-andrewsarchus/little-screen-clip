@@ -181,22 +181,30 @@ impl Summary {
 }
 
 pub fn is_candidate_path(path: &Path) -> bool {
-    let valid = |extension: &OsStr| {
-        ["pcap", "pcapng", "cap", "ntar"]
-            .into_iter()
-            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    let valid = |name: &OsStr| {
+        let path = Path::new(name);
+        if path.extension().is_some_and(|extension| {
+            ["pcap", "pcapng", "cap", "ntar"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        }) {
+            return true;
+        }
+        let name = name.as_encoded_bytes();
+        name.eq_ignore_ascii_case(b"snort.log")
+            || (name
+                .get(..10)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"snort.log."))
+                && name.get(10..).is_some_and(|suffix| {
+                    !suffix.is_empty() && suffix.iter().all(u8::is_ascii_digit)
+                }))
     };
-    let Some(extension) = path.extension() else {
-        return false;
-    };
-    valid(extension)
-        || (["gz", "zst", "zstd", "lz4"]
-            .into_iter()
-            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
-            && path
-                .file_stem()
-                .and_then(|stem| Path::new(stem).extension())
-                .is_some_and(valid))
+    path.file_name().is_some_and(valid)
+        || (path.extension().is_some_and(|extension| {
+            ["gz", "zst", "zstd", "lz4"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        }) && path.file_stem().is_some_and(valid))
 }
 
 pub fn recognizes(prefix: &[u8], path: &Path) -> bool {
