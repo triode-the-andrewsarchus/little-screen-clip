@@ -138,22 +138,22 @@ async fn send_ipc_req(
     }
 }
 
-async fn copy_item_to_os_clipboard(item: little_clip_core::ClipItem) {
-    let result = tokio::task::spawn_blocking(move || {
+async fn copy_item_to_os_clipboard(
+    item: little_clip_core::ClipItem,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tokio::task::spawn_blocking(move || {
         if let Some(text) = item.to_clipboard_text() {
             copy_text_to_system_clipboard(&text)
         } else if let little_clip_core::ClipPayload::Image { bytes, mime, .. } = item.payload {
             copy_bytes_to_system_clipboard(&bytes, &mime)
         } else {
-            Ok(())
+            Err(little_clip_core::ClipboardError::Failed(
+                "Selected item has no clipboard representation".into(),
+            ))
         }
     })
-    .await;
-    match result {
-        Ok(Err(error)) => eprintln!("Clipboard copy failed: {error}"),
-        Err(error) => eprintln!("Clipboard copy worker failed: {error}"),
-        Ok(Ok(())) => {}
-    }
+    .await??;
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -206,16 +206,16 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
             let get_req = IpcRequest::GetSlotItem(slot);
             let resp = send_ipc_req(&mut writer, &mut lines, &get_req).await?;
             if let IpcResponse::SlotItem(Some(item)) = resp {
-                copy_item_to_os_clipboard(item).await;
+                copy_item_to_os_clipboard(item).await?;
 
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                let _ = tokio::task::spawn_blocking(|| {
+                let pasted = tokio::task::spawn_blocking(|| {
                     little_clip_core::send_clipboard_shortcut(
                         little_clip_core::ClipboardShortcutAction::Paste,
                         true,
                     )
                 })
-                .await;
+                .await?;
 
                 if slot == SlotId::RightHand {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -223,10 +223,13 @@ async fn run_cli() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(IpcResponse::SlotItem(Some(left_item))) =
                         send_ipc_req(&mut writer, &mut lines, &left_req).await
                     {
-                        copy_item_to_os_clipboard(left_item).await;
+                        if let Err(error) = copy_item_to_os_clipboard(left_item).await {
+                            eprintln!("Could not restore the desktop clipboard: {error}");
+                        }
                     }
                 }
 
+                pasted?;
                 println!("{}: Pasted from {}", "Success".green().bold(), slot.label());
                 return Ok(());
             } else {
@@ -520,14 +523,17 @@ mod tests {
                     1,
                     mime,
                 ))
-                .await;
+                .await
+                .unwrap();
                 assert_eq!(std::fs::read(directory.join("bytes")).unwrap(), bytes);
                 assert_eq!(
                     std::fs::read_to_string(directory.join("mime")).unwrap(),
                     mime
                 );
             }
-            copy_item_to_os_clipboard(little_clip_core::ClipItem::from_text("restored text")).await;
+            copy_item_to_os_clipboard(little_clip_core::ClipItem::from_text("restored text"))
+                .await
+                .unwrap();
             assert_eq!(
                 std::fs::read(directory.join("bytes")).unwrap(),
                 b"restored text"
@@ -553,6 +559,7 @@ mod tests {
             .env("PATH", directory.path())
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("DISPLAY")
+            .env_remove("WAYLAND_SOCKET")
             .output()
             .unwrap();
         assert!(
