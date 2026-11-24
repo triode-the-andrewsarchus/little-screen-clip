@@ -38,6 +38,16 @@ pub(in crate::file_manager) struct Settings {
     spectrum_span: Option<Range<f64>>,
 }
 
+impl Settings {
+    pub(in crate::file_manager) fn invalidate_archived_peaks(&mut self) {
+        for mark in &mut self.marks {
+            mark.peaks = Default::default();
+            mark.legacy_channel_peaks.clear();
+            mark.legacy_peak = None;
+        }
+    }
+}
+
 impl Viewer {
     pub(in crate::file_manager) fn analysis_edits(&self) -> AnalysisEdits {
         AnalysisEdits {
@@ -140,6 +150,12 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    const FIXTURE_LANES: [ScopeTrace; 3] = [
+        ScopeTrace::Recorded(0),
+        ScopeTrace::Math,
+        ScopeTrace::Filtered(0),
+    ];
+
     fn recording_fixture(path: &std::path::Path) {
         use std::fmt::Write;
         let mut data = String::from("X,CH2,CH4,Start,Increment,\nSequence,Volt,Volt,0,1e-3,\n");
@@ -180,6 +196,31 @@ mod tests {
         panic!("scope filters did not settle");
     }
 
+    impl Viewer {
+        pub(in crate::file_manager) fn archive_fixture_range(&mut self) {
+            let ctx = egui::Context::default();
+            self.math = "CH2 - CH4".into();
+            self.math_state
+                .compile(&self.math, self.active, &self.overview.channels);
+            self.add_filter(FilterKind::LowPass);
+            settle_filters(self, &ctx, &[0]);
+
+            self.cursors = [Some(0.02), Some(0.10)];
+            self.cursor_scope = Scope::new(FIXTURE_LANES.to_vec(), Some(2));
+            self.request_analysis(&ctx);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while self.analysis_job.is_some() {
+                self.poll(&ctx);
+                assert!(
+                    Instant::now() < deadline,
+                    "scope range measurement did not settle"
+                );
+                thread::sleep(Duration::from_millis(5));
+            }
+            self.archive_mark();
+        }
+    }
+
     #[test]
     fn archived_derived_peaks_follow_their_inputs_after_edit_and_recipe_reopen() {
         use crate::file_manager::signal_view::session::save_and_reopen_scope_fixture;
@@ -189,31 +230,7 @@ mod tests {
         recording_fixture(&path);
         let cancel = AtomicBool::new(false);
         let mut view = Viewer::load(&path, &cancel).unwrap();
-        let ctx = egui::Context::default();
-        view.math = "CH2 - CH4".into();
-        view.math_state
-            .compile(&view.math, view.active, &view.overview.channels);
-        view.add_filter(FilterKind::LowPass);
-        settle_filters(&mut view, &ctx, &[0]);
-
-        let scope = vec![
-            ScopeTrace::Recorded(0),
-            ScopeTrace::Math,
-            ScopeTrace::Filtered(0),
-        ];
-        view.cursors = [Some(0.02), Some(0.10)];
-        view.cursor_scope = Scope::new(scope.clone(), Some(2));
-        view.request_analysis(&ctx);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while view.analysis_job.is_some() {
-            view.poll(&ctx);
-            assert!(
-                Instant::now() < deadline,
-                "scope range measurement did not settle"
-            );
-            thread::sleep(Duration::from_millis(5));
-        }
-        view.archive_mark();
+        view.archive_fixture_range();
         let mut view = save_and_reopen_scope_fixture(
             view,
             &directory.path().join("original.clip-analysis"),
@@ -252,7 +269,7 @@ mod tests {
             .compile(&reopened.math, reopened.active, &reopened.overview.channels);
         let mark = &reopened.marks[0];
         assert_eq!(mark.span, 0.02..0.10);
-        assert_eq!(mark.scope.lanes.as_ref(), Some(&scope));
+        assert_eq!(mark.scope.lanes.as_deref(), Some(FIXTURE_LANES.as_slice()));
         assert_eq!(mark.scope.color, Some(2));
         assert_eq!(value(&reopened, ScopeTrace::Recorded(0)), Some(raw));
         assert_eq!(value(&reopened, ScopeTrace::Filtered(0)), None);

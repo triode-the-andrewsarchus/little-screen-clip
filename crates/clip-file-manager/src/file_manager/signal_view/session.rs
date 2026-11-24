@@ -345,7 +345,8 @@ impl SavedSource {
 
     fn open(&self, path: &Path, relink: bool, cancel: &AtomicBool) -> Result<Source, String> {
         let identity = FileSource::capture(path)?;
-        if !relink && identity.revision_key() != self.revision {
+        let revision_changed = identity.revision_key() != self.revision;
+        if revision_changed && !relink {
             return Err(
                 "Recording revision changed. Review the path and relink it to use this revision."
                     .into(),
@@ -359,7 +360,12 @@ impl SavedSource {
             return Err("The recording channel names or units differ from the saved source".into());
         }
         match (&mut source.capture, self.capture.clone()) {
-            (Capture::Analog(view), Display::Scope(settings)) => view.restore_session(settings)?,
+            (Capture::Analog(view), Display::Scope(mut settings)) => {
+                if revision_changed {
+                    settings.invalidate_archived_peaks();
+                }
+                view.restore_session(settings)?;
+            }
             (Capture::Digital(view), Display::Logic(settings)) => {
                 view.restore_session(settings, cancel)?
             }
@@ -1048,6 +1054,82 @@ mod tests {
             unreachable!();
         };
         assert!(revised.error.contains("revision changed"));
+    }
+
+    #[test]
+    fn relinking_scope_recipe_drops_only_archived_values_from_the_old_recording() {
+        use serde_json::json;
+        use std::fmt::Write;
+
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.csv");
+        let replacement = directory.path().join("replacement.csv");
+        for (path, amplitude) in [(&original, 2), (&replacement, 8)] {
+            let mut csv = String::from("X,CH2,CH4,Start,Increment,\nSequence,Volt,Volt,0,1e-3,\n");
+            for row in 0..128 {
+                let value = if row % 20 < 10 { amplitude } else { 0 };
+                writeln!(&mut csv, "{row},{value},1,,,").unwrap();
+            }
+            fs::write(path, csv).unwrap();
+        }
+
+        let cancel = AtomicBool::new(false);
+        let mut viewer =
+            Viewer::load(&original, super::super::Format::Oscilloscope, &cancel).unwrap();
+        let Capture::Analog(scope) = &mut viewer.sources[0].capture else {
+            panic!("expected a scope recording");
+        };
+        scope.archive_fixture_range();
+        let settings = |viewer: &Viewer| {
+            let Capture::Analog(scope) = &viewer.sources[0].capture else {
+                panic!("expected an available scope recording");
+            };
+            serde_json::to_value(scope.session_settings()).unwrap()
+        };
+        let mut expected = settings(&viewer);
+        let peaks = &expected["marks"][0]["peaks"];
+        let raw_peaks = peaks["channel_peaks"].clone();
+        assert_eq!(raw_peaks[0]["amplitude"].as_f64(), Some(2.0));
+        assert!(peaks["math_range_peak"].is_object());
+        assert_eq!(peaks["filter_range_peaks"].as_array().unwrap().len(), 1);
+
+        // Include both legacy raw encodings alongside the real archived measurement.
+        let mut recipe = serde_json::to_value(Recipe::take(&viewer)).unwrap();
+        let mut legacy = json!({
+            "span": {"start": 0.03, "end": 0.09},
+            "channel_peaks": raw_peaks,
+            "peak_to_peak": [2.0, "V"]
+        });
+        recipe["sources"][0]["capture"]["Scope"]["marks"]
+            .as_array_mut()
+            .unwrap()
+            .push(legacy.clone());
+        let path = directory.path().join("scope.clip-analysis");
+        fs::write(&path, serde_json::to_vec(&recipe).unwrap()).unwrap();
+        legacy.as_object_mut().unwrap().remove("channel_peaks");
+        legacy["peaks"] = json!({"channel_peaks": raw_peaks});
+        expected["marks"].as_array_mut().unwrap().push(legacy);
+
+        let same_revision = Viewer::load_session(&path, &cancel).unwrap();
+        assert_eq!(settings(&same_revision), expected);
+
+        fs::remove_file(&original).unwrap();
+        let mut viewer = Viewer::load_session(&path, &cancel).unwrap();
+        let Capture::Unavailable(unavailable) = &viewer.sources[0].capture else {
+            panic!("expected the original recording to be unavailable");
+        };
+        let relinked = unavailable.saved.open(&replacement, true, &cancel).unwrap();
+        viewer.apply_source_action(0, SourceAction::Relink(relinked));
+        let target = Target::Replace(viewer.session.file.clone().unwrap());
+        Recipe::take(&viewer).write(target).unwrap();
+
+        for mark in expected["marks"].as_array_mut().unwrap() {
+            mark["peaks"] = json!({});
+            mark.as_object_mut().unwrap().remove("peak_to_peak");
+        }
+        let reopened = Viewer::load_session(&path, &cancel).unwrap();
+        assert_eq!(reopened.sources[0].path, replacement);
+        assert_eq!(settings(&reopened), expected);
     }
 
     #[test]
