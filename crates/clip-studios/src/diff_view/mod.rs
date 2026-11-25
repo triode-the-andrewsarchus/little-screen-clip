@@ -146,6 +146,8 @@ pub struct DiffViewerState {
     pub image_result: Option<std::sync::Arc<ImageDiffResult>>,
     svg: Option<little_clip_render::diagram::retained::compare::Comparison>,
     raster_preview: Option<image_view::RasterPreview>,
+    raster_overlay: Option<egui::ColorImage>,
+    overlay_error: Option<String>,
     graphical: GraphicalView,
     is_svg: bool,
     copy_job: Option<crate::desktop_ipc::PendingRequest>,
@@ -169,7 +171,8 @@ impl Drop for DiffViewerState {
 }
 
 enum DiffComputation {
-    Image(ImageDiffResult, image_view::RasterPreview),
+    RasterPreview(image_view::RasterPreview),
+    Overlay(ImageDiffResult, egui::ColorImage),
     Svg(little_clip_render::diagram::retained::compare::Comparison),
     Text(DiffResult, egui::text::LayoutJob),
 }
@@ -177,7 +180,6 @@ enum DiffComputation {
 fn spawn_graphical_diff_worker(
     lhs: &std::sync::Arc<DiffTarget>,
     rhs: &std::sync::Arc<DiffTarget>,
-    options: ImageDiffOptions,
     jobs: &BackgroundJobs,
 ) -> Result<Task<Result<DiffComputation, String>>, String> {
     if let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) {
@@ -214,17 +216,13 @@ fn spawn_graphical_diff_worker(
                 }
                 (false, false) => {}
             }
-            little_clip_ops::image_diff::compare_aligned_image_bytes(
+            little_clip_ops::image_diff::decode_aspect_matched_images(
                 b1,
                 lhs.image_mime(),
                 b2,
                 rhs.image_mime(),
-                &options,
             )
-            .map(|(result, dimensions)| {
-                let preview = image_view::RasterPreview::new(&result, dimensions);
-                DiffComputation::Image(result, preview)
-            })
+            .map(|pair| DiffComputation::RasterPreview(image_view::RasterPreview::new(pair)))
             .map_err(|e| e.to_string())
         });
 
@@ -269,7 +267,7 @@ impl DiffViewerState {
         let is_svg = is_img && (svg_view::is_svg(&lhs) || svg_view::is_svg(&rhs));
 
         let (compute_job, decode_error) = if is_img {
-            match spawn_graphical_diff_worker(&lhs, &rhs, image_options.clone(), jobs) {
+            match spawn_graphical_diff_worker(&lhs, &rhs, jobs) {
                 Ok(job) => (Some(job), None),
                 Err(error) => (None, Some(error)),
             }
@@ -302,6 +300,8 @@ impl DiffViewerState {
             image_result: None,
             svg: None,
             raster_preview: None,
+            raster_overlay: None,
+            overlay_error: None,
             graphical: GraphicalView::default(),
             is_svg,
             copy_job: None,
@@ -351,10 +351,12 @@ impl DiffViewerState {
             .map_err(|error| format!("Diff computation failed: {error}"))
             .and_then(|result| result);
         match outcome {
-            Ok(DiffComputation::Image(result, preview)) => {
-                self.image_result = Some(std::sync::Arc::new(result));
+            Ok(DiffComputation::RasterPreview(preview)) => {
                 self.raster_preview = Some(preview);
-                self.decode_error = None;
+            }
+            Ok(DiffComputation::Overlay(result, overlay)) => {
+                self.image_result = Some(std::sync::Arc::new(result));
+                self.raster_overlay = Some(overlay);
             }
             Ok(DiffComputation::Svg(result)) => {
                 self.svg = Some(result);
@@ -365,12 +367,8 @@ impl DiffViewerState {
                 self.layout_job = layout_job;
                 self.decode_error = None;
             }
-            Err(error) => {
-                self.decode_error = Some(error);
-                if self.is_image() {
-                    self.image_result = None;
-                }
-            }
+            Err(error) if self.raster_preview.is_some() => self.overlay_error = Some(error),
+            Err(error) => self.decode_error = Some(error),
         }
     }
 
@@ -381,13 +379,10 @@ impl DiffViewerState {
             self.svg = None;
             self.image_result = None;
             self.raster_preview = None;
+            self.raster_overlay = None;
+            self.overlay_error = None;
             self.graphical.clear_textures();
-            match spawn_graphical_diff_worker(
-                &self.lhs,
-                &self.rhs,
-                self.image_options.clone(),
-                BackgroundJobs::global(),
-            ) {
+            match spawn_graphical_diff_worker(&self.lhs, &self.rhs, BackgroundJobs::global()) {
                 Ok(job) => {
                     self.compute_job = Some(job);
                     self.decode_error = None;

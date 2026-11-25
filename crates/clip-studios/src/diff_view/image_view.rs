@@ -4,35 +4,42 @@ use little_clip_ops::image_diff::downsample_rgba;
 
 pub(super) struct RasterPreview {
     pub dimensions: [(u32, u32); 2],
-    pub images: Option<([egui::ColorImage; 2], egui::ColorImage)>,
+    pub images: Option<[egui::ColorImage; 2]>,
 }
 
 impl RasterPreview {
-    pub fn new(result: &ImageDiffResult, dimensions: [(u32, u32); 2]) -> Self {
-        let sample = |rgba| downsample_rgba(result.width, result.height, rgba, 2048);
-        let (width, height, base) = sample(&result.base_rgba);
-        let (_, _, revised) = sample(&result.comp_rgba);
-        let (_, _, mask) = sample(&result.mask_rgba);
-        let size = [width as usize, height as usize];
-        let overlay = base
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(revised.as_chunks::<4>().0)
-            .zip(mask.as_chunks::<4>().0)
-            .map(|((base, revised), marker)| overlay_pixel(*base, *revised, *marker))
-            .collect();
+    pub fn new(pair: [image::RgbaImage; 2]) -> Self {
+        let dimensions = pair.each_ref().map(image::RgbaImage::dimensions);
+        let images = pair.map(|image| {
+            let (width, height, pixels) =
+                downsample_rgba(image.width(), image.height(), image.as_raw(), 2048);
+            egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &pixels)
+        });
         Self {
             dimensions,
-            images: Some((
-                [
-                    egui::ColorImage::from_rgba_unmultiplied(size, &base),
-                    egui::ColorImage::from_rgba_unmultiplied(size, &revised),
-                ],
-                egui::ColorImage::new(size, overlay),
-            )),
+            images: Some(images),
         }
     }
+
+    pub fn canvas_size(&self) -> (u32, u32) {
+        self.dimensions[0].max(self.dimensions[1])
+    }
+}
+
+pub(super) fn overlay_image(result: &ImageDiffResult) -> egui::ColorImage {
+    let sample = |rgba: &[u8]| downsample_rgba(result.width, result.height, rgba, 2048);
+    let (width, height, base) = sample(&result.base_rgba);
+    let (_, _, revised) = sample(&result.comp_rgba);
+    let (_, _, mask) = sample(&result.mask_rgba);
+    let pixels = base
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(revised.as_chunks::<4>().0)
+        .zip(mask.as_chunks::<4>().0)
+        .map(|((base, revised), marker)| overlay_pixel(*base, *revised, *marker))
+        .collect();
+    egui::ColorImage::new([width as usize, height as usize], pixels)
 }
 
 fn overlay_pixel(base: [u8; 4], revised: [u8; 4], marker: [u8; 4]) -> Color32 {
@@ -64,6 +71,37 @@ fn overlay_pixel(base: [u8; 4], revised: [u8; 4], marker: [u8; 4]) -> Color32 {
 }
 
 impl DiffViewerState {
+    pub(super) fn ensure_raster_overlay(&mut self) {
+        if self.image_mode != ImageDiffViewMode::Overlay {
+            self.overlay_error = None;
+            return;
+        }
+        if self.raster_preview.is_none()
+            || self.image_result.is_some()
+            || self.overlay_error.is_some()
+            || self.is_computing()
+        {
+            return;
+        }
+        let lhs = self.lhs.clone();
+        let rhs = self.rhs.clone();
+        let options = self.image_options.clone();
+        self.compute_start_time = std::time::Instant::now();
+        self.compute_job = Some(Task::start_unbounded(BackgroundJobs::global(), move |_| {
+            let result = little_clip_ops::image_diff::compare_aligned_image_bytes(
+                lhs.image_bytes().ok_or("Missing base image")?,
+                lhs.image_mime(),
+                rhs.image_bytes().ok_or("Missing comparison image")?,
+                rhs.image_mime(),
+                &options,
+            )
+            .map_err(|error| error.to_string())?
+            .0;
+            let overlay = overlay_image(&result);
+            Ok(DiffComputation::Overlay(result, overlay))
+        }));
+    }
+
     pub(super) fn render_image_tolerance(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.label("Tolerance");
         let slider = egui::Slider::new(&mut self.image_options.threshold, 0.0..=0.5).step_by(0.01);
@@ -90,7 +128,13 @@ impl DiffViewerState {
             self.image_options.threshold = value;
         }
         if changed || preset.is_some() {
-            self.recompute();
+            if self.raster_preview.is_some() {
+                self.compute_job = None;
+            }
+            self.image_result = None;
+            self.raster_overlay = None;
+            self.overlay_error = None;
+            self.graphical.clear_overlay();
         }
     }
 

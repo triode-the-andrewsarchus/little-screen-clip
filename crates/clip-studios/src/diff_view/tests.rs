@@ -243,6 +243,13 @@ fn image_diff_state_uses_generated_fixture_images() {
     let mut state = DiffViewerState::new(left, right, DiffDisplayMode::SideBySide);
     state.wait_for_completion();
 
+    assert!(state.raster_preview.is_some());
+    assert!(state.image_result.is_none());
+
+    state.image_mode = ImageDiffViewMode::Overlay;
+    state.ensure_raster_overlay();
+    state.wait_for_completion();
+
     let result = state.image_result.as_ref().unwrap();
     assert_eq!((result.width, result.height), (3, 2));
     assert_eq!(result.diff_count, 1);
@@ -381,7 +388,7 @@ fn text_diff_tab_and_c_recompute_the_selected_mode() {
 }
 
 #[test]
-fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
+fn image_diff_shortcuts_compute_overlay_on_demand_and_reuse_it() {
     fn send_shortcut(state: &mut DiffViewerState, key: egui::Key) {
         let ctx = egui::Context::default();
         let mut close = false;
@@ -397,7 +404,10 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
                 }],
                 ..Default::default()
             },
-            |ctx| state.handle_shortcuts(ctx, &mut close),
+            |ctx| {
+                state.handle_shortcuts(ctx, &mut close);
+                state.tick(ctx);
+            },
         );
         assert!(!close);
     }
@@ -423,29 +433,37 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
         DiffDisplayMode::SideBySide,
     );
     state.wait_for_completion();
-    let initial_result = state.image_result.as_ref().expect("image diff result");
-    let result_address = std::sync::Arc::as_ptr(initial_result);
+    assert!(state.image_result.is_none());
+
+    send_shortcut(&mut state, egui::Key::Tab);
+    assert_eq!(state.image_mode, ImageDiffViewMode::Blink);
+    assert!(!state.is_computing());
+    assert!(state.image_result.is_none());
+
+    send_shortcut(&mut state, egui::Key::C);
+    assert_eq!(state.image_mode, ImageDiffViewMode::Overlay);
+    assert!(
+        state.is_computing(),
+        "Overlay should schedule the perceptual diff"
+    );
+    state.wait_for_completion();
+    let result = state.image_result.clone().expect("image diff result");
     let compute_started = state.compute_start_time;
 
-    for (key, expected_mode) in [
-        (egui::Key::Tab, ImageDiffViewMode::Blink),
-        (egui::Key::C, ImageDiffViewMode::Overlay),
+    for (key, mode) in [
         (egui::Key::Tab, ImageDiffViewMode::Slider),
         (egui::Key::C, ImageDiffViewMode::SideBySide),
+        (egui::Key::Tab, ImageDiffViewMode::Blink),
+        (egui::Key::C, ImageDiffViewMode::Overlay),
     ] {
         send_shortcut(&mut state, key);
-        assert_eq!(state.image_mode, expected_mode);
-        assert!(
-            !state.is_computing(),
-            "presentation change must not compute"
-        );
-        assert!(state.compute_job.is_none());
+        assert_eq!(state.image_mode, mode);
+        assert!(!state.is_computing());
         assert_eq!(state.compute_start_time, compute_started);
-        assert_eq!(
-            std::sync::Arc::as_ptr(state.image_result.as_ref().unwrap()),
-            result_address,
-            "presentation change must retain the computed image result"
-        );
+        assert!(std::sync::Arc::ptr_eq(
+            state.image_result.as_ref().unwrap(),
+            &result
+        ));
     }
 }
 

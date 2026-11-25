@@ -28,6 +28,19 @@ impl GraphicalView {
         self.textures = None;
     }
 
+    pub fn clear_overlay(&mut self) {
+        if let Some(textures) = &mut self.textures {
+            textures.overlay = None;
+        }
+    }
+
+    pub fn prepare_overlay(&mut self, ctx: &Context, image: egui::ColorImage) {
+        if let Some(textures) = &mut self.textures {
+            textures.overlay =
+                Some(ctx.load_texture("compare-overlay", image, egui::TextureOptions::LINEAR));
+        }
+    }
+
     pub fn prepare_svg(&mut self, ctx: &Context, comparison: &Comparison) {
         if self.textures.is_some() {
             return;
@@ -39,20 +52,15 @@ impl GraphicalView {
                 pixels.data(),
             )
         });
-        self.prepare(ctx, images, None);
+        self.prepare(ctx, images);
     }
 
-    pub fn prepare(
-        &mut self,
-        ctx: &Context,
-        images: [egui::ColorImage; 2],
-        overlay: Option<egui::ColorImage>,
-    ) {
+    pub fn prepare(&mut self, ctx: &Context, images: [egui::ColorImage; 2]) {
         let [a, b] = images;
         let load = |name, image| ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
         self.textures = Some(Textures {
             pair: [load("compare-a", a), load("compare-b", b)],
-            overlay: overlay.map(|image| load("compare-overlay", image)),
+            overlay: None,
         });
     }
 
@@ -286,7 +294,6 @@ mod tests {
                                 ctx,
                                 [Color32::RED, Color32::GREEN]
                                     .map(|color| egui::ColorImage::filled([2, 2], color)),
-                                None,
                             );
                         }
                         view.render(

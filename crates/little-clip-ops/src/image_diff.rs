@@ -510,17 +510,34 @@ pub fn compare_aligned_image_bytes(
     comp_mime: Option<&str>,
     options: &ImageDiffOptions,
 ) -> Result<(ImageDiffResult, [(u32, u32); 2]), ImageDiffError> {
-    let [mut base, mut comp] = decode_pair(base_bytes, base_mime, comp_bytes, comp_mime)?;
+    let [mut base, mut comp] =
+        decode_aspect_matched_images(base_bytes, base_mime, comp_bytes, comp_mime)?;
     let [a, b] = [base.dimensions(), comp.dimensions()];
-    if u64::from(a.0) * u64::from(b.1) != u64::from(b.0) * u64::from(a.1) {
-        return Err(ImageDiffError::AspectRatioMismatch(a, b));
-    }
     match a.0.cmp(&b.0) {
         std::cmp::Ordering::Less => base = upscale(base, b),
         std::cmp::Ordering::Greater => comp = upscale(comp, a),
         std::cmp::Ordering::Equal => {}
     }
     Ok((compare_rgba_images(&base, &comp, options), [a, b]))
+}
+
+/// Decodes a pair with equal aspect ratios for display on a common canvas.
+///
+/// # Errors
+///
+/// Returns an error if either image cannot be decoded or the aspect ratios differ.
+pub fn decode_aspect_matched_images(
+    base_bytes: &[u8],
+    base_mime: Option<&str>,
+    comp_bytes: &[u8],
+    comp_mime: Option<&str>,
+) -> Result<[RgbaImage; 2], ImageDiffError> {
+    let [base, comp] = decode_pair(base_bytes, base_mime, comp_bytes, comp_mime)?;
+    let (a, b) = (base.dimensions(), comp.dimensions());
+    if u64::from(a.0) * u64::from(b.1) != u64::from(b.0) * u64::from(a.1) {
+        return Err(ImageDiffError::AspectRatioMismatch(a, b));
+    }
+    Ok([base, comp])
 }
 
 fn decode_pair(

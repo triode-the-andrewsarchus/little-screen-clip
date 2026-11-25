@@ -135,6 +135,13 @@ fn palette_image_diff_opens_and_escape_returns_to_palette() {
 
     let state = await_workbench_diff(&mut app, &ctx);
     assert!(!state.is_svg());
+    assert!(state.image_result.is_none());
+    let Some(ViewerSession::Diff(state)) = &mut app.viewer else {
+        unreachable!()
+    };
+    state.image_mode = clip_studios::diff_view::ImageDiffViewMode::Overlay;
+    state.tick(&ctx);
+    let state = await_workbench_diff(&mut app, &ctx);
     let result = state.image_result.as_ref().expect("bitmap diff result");
     assert_eq!(result.diff_count, 4);
     assert!(!result.is_identical);
