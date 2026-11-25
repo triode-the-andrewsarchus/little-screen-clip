@@ -6,7 +6,7 @@ use little_clip_render::diagram::retained::compare::{Comparison, Preview};
 
 struct Textures {
     pair: [egui::TextureHandle; 2],
-    overlay: Option<egui::TextureHandle>,
+    overlay: [Option<egui::TextureHandle>; 2],
 }
 
 pub(super) struct GraphicalView {
@@ -30,13 +30,13 @@ impl GraphicalView {
 
     pub fn clear_overlay(&mut self) {
         if let Some(textures) = &mut self.textures {
-            textures.overlay = None;
+            textures.overlay = [None, None];
         }
     }
 
-    pub fn prepare_overlay(&mut self, ctx: &Context, image: egui::ColorImage) {
+    pub fn prepare_overlay(&mut self, ctx: &Context, index: usize, image: egui::ColorImage) {
         if let Some(textures) = &mut self.textures {
-            textures.overlay =
+            textures.overlay[index] =
                 Some(ctx.load_texture("compare-overlay", image, egui::TextureOptions::LINEAR));
         }
     }
@@ -60,7 +60,7 @@ impl GraphicalView {
         let load = |name, image| ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
         self.textures = Some(Textures {
             pair: [load("compare-a", a), load("compare-b", b)],
-            overlay: None,
+            overlay: [None, None],
         });
     }
 
@@ -68,6 +68,7 @@ impl GraphicalView {
         let Some(textures) = &self.textures else {
             return;
         };
+        let sources = pair.order.map(|index| &textures.pair[index]);
         let colors = [
             crate::hex_to_c32(&palette.diff_del),
             crate::hex_to_c32(&palette.diff_add),
@@ -90,21 +91,21 @@ impl GraphicalView {
                 for (index, color) in colors.into_iter().enumerate() {
                     let sheet = layout.sheets[index];
                     painter.rect_filled(sheet, 0.0, Color32::WHITE);
-                    paint_image(&painter, &textures.pair[index], layout.views[index], 255);
+                    paint_image(&painter, sources[index], layout.views[index], 255);
                     pair.marks(&painter, &layout, index, color);
                 }
             }
             Mode::Blink => {
                 painter.rect_filled(layout.sheets[blink], 0.0, Color32::WHITE);
-                paint_image(&painter, &textures.pair[blink], layout.views[blink], 255);
+                paint_image(&painter, sources[blink], layout.views[blink], 255);
             }
             Mode::Overlay => {
                 painter.rect_filled(layout.sheets[0], 0.0, Color32::WHITE);
-                if let Some(texture) = &textures.overlay {
+                if let Some(texture) = &textures.overlay[pair.order[0]] {
                     paint_image(&painter, texture, layout.views[0], 255);
                 } else {
-                    paint_image(&painter, &textures.pair[0], layout.views[0], 255);
-                    paint_image(&painter, &textures.pair[1], layout.views[1], 150);
+                    paint_image(&painter, sources[0], layout.views[0], 255);
+                    paint_image(&painter, sources[1], layout.views[1], 150);
                     for (index, color) in colors.into_iter().enumerate() {
                         pair.marks(&painter, &layout, index, color);
                     }
@@ -121,7 +122,7 @@ impl GraphicalView {
                 for (index, clip) in clips.into_iter().enumerate() {
                     paint_image(
                         &painter.with_clip_rect(clip.intersect(painter.clip_rect())),
-                        &textures.pair[index],
+                        sources[index],
                         layout.views[index],
                         255,
                     );
@@ -149,6 +150,7 @@ pub(super) struct Pair<'a> {
     pub labels: [&'a str; 2],
     pub sizes: [Vec2; 2],
     pub svg: Option<&'a Comparison>,
+    pub order: [usize; 2],
 }
 
 impl Pair<'_> {
@@ -304,6 +306,7 @@ mod tests {
                                 labels: ["Base", "Revision"],
                                 sizes: [Vec2::splat(2.0); 2],
                                 svg: None,
+                                order: [0, 1],
                             },
                         );
                     })

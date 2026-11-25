@@ -26,12 +26,12 @@ impl RasterPreview {
     }
 }
 
-pub(super) fn overlay_image(result: &ImageDiffResult) -> egui::ColorImage {
+fn overlay_images(result: &ImageDiffResult) -> [egui::ColorImage; 2] {
     let sample = |rgba: &[u8]| downsample_rgba(result.width, result.height, rgba, 2048);
     let (width, height, base) = sample(&result.base_rgba);
     let (_, _, revised) = sample(&result.comp_rgba);
     let (_, _, mask) = sample(&result.mask_rgba);
-    let pixels = base
+    let pixels: Vec<_> = base
         .as_chunks::<4>()
         .0
         .iter()
@@ -39,7 +39,14 @@ pub(super) fn overlay_image(result: &ImageDiffResult) -> egui::ColorImage {
         .zip(mask.as_chunks::<4>().0)
         .map(|((base, revised), marker)| overlay_pixel(*base, *revised, *marker))
         .collect();
-    egui::ColorImage::new([width as usize, height as usize], pixels)
+    // Reversing the operands exchanges the red and green ink. The diff mask
+    // and statistics are symmetric on the aligned grid.
+    let reversed = pixels
+        .iter()
+        .map(|pixel| Color32::from_rgb(pixel.g(), pixel.r(), pixel.b()))
+        .collect();
+    let size = [width as usize, height as usize];
+    [pixels, reversed].map(|pixels| egui::ColorImage::new(size, pixels))
 }
 
 fn overlay_pixel(base: [u8; 4], revised: [u8; 4], marker: [u8; 4]) -> Color32 {
@@ -83,8 +90,9 @@ impl DiffViewerState {
         {
             return;
         }
-        let lhs = self.lhs.clone();
-        let rhs = self.rhs.clone();
+        let [lhs, rhs] = self
+            .raster_order
+            .map(|index| [&self.lhs, &self.rhs][index].clone());
         let options = self.image_options.clone();
         self.compute_start_time = std::time::Instant::now();
         self.compute_job = Some(Task::start_unbounded(BackgroundJobs::global(), move |_| {
@@ -97,7 +105,7 @@ impl DiffViewerState {
             )
             .map_err(|error| error.to_string())?
             .0;
-            let overlay = overlay_image(&result);
+            let overlay = overlay_images(&result);
             Ok(DiffComputation::Overlay(result, overlay))
         }));
     }
@@ -132,7 +140,7 @@ impl DiffViewerState {
                 self.compute_job = None;
             }
             self.image_result = None;
-            self.raster_overlay = None;
+            self.raster_overlay = [None, None];
             self.overlay_error = None;
             self.graphical.clear_overlay();
         }

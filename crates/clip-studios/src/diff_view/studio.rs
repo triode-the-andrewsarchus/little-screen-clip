@@ -233,7 +233,7 @@ impl DiffViewerState {
     ) -> StudioShell<'a> {
         let Some(preview) = &self.raster_preview else {
             return if self.is_computing() {
-                shell.with_badge("Loading images…", Some(accent))
+                shell.with_badge("Loading previews…", Some(accent))
             } else {
                 shell
             };
@@ -291,8 +291,9 @@ impl DiffViewerState {
             if let Some(images) = raster.images.take() {
                 self.graphical.prepare(ui.ctx(), images);
             }
-            if overlay && let Some(image) = self.raster_overlay.take() {
-                self.graphical.prepare_overlay(ui.ctx(), image);
+            let first = self.raster_order[0];
+            if overlay && let Some(image) = self.raster_overlay[first].take() {
+                self.graphical.prepare_overlay(ui.ctx(), first, image);
             }
             let (width, height) = raster.canvas_size();
             [egui::vec2(width as f32, height as f32); 2]
@@ -307,6 +308,7 @@ impl DiffViewerState {
                 labels: [self.lhs.label(), self.rhs.label()],
                 sizes,
                 svg: self.svg.as_ref(),
+                order: self.raster_order,
             },
         );
     }
@@ -347,6 +349,12 @@ impl DiffViewerState {
     }
 
     pub(super) fn render_computing_ui(&self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if self.is_image() && !self.is_svg() && self.raster_preview.is_none() {
+            ui.centered_and_justified(|ui| {
+                ui.spinner();
+            });
+            return;
+        }
         let elapsed = self.compute_start_time.elapsed().as_secs_f32();
         let progress = (elapsed * 0.75).fract();
         let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
@@ -367,8 +375,6 @@ impl DiffViewerState {
                 "Parallel Perceptual Diff",
                 "multithreaded SIMD comparison",
             )
-        } else if self.is_image() {
-            ("Loading images…", "Image previews", "decoding images")
         } else {
             (
                 "Computing Diff...",

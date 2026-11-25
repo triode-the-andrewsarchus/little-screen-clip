@@ -388,7 +388,7 @@ fn text_diff_tab_and_c_recompute_the_selected_mode() {
 }
 
 #[test]
-fn image_diff_shortcuts_compute_overlay_on_demand_and_reuse_it() {
+fn raster_swap_reuses_previews_and_the_on_demand_overlay() {
     fn send_shortcut(state: &mut DiffViewerState, key: egui::Key) {
         let ctx = egui::Context::default();
         let mut close = false;
@@ -432,11 +432,20 @@ fn image_diff_shortcuts_compute_overlay_on_demand_and_reuse_it() {
         image_target("Right", [0, 0, 255, 255]),
         DiffDisplayMode::SideBySide,
     );
+    let preview_started = state.compute_start_time;
+    state.swap_operands(); // A swap while the original previews are still in flight.
+    assert_eq!(state.compute_start_time, preview_started);
     state.wait_for_completion();
     assert!(state.image_result.is_none());
+    assert_eq!(state.lhs.label(), "Right");
+    assert_eq!(state.raster_order, [1, 0]);
 
     send_shortcut(&mut state, egui::Key::Tab);
     assert_eq!(state.image_mode, ImageDiffViewMode::Blink);
+    send_shortcut(&mut state, egui::Key::S);
+    assert_eq!(state.lhs.label(), "Left");
+    assert_eq!(state.raster_order, [0, 1]);
+    assert_eq!(state.compute_start_time, preview_started);
     assert!(!state.is_computing());
     assert!(state.image_result.is_none());
 
@@ -446,9 +455,19 @@ fn image_diff_shortcuts_compute_overlay_on_demand_and_reuse_it() {
         state.is_computing(),
         "Overlay should schedule the perceptual diff"
     );
+    let compute_started = state.compute_start_time;
+    state.swap_operands();
+    assert_eq!(state.raster_order, [1, 0]);
+    assert_eq!(state.compute_start_time, compute_started);
     state.wait_for_completion();
     let result = state.image_result.clone().expect("image diff result");
-    let compute_started = state.compute_start_time;
+    let forward = state.raster_overlay[0].as_ref().unwrap().pixels[0];
+    let reversed = state.raster_overlay[1].as_ref().unwrap().pixels[0];
+    assert_ne!(forward.r(), forward.g());
+    assert_eq!(
+        reversed,
+        Color32::from_rgb(forward.g(), forward.r(), forward.b())
+    );
 
     for (key, mode) in [
         (egui::Key::Tab, ImageDiffViewMode::Slider),
@@ -458,6 +477,11 @@ fn image_diff_shortcuts_compute_overlay_on_demand_and_reuse_it() {
     ] {
         send_shortcut(&mut state, key);
         assert_eq!(state.image_mode, mode);
+        if mode == ImageDiffViewMode::Blink {
+            send_shortcut(&mut state, egui::Key::S);
+            assert_eq!(state.lhs.label(), "Left");
+            assert_eq!(state.raster_order, [0, 1]);
+        }
         assert!(!state.is_computing());
         assert_eq!(state.compute_start_time, compute_started);
         assert!(std::sync::Arc::ptr_eq(

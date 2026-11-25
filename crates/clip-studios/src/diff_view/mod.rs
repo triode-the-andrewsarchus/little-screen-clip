@@ -146,7 +146,9 @@ pub struct DiffViewerState {
     pub image_result: Option<std::sync::Arc<ImageDiffResult>>,
     svg: Option<little_clip_render::diagram::retained::compare::Comparison>,
     raster_preview: Option<image_view::RasterPreview>,
-    raster_overlay: Option<egui::ColorImage>,
+    raster_overlay: [Option<egui::ColorImage>; 2],
+    // The worker and textures keep the original order, including during an in-flight swap.
+    raster_order: [usize; 2],
     overlay_error: Option<String>,
     graphical: GraphicalView,
     is_svg: bool,
@@ -172,7 +174,7 @@ impl Drop for DiffViewerState {
 
 enum DiffComputation {
     RasterPreview(image_view::RasterPreview),
-    Overlay(ImageDiffResult, egui::ColorImage),
+    Overlay(ImageDiffResult, [egui::ColorImage; 2]),
     Svg(little_clip_render::diagram::retained::compare::Comparison),
     Text(DiffResult, egui::text::LayoutJob),
 }
@@ -300,7 +302,8 @@ impl DiffViewerState {
             image_result: None,
             svg: None,
             raster_preview: None,
-            raster_overlay: None,
+            raster_overlay: [None, None],
+            raster_order: [0, 1],
             overlay_error: None,
             graphical: GraphicalView::default(),
             is_svg,
@@ -356,7 +359,7 @@ impl DiffViewerState {
             }
             Ok(DiffComputation::Overlay(result, overlay)) => {
                 self.image_result = Some(std::sync::Arc::new(result));
-                self.raster_overlay = Some(overlay);
+                self.raster_overlay = overlay.map(Some);
             }
             Ok(DiffComputation::Svg(result)) => {
                 self.svg = Some(result);
@@ -379,7 +382,8 @@ impl DiffViewerState {
             self.svg = None;
             self.image_result = None;
             self.raster_preview = None;
-            self.raster_overlay = None;
+            self.raster_overlay = [None, None];
+            self.raster_order = [0, 1];
             self.overlay_error = None;
             self.graphical.clear_textures();
             match spawn_graphical_diff_worker(&self.lhs, &self.rhs, BackgroundJobs::global()) {
@@ -417,7 +421,11 @@ impl DiffViewerState {
 
     pub fn swap_operands(&mut self) {
         std::mem::swap(&mut self.lhs, &mut self.rhs);
-        self.recompute();
+        if self.is_image() && !self.is_svg() {
+            self.raster_order.swap(0, 1);
+        } else {
+            self.recompute();
+        }
     }
 }
 

@@ -447,7 +447,7 @@ fn load_rgba_with_mime(bytes: &[u8], mime: Option<&str>) -> Result<RgbaImage, Im
     if let Ok(dyn_img) =
         little_clip_core::item::image_reader(bytes, mime).and_then(|reader| reader.decode())
     {
-        return Ok(dyn_img.to_rgba8());
+        return Ok(dyn_img.into_rgba8());
     }
 
     if let Ok(source) = little_clip_core::svg_image::document(bytes) {
