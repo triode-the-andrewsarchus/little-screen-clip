@@ -1,8 +1,14 @@
+use std::cmp::Ordering as SortOrder;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use egui::{Event, EventFilter, Key, Modifiers, TextEdit, Ui, text_edit::TextEditOutput, vec2};
+use egui::{
+    Event, EventFilter, Key, Modifiers, TextEdit, Ui,
+    text::{CCursor, CCursorRange},
+    text_edit::TextEditOutput,
+    vec2,
+};
 
 use super::ui::{address_id, focus_text, list_id};
 use super::{
@@ -13,10 +19,53 @@ const LISTING_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 #[derive(Default)]
+struct DirectoryNames {
+    exact: Vec<String>,
+    folded: Vec<(String, usize)>,
+}
+
+enum Matches<'a> {
+    Exact(&'a [String]),
+    Folded(&'a [(String, usize)], &'a [String]),
+}
+
+impl<'a> Matches<'a> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Exact(names) => names.len(),
+            Self::Folded(matches, _) => matches.len(),
+        }
+    }
+
+    fn selected(&self, index: usize) -> Option<&'a str> {
+        let index = index.min(self.len().saturating_sub(1));
+        match self {
+            Self::Exact(names) => names.get(index).map(String::as_str),
+            Self::Folded(matches, names) => {
+                matches.get(index).map(|(_, name)| names[*name].as_str())
+            }
+        }
+    }
+}
+
+impl DirectoryNames {
+    fn matches(&self, prefix: &str, show_hidden: bool) -> Matches<'_> {
+        let exact = prefix_matches(&self.exact, prefix, show_hidden, String::as_str);
+        if exact.is_empty() && !prefix.is_empty() {
+            let folded = fold_case(prefix);
+            let matches = prefix_matches(&self.folded, &folded, show_hidden, |(key, _)| key);
+            Matches::Folded(matches, &self.exact)
+        } else {
+            Matches::Exact(exact)
+        }
+    }
+}
+
+#[derive(Default)]
 pub(super) struct Completion {
     folder: Option<PathBuf>,
-    pending: Option<Task<Vec<String>>>,
-    names: Vec<String>,
+    pending: Option<Task<DirectoryNames>>,
+    names: DirectoryNames,
     selected: usize,
     suffix_space: i8,
 }
@@ -24,7 +73,7 @@ pub(super) struct Completion {
 impl Completion {
     fn update(&mut self, ctx: &egui::Context, folder: PathBuf) {
         if self.folder.as_ref() != Some(&folder) {
-            self.names.clear();
+            self.names = DirectoryNames::default();
             self.selected = 0;
             self.folder = Some(folder.clone());
             self.pending = Some(
@@ -51,25 +100,15 @@ impl Completion {
         }
     }
 
-    fn matches(&self, prefix: &str, show_hidden: bool) -> &[String] {
-        let first_hidden = self.names.partition_point(|name| !name.starts_with('.'));
-        let names = match prefix.as_bytes().first() {
-            None if show_hidden => return &self.names,
-            Some(b'.') => &self.names[first_hidden..],
-            _ => &self.names[..first_hidden],
-        };
-        let first = names.partition_point(|name| name.as_str() < prefix);
-        let count = names[first..].partition_point(|name| name.starts_with(prefix));
-        &names[first..first + count]
-    }
-
-    fn keys(&mut self, ctx: &egui::Context, prefix: &str, show_hidden: bool) {
-        let names = self.matches(prefix, show_hidden);
-        if names.is_empty() {
-            return;
+    fn keys(&mut self, ctx: &egui::Context, prefix: &str, show_hidden: bool) -> bool {
+        let names = self.names.matches(prefix, show_hidden);
+        let count = names.len();
+        if count == 0 {
+            return false;
         }
-        let mut selected = self.selected.min(names.len() - 1);
+        let mut selected = self.selected.min(count - 1);
         let mut previous_focus = false;
+        let mut replace_component = false;
         ctx.input_mut(|input| {
             let mut can_complete = true;
             input.events.retain_mut(|event| {
@@ -77,11 +116,15 @@ impl Completion {
                     return true;
                 }
                 match address_key(event) {
-                    Some(Key::ArrowUp) => selected = (selected + names.len() - 1) % names.len(),
-                    Some(Key::ArrowDown) => selected = (selected + 1) % names.len(),
-                    Some(Key::Tab | Key::Slash | Key::ArrowRight) => {
-                        let suffix = &names[selected][prefix.len()..];
-                        *event = Event::Text(format!("{suffix}/"));
+                    Some(Key::ArrowUp) => selected = (selected + count - 1) % count,
+                    Some(Key::ArrowDown) => selected = (selected + 1) % count,
+                    Some(Key::Tab | Key::Slash | Key::ArrowRight)
+                        if let Some(name) = names.selected(selected) =>
+                    {
+                        let suffix = name.strip_prefix(prefix);
+                        replace_component = suffix.is_none();
+                        let text = suffix.unwrap_or(name);
+                        *event = Event::Text(format!("{text}/"));
                         can_complete = false;
                         return true;
                     }
@@ -119,7 +162,45 @@ impl Completion {
         if previous_focus {
             ctx.memory_mut(|memory| memory.move_focus(egui::FocusDirection::Previous));
         }
+        replace_component
     }
+}
+
+fn prefix_matches<'a, T>(
+    names: &'a [T],
+    prefix: &str,
+    show_hidden: bool,
+    key: impl Fn(&T) -> &str,
+) -> &'a [T] {
+    let first_hidden = names.partition_point(|name| !key(name).starts_with('.'));
+    let names = match prefix.as_bytes().first() {
+        None if show_hidden => return names,
+        Some(b'.') => &names[first_hidden..],
+        _ => &names[..first_hidden],
+    };
+    let first = names.partition_point(|name| key(name) < prefix);
+    let count = names[first..].partition_point(|name| key(name).starts_with(prefix));
+    &names[first..first + count]
+}
+
+fn fold_case(text: &str) -> String {
+    text.chars().flat_map(char::to_lowercase).collect()
+}
+
+fn completion_suffix<'a>(name: &'a str, prefix: &str) -> &'a str {
+    if let Some(suffix) = name.strip_prefix(prefix) {
+        return suffix;
+    }
+    // A case mapping can occupy more than one character. Keep the boundary
+    // in the original name so the hint never slices through a UTF-8 character.
+    let mut matched = prefix.chars().flat_map(char::to_lowercase).count();
+    let mut rest = name.chars();
+    while matched > 0
+        && let Some(ch) = rest.next()
+    {
+        matched = matched.saturating_sub(ch.to_lowercase().count());
+    }
+    rest.as_str()
 }
 
 // Native slash input comes as a text event, including on layouts that use Shift.
@@ -136,11 +217,11 @@ fn address_key(event: &Event) -> Option<Key> {
     }
 }
 
-fn directory_names(folder: &Path, cancel: &AtomicBool) -> Vec<String> {
+fn directory_names(folder: &Path, cancel: &AtomicBool) -> DirectoryNames {
     let Ok(entries) = std::fs::read_dir(folder) else {
-        return Vec::new();
+        return DirectoryNames::default();
     };
-    let mut names: Vec<_> = entries
+    let mut exact: Vec<_> = entries
         .take_while(|_| !cancel.load(Ordering::Relaxed))
         .flatten()
         .filter(|entry| {
@@ -150,12 +231,20 @@ fn directory_names(folder: &Path, cancel: &AtomicBool) -> Vec<String> {
         })
         .map(|entry| display_path(Path::new(&entry.file_name())))
         .collect();
-    names.sort_unstable_by(|a, b| {
-        a.starts_with('.')
-            .cmp(&b.starts_with('.'))
-            .then_with(|| a.cmp(b))
-    });
-    names
+    exact.sort_unstable_by(|a, b| directory_name_order(a, b));
+    let mut folded: Vec<_> = exact
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (fold_case(name), index))
+        .collect();
+    folded.sort_unstable_by(|(a, ai), (b, bi)| directory_name_order(a, b).then_with(|| ai.cmp(bi)));
+    DirectoryNames { exact, folded }
+}
+
+fn directory_name_order(a: &str, b: &str) -> SortOrder {
+    a.starts_with('.')
+        .cmp(&b.starts_with('.'))
+        .then_with(|| a.cmp(b))
 }
 
 impl FileManager {
@@ -194,12 +283,25 @@ impl FileManager {
         if ui.is_enabled()
             && !self.focus_address
             && ui.memory(|memory| memory.has_focus(id))
-            && TextEdit::load_state(ui.ctx(), id).is_some_and(|state| at_end(&state, &self.address))
+            && let Some(mut state) = TextEdit::load_state(ui.ctx(), id)
+            && at_end(&state, &self.address)
             && let Some((folder, start)) = self.address_parent()
             && self.address_completion.folder.as_ref() == Some(&folder)
         {
-            self.address_completion
-                .keys(ui.ctx(), &self.address[start..], self.show_hidden);
+            let prefix = &self.address[start..];
+            if self
+                .address_completion
+                .keys(ui.ctx(), prefix, self.show_hidden)
+            {
+                // Replace just the last component through TextEdit so the
+                // corrected spelling is inserted as an ordinary undoable edit.
+                let start = CCursor::new(self.address[..start].chars().count());
+                let end = CCursor::new(start.index.0 + prefix.chars().count());
+                state
+                    .cursor
+                    .set_char_range(Some(CCursorRange::two(start, end)));
+                state.store(ui.ctx(), id);
+            }
         }
     }
 
@@ -217,12 +319,14 @@ impl FileManager {
             completion.selected = 0;
         }
         let prefix = &self.address[start..];
-        let names = completion.matches(prefix, self.show_hidden);
-        let name = names.get(completion.selected.min(names.len().saturating_sub(1)));
+        let name = completion
+            .names
+            .matches(prefix, self.show_hidden)
+            .selected(completion.selected);
         let suffix_space = if let Some(name) = name
             && at_end(&output.state, &self.address)
         {
-            let suffix = format!("{}/", &name[prefix.len()..]);
+            let suffix = format!("{}/", completion_suffix(name, prefix));
             // Focus traversal reads this filter at the start of the next frame.
             ui.memory_mut(|memory| {
                 memory.set_focus_lock_filter(

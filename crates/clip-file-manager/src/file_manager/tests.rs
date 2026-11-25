@@ -719,6 +719,41 @@ fn address_completion_renders_after_a_scrolled_path_and_leaves_other_edits_liter
     assert_eq!(manager.address, "/");
 }
 
+#[test]
+fn address_completion_prefers_typed_case_and_corrects_fallback() {
+    use egui::{Event, Key, Modifiers};
+
+    let temp = tempfile::tempdir().unwrap();
+    let nested = temp.path().join("foobar/İmage");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir(temp.path().join("Foul")).unwrap();
+    std::fs::create_dir(temp.path().join("fOOd")).unwrap();
+    let (mut manager, jobs, ctx) = rendered(temp.path());
+    press(&mut manager, &ctx, Key::L, Modifiers::CTRL);
+    let parent = display_path(temp.path());
+    frame(&mut manager, &ctx, vec![Event::Text(format!("{parent}/F"))]);
+    wait_for_address_hint(&mut manager, &ctx, "oul/");
+    press(&mut manager, &ctx, Key::ArrowDown, Modifiers::NONE);
+    assert!(address_hint(&frame(&mut manager, &ctx, vec![]), "oul/").is_some());
+
+    frame(&mut manager, &ctx, vec![Event::Text("oo".into())]);
+    wait_for_address_hint(&mut manager, &ctx, "bar/");
+    assert_eq!(manager.address, format!("{parent}/Foo"));
+    press(&mut manager, &ctx, Key::ArrowDown, Modifiers::NONE);
+    assert!(address_hint(&frame(&mut manager, &ctx, vec![]), "d/").is_some());
+    press(&mut manager, &ctx, Key::ArrowUp, Modifiers::NONE);
+    frame(&mut manager, &ctx, vec![Event::Text("/".into())]);
+    assert_eq!(manager.address, format!("{parent}/foobar/"));
+
+    frame(&mut manager, &ctx, vec![Event::Text("i\u{307}m".into())]);
+    wait_for_address_hint(&mut manager, &ctx, "age/");
+    press(&mut manager, &ctx, Key::Tab, Modifiers::NONE);
+    assert_eq!(manager.address, format!("{parent}/foobar/İmage/"));
+    press(&mut manager, &ctx, Key::Enter, Modifiers::NONE);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.path(), nested);
+}
+
 fn type_in_browser(manager: &mut FileManager, ctx: &egui::Context, text: &str) {
     ctx.memory_mut(|memory| memory.request_focus(super::ui::list_id()));
     frame(manager, ctx, vec![]);
