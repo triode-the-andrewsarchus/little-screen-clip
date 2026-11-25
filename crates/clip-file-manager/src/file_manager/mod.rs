@@ -26,6 +26,7 @@ mod gallery;
 mod gcode;
 mod geography;
 pub(crate) mod geography_downloader;
+mod gl_mesh;
 mod image_strip;
 mod mail;
 mod markdown_hover;

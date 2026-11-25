@@ -1,20 +1,17 @@
 //! Embroidery stitch timelines in file rows and the dedicated viewer.
+
+pub(super) mod gpu;
+
 use super::{filesystem::Entry, media::PreviewData, shelf::preview::Ready};
 use crate::{icons::Icon, shell::StudioShell, ui_appearance::WorkbenchColors};
 use egui::{Color32, Painter, Rect, Shape, TextureHandle, Ui, pos2, vec2};
 use little_clip_core::{
-    BackgroundJobs, ImageThumbnail, JobError,
     embroidery::{Design, TimelineLayout},
-    jobs::task::Task,
     palette::AppPalette,
 };
 use std::{
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
+    sync::{Arc, atomic::AtomicBool},
 };
 
 const VIEWER_TILE: [u32; 2] = [256, 220];
@@ -272,122 +269,29 @@ pub(super) struct Viewer {
     title: String,
     detail: String,
     layout: TimelineLayout,
-    pixels: Option<ImageThumbnail>,
-    texture: Option<TextureHandle>,
     progress: f32,
-    design: Arc<Design>,
-    detail_frame: DetailFrame,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct FrameRequest {
-    size: [u32; 2],
-    stitches: usize,
-}
-
-#[derive(Default)]
-struct DetailFrame {
-    pending: Option<(FrameRequest, Task<Result<egui::ColorImage, String>>)>,
-    ready: Option<(FrameRequest, Option<TextureHandle>)>,
-}
-
-impl DetailFrame {
-    fn texture(
-        &mut self,
-        ctx: &egui::Context,
-        design: &Arc<Design>,
-        wanted: FrameRequest,
-    ) -> Option<&TextureHandle> {
-        if let Some((request, task)) = &self.pending
-            && *request != wanted
-        {
-            task.token.store(true, Ordering::Relaxed);
-        }
-        if let Some((request, task)) = &self.pending
-            && let Some(result) = task.poll()
-        {
-            let request = *request;
-            let cancelled = task.token.load(Ordering::Relaxed);
-            self.pending = None;
-            if request == wanted && !cancelled {
-                if matches!(result, Err(JobError::QueueFull)) {
-                    ctx.request_repaint_after(Duration::from_millis(50));
-                    return None;
-                }
-                let image = result.ok().and_then(Result::ok);
-                self.ready = Some((
-                    request,
-                    image.map(|image| {
-                        ctx.load_texture("embroidery-detail", image, egui::TextureOptions::LINEAR)
-                    }),
-                ));
-            }
-        }
-        if let Some((_, texture)) = self
-            .ready
-            .as_ref()
-            .filter(|(request, _)| *request == wanted)
-        {
-            return texture.as_ref();
-        }
-        // Keep the job slot until the worker acknowledges superseded requests.
-        if self.pending.is_none() {
-            let design = Arc::clone(design);
-            self.pending = Some((
-                wanted,
-                Task::start_unbounded(BackgroundJobs::global(), move |cancelled| {
-                    let raster = design.detailed_prefix(
-                        VIEWER_TILE,
-                        wanted.size,
-                        wanted.stitches,
-                        cancelled,
-                    )?;
-                    Ok(egui::ColorImage::from_rgba_premultiplied(
-                        [raster.width as usize, raster.height as usize],
-                        &raster.premultiplied_rgba,
-                    ))
-                }),
-            ));
-        }
-        ctx.request_repaint_after(Duration::from_millis(16));
-        None
-    }
+    geometry: Arc<gpu::Geometry>,
 }
 
 impl Viewer {
     pub fn load(path: &Path, cancelled: &AtomicBool) -> Result<Self, String> {
         let design = Design::read(path, cancelled)?;
-        let timeline = design.timeline(VIEWER_TILE, 63, cancelled)?;
+        let layout = design.timeline_layout(VIEWER_TILE, 63);
+        let geometry = Arc::new(gpu::Geometry::new(&design, &layout, cancelled)?);
         Ok(Self {
             title: super::display_path(Path::new(path.file_name().unwrap_or_default())),
             detail: details(&design),
-            progress: timeline.layout.colors().len() as f32,
-            layout: timeline.layout,
-            pixels: Some(timeline.image),
-            texture: None,
-            design: Arc::new(design),
-            detail_frame: DetailFrame::default(),
+            progress: layout.colors().len() as f32,
+            layout,
+            geometry,
         })
     }
 
     pub fn ui(&mut self, ui: &mut Ui, close: &mut bool, palette: &AppPalette) {
         StudioShell::new(&self.title, Icon::Image, palette, close).render_header(ui, |_| {});
-        if let Some(pixels) = self.pixels.take() {
-            self.texture = Some(ui.ctx().load_texture(
-                "embroidery-viewer",
-                egui::ColorImage::from_rgba_premultiplied(
-                    [pixels.width as usize, pixels.height as usize],
-                    &pixels.premultiplied_rgba,
-                ),
-                egui::TextureOptions::LINEAR,
-            ));
-        }
         ui.label(&self.detail);
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
-        if let Some(texture) = &self.texture
-            && rect.width() >= 40.0
-            && rect.height() >= 40.0
-        {
+        if rect.width() >= 40.0 && rect.height() >= 40.0 {
             let painter = ui.painter_at(rect);
             painter.rect_filled(rect, 3.0, WorkbenchColors::from_palette(palette).recessed);
             if super::ui::preview_hovered(ui, rect) {
@@ -413,32 +317,17 @@ impl Viewer {
                 timeline.right_top() - vec2(0.0, 4.0),
             );
             let display = fitted_frame(area, &self.layout);
-            let pixels = display.size() * ui.ctx().pixels_per_point();
-            let texture_limit = ui.input(|input| input.max_texture_side) as f32;
-            let size = [pixels.x, pixels.y].map(|px| px.ceil().min(texture_limit) as u32);
-            if size[0] > self.layout.width
-                && size[1] > self.layout.height
-                && let Some(detail) = self.detail_frame.texture(
-                    ui.ctx(),
-                    &self.design,
-                    FrameRequest {
-                        size,
-                        stitches: self.layout.stitches_at(frame),
-                    },
-                )
-            {
-                let inset = vec2(
-                    0.5 / self.layout.width as f32,
-                    0.5 / self.layout.height as f32,
+            let fabric = ui.painter_at(display);
+            fabric.rect_filled(display, 0.0, Color32::from_rgb(191, 187, 178));
+            let stitches = self.layout.stitches_at(frame);
+            if let Err(error) = gpu::paint(&fabric, display, &self.geometry, stitches) {
+                fabric.text(
+                    display.center(),
+                    egui::Align2::CENTER_CENTER,
+                    error,
+                    egui::FontId::proportional(12.0),
+                    Color32::BLACK,
                 );
-                painter.image(
-                    detail.id(),
-                    display,
-                    Rect::from_min_max(pos2(0.0, 0.0) + inset, pos2(1.0, 1.0) - inset),
-                    Color32::WHITE,
-                );
-            } else {
-                paint_frame(&painter, area, &self.layout, texture, frame);
             }
         }
     }
@@ -514,35 +403,5 @@ mod tests {
         harness.event(clip_ui::test_support::scroll(vec2(0.0, 120.0)));
         harness.run();
         assert_eq!(harness.state().progress, complete);
-    }
-
-    #[test]
-    fn viewer_detail_ignores_an_obsolete_frame_and_resolution() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../little-clip-core/tests/fixtures/embroidery/Wildflower.pes");
-        let design = Arc::new(Design::read(&path, &AtomicBool::new(false)).unwrap());
-        let ctx = egui::Context::default();
-        let mut detail = DetailFrame::default();
-        let obsolete = FrameRequest {
-            size: [480, 700],
-            stitches: 0,
-        };
-        let wanted = FrameRequest {
-            size: [1300, 1900],
-            stitches: design.stitch_count(),
-        };
-        assert!(detail.texture(&ctx, &design, obsolete).is_none());
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if let Some(texture) = detail.texture(&ctx, &design, wanted) {
-                assert_eq!(texture.size()[1], 1900);
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "detail frame never arrived"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
     }
 }

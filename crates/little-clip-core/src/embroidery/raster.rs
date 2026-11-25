@@ -24,6 +24,7 @@ pub struct Timeline {
 pub struct TimelineLayout {
     pub width: u32,
     pub height: u32,
+    framing: Framing,
     colors: Vec<[u8; 3]>,
     pub stitch_count: usize,
     /// Width and height of the stitches in millimeters, excluding raster padding.
@@ -46,6 +47,11 @@ impl TimelineLayout {
         self.stitch_count * frame.min(self.colors.len()) / self.colors.len()
     }
 
+    /// Maps a design point to reference tile coordinates, including the fabric margin.
+    pub fn project(&self, point: [i32; 2]) -> [f32; 2] {
+        self.framing.project(point)
+    }
+
     /// Texture coordinates of a frame, inset to keep filtering within its tile.
     pub fn uv(&self, frame: usize) -> [[f32; 2]; 2] {
         let frame = frame.min(self.colors.len());
@@ -63,6 +69,23 @@ impl TimelineLayout {
 }
 
 impl Design {
+    /// Computes the fixed framing and prefix intervals without allocating an atlas.
+    pub fn timeline_layout(&self, max: [u32; 2], samples: usize) -> TimelineLayout {
+        let samples = samples.clamp(1, MAX_FRAMES - 1).min(self.stitch_count());
+        let framing = Framing::new(self, max);
+        let [width, height] = framing.size;
+        TimelineLayout {
+            width,
+            height,
+            framing,
+            colors: (1..=samples)
+                .map(|frame| self.stitches[self.stitch_count() * frame / samples - 1].color)
+                .collect(),
+            stitch_count: self.stitch_count(),
+            design_size_mm: self.size_mm(),
+        }
+    }
+
     /// Renders the completed design with neither travel lines nor a hoop.
     pub fn thumbnail(
         &self,
@@ -114,25 +137,15 @@ impl Design {
         background: [u8; 3],
         cancelled: &AtomicBool,
     ) -> Result<Timeline, String> {
-        let mut canvas = Canvas::new(self, max, None, background)?;
-        let samples = samples.clamp(1, MAX_FRAMES - 1).min(self.stitch_count());
+        let layout = self.timeline_layout(max, samples);
+        let mut canvas = Canvas::with_framing(layout.framing, None, background)?;
+        let samples = layout.colors.len();
         let [columns, rows] = grid(samples + 1);
-        let [width, height] = [canvas.pixmap.width(), canvas.pixmap.height()];
-        let mut atlas = pixmap(width * columns as u32, height * rows as u32)?;
-        let mut layout = TimelineLayout {
-            width,
-            height,
-            colors: Vec::with_capacity(samples),
-            stitch_count: self.stitch_count(),
-            design_size_mm: self.size_mm(),
-        };
+        let mut atlas = pixmap(layout.width * columns as u32, layout.height * rows as u32)?;
         let mut previous = 0;
         for frame in 0..=samples {
-            let end = self.stitch_count() * frame / samples;
+            let end = layout.stitches_at(frame);
             canvas.sew(&self.stitches[previous..end], cancelled)?;
-            if end > 0 {
-                layout.colors.push(self.stitches[end - 1].color);
-            }
             previous = end;
             copy_tile(&mut atlas, &canvas.pixmap, frame);
         }
@@ -159,21 +172,16 @@ fn copy_tile(atlas: &mut Pixmap, tile: &Pixmap, frame: usize) {
     }
 }
 
-struct Canvas {
-    pixmap: Pixmap,
+#[derive(Clone, Copy)]
+struct Framing {
+    size: [u32; 2],
     origin: [i32; 2],
     scale: f32,
     offset: [f32; 2],
-    raster_transform: Transform,
 }
 
-impl Canvas {
-    fn new(
-        design: &Design,
-        reference: [u32; 2],
-        target: Option<[u32; 2]>,
-        [r, g, b]: [u8; 3],
-    ) -> Result<Self, String> {
+impl Framing {
+    fn new(design: &Design, reference: [u32; 2]) -> Self {
         let max = reference.map(|n| n.clamp(16, 512));
         let span: [f32; 2] = std::array::from_fn(|axis| {
             (i64::from(design.max[axis]) - i64::from(design.min[axis])) as f32
@@ -183,25 +191,54 @@ impl Canvas {
         let size: [u32; 2] = std::array::from_fn(|axis| {
             ((span[axis] * scale + 2.0 * MARGIN).ceil() as u32).clamp(16, max[axis])
         });
-        let output = target.map_or(size, |target| detail_size(size, target));
-        let mut pixmap = pixmap(output[0], output[1])?;
-        pixmap.fill(resvg::tiny_skia::Color::from_rgba8(r, g, b, 255));
-        Ok(Self {
-            pixmap,
+        Self {
+            size,
             origin: design.min,
             scale,
             offset: std::array::from_fn(|axis| (size[axis] as f32 - span[axis] * scale) * 0.5),
-            raster_transform: Transform::from_scale(
-                output[0] as f32 / size[0] as f32,
-                output[1] as f32 / size[1] as f32,
-            ),
-        })
+        }
     }
 
     fn project(&self, point: [i32; 2]) -> [f32; 2] {
         std::array::from_fn(|axis| {
             (i64::from(point[axis]) - i64::from(self.origin[axis])) as f32 * self.scale
                 + self.offset[axis]
+        })
+    }
+}
+
+struct Canvas {
+    pixmap: Pixmap,
+    framing: Framing,
+    raster_transform: Transform,
+}
+
+impl Canvas {
+    fn new(
+        design: &Design,
+        reference: [u32; 2],
+        target: Option<[u32; 2]>,
+        background: [u8; 3],
+    ) -> Result<Self, String> {
+        Self::with_framing(Framing::new(design, reference), target, background)
+    }
+
+    fn with_framing(
+        framing: Framing,
+        target: Option<[u32; 2]>,
+        [r, g, b]: [u8; 3],
+    ) -> Result<Self, String> {
+        let size = framing.size;
+        let output = target.map_or(size, |target| detail_size(size, target));
+        let mut pixmap = pixmap(output[0], output[1])?;
+        pixmap.fill(resvg::tiny_skia::Color::from_rgba8(r, g, b, 255));
+        Ok(Self {
+            pixmap,
+            framing,
+            raster_transform: Transform::from_scale(
+                output[0] as f32 / size[0] as f32,
+                output[1] as f32 / size[1] as f32,
+            ),
         })
     }
 
@@ -218,8 +255,8 @@ impl Canvas {
         let mut path = PathBuilder::new();
         let mut previous = None;
         for stitch in stitches {
-            let [x1, y1] = self.project(stitch.from);
-            let [x2, y2] = self.project(stitch.to);
+            let [x1, y1] = self.framing.project(stitch.from);
+            let [x2, y2] = self.framing.project(stitch.to);
             if x1 == x2 && y1 == y2 {
                 path.move_to(x1, y1);
                 path.line_to(x2 + 0.01, y2);

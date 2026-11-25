@@ -20,11 +20,12 @@ pub fn supports_extension(extension: &str) -> bool {
     decode::reader(extension).is_some()
 }
 
+/// A sewn segment in tenths of a millimeter, with positive Y down.
 #[derive(Debug)]
-struct Stitch {
-    from: [i32; 2],
-    to: [i32; 2],
-    color: [u8; 3],
+pub struct Stitch {
+    pub from: [i32; 2],
+    pub to: [i32; 2],
+    pub color: [u8; 3],
 }
 
 /// The visible sewn geometry in order, with travel and trim gaps preserved.
@@ -68,6 +69,11 @@ impl Design {
     /// Number of needle penetrations represented in the preview.
     pub fn stitch_count(&self) -> usize {
         self.stitches.len()
+    }
+
+    /// Sewn segments in needle order. An isolated penetration has equal endpoints.
+    pub fn stitches(&self) -> &[Stitch] {
+        &self.stitches
     }
 
     /// Size of visible stitch geometry in millimeters.

@@ -5,6 +5,7 @@ mod sky;
 mod terrain;
 mod world;
 use super::geometry::{Batch, Layer, Layers, RiverKey, Scene};
+use crate::file_manager::gl_mesh::{link_program, program};
 use eframe::{
     egui_glow,
     glow::{self, HasContext},
@@ -887,60 +888,6 @@ pub(super) fn with_celestial(shader: &str) -> String {
 fn with_projection(shader: &str) -> String {
     let (version, body) = shader.split_once('\n').unwrap_or(("", shader));
     format!("{version}\n{}\n{body}", include_str!("perspective.glsl"))
-}
-
-pub(super) unsafe fn program(
-    gl: &glow::Context,
-    vertex: &str,
-    fragment: &str,
-) -> Result<glow::Program, String> {
-    // SAFETY: caller retains the owning current GL context.
-    unsafe {
-        link_program(
-            gl,
-            [
-                (glow::VERTEX_SHADER, vertex),
-                (glow::FRAGMENT_SHADER, fragment),
-            ],
-        )
-    }
-}
-
-unsafe fn link_program<'a>(
-    gl: &glow::Context,
-    shaders: impl IntoIterator<Item = (u32, &'a str)>,
-) -> Result<glow::Program, String> {
-    // SAFETY: compilation runs on the caller's current context. Every shader is
-    // deleted after linking, including compile/link failure paths.
-    unsafe {
-        let program = gl.create_program()?;
-        for (kind, source) in shaders {
-            let shader = match gl.create_shader(kind) {
-                Ok(shader) => shader,
-                Err(error) => {
-                    gl.delete_program(program);
-                    return Err(error);
-                }
-            };
-            gl.shader_source(shader, source);
-            gl.compile_shader(shader);
-            if !gl.get_shader_compile_status(shader) {
-                let error = gl.get_shader_info_log(shader);
-                gl.delete_shader(shader);
-                gl.delete_program(program);
-                return Err(format!("Map shader: {error}"));
-            }
-            gl.attach_shader(program, shader);
-            gl.delete_shader(shader);
-        }
-        gl.link_program(program);
-        if !gl.get_program_link_status(program) {
-            let error = gl.get_program_info_log(program);
-            gl.delete_program(program);
-            return Err(format!("Map shader link: {error}"));
-        }
-        Ok(program)
-    }
 }
 
 struct VectorRange {
