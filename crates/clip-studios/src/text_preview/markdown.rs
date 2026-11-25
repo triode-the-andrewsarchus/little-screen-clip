@@ -400,9 +400,9 @@ pub(super) fn compute_image_display_size(
     Vec2::new(target_w.max(12.0), target_h.max(12.0))
 }
 
-pub(super) fn image_rounding(style: ImagePresentation, size: Vec2) -> Rounding {
+pub(super) fn image_rounding(style: ImagePresentation, size: Vec2) -> egui::CornerRadius {
     let r = style.border_radius.unwrap_or(4.0);
-    Rounding::same(r.clamp(0.0, size.x.min(size.y) * 0.5))
+    egui::CornerRadius::from(r.clamp(0.0, size.x.min(size.y) * 0.5))
 }
 
 pub(super) fn parse_blocks(content: &str) -> Vec<MarkdownBlock> {
@@ -448,6 +448,9 @@ impl TextPreviewState {
 
     /// Renders styled markdown view inside a centered reading column.
     pub(super) fn render_markdown_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        for preview in self.diagram_previews.values_mut() {
+            preview.tick(ui.ctx());
+        }
         self.md_images.set_base_path(self.path.as_deref());
         self.md_links.set_base_path(self.path.as_deref());
         let blocks = self.markdown.get_or_init(|| parse_blocks(&self.content));
@@ -829,12 +832,13 @@ fn paint_ready_image(
     let _ = path;
     let rounding = image_rounding(item.style, size);
     egui::Image::new(texture)
-        .rounding(rounding)
+        .corner_radius(rounding)
         .paint_at(ui, rect);
     ui.painter().rect_stroke(
         rect,
         rounding,
         Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.chrome_border, 90)),
+        egui::StrokeKind::Inside,
     );
     if let Some(target) = link_target {
         if target.is_internal() {
@@ -928,7 +932,7 @@ fn render_frontmatter_block(
     path: u64,
 ) {
     egui::CollapsingHeader::new(format!("{} metadata", metadata.format.name()))
-        .id_source(("frontmatter", path))
+        .id_salt(("frontmatter", path))
         .default_open(true)
         .show(ui, |ui| {
             if let Err(error) = &metadata.value {
@@ -951,7 +955,7 @@ fn render_frontmatter_block(
                                     .size(BODY_FONT_SIZE)
                                     .color(prose_color),
                             )
-                            .wrap(true),
+                            .wrap(),
                         );
                         ui.end_row();
                     }
@@ -988,15 +992,15 @@ fn render_quote_block(
 ) {
     let (accent, label) = quote_accent_and_label(kind, palette);
     let bg = hex_to_c32(&palette.colors.surface_recessed);
-    let frame_response = egui::Frame::none()
+    let frame_response = egui::Frame::NONE
         .fill(bg)
         .inner_margin(egui::Margin {
-            left: 14.0,
-            right: 12.0,
-            top: 8.0,
-            bottom: 6.0,
+            left: 14,
+            right: 12,
+            top: 8,
+            bottom: 6,
         })
-        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+        .corner_radius(egui::CornerRadius::from(crate::ui_ext::BADGE_CORNER_RADIUS))
         .show(ui, |ui| {
             if let Some(title) = label {
                 let title_color =
@@ -1029,7 +1033,7 @@ fn render_quote_block(
             rect.left_top(),
             egui::pos2(rect.left() + 3.0, rect.bottom()),
         ),
-        Rounding::same(1.5),
+        egui::CornerRadius::from(1.5),
         accent,
     );
     ui.add_space(if ctx.compact_spacing { 4.0 } else { 8.0 });
@@ -1070,17 +1074,17 @@ fn render_details_block(
         ProseFormatOptions::default(),
         None,
     );
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(hex_to_c32(&palette.colors.surface_recessed))
         .stroke(Stroke::new(
             1.0_f32,
             hex_to_c32_alpha(&palette.chrome_border, 120),
         ))
-        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .corner_radius(egui::CornerRadius::from(crate::ui_ext::BADGE_CORNER_RADIUS))
         .show(ui, |ui| {
             egui::CollapsingHeader::new(built_summary.job)
-                .id_source(("md_details", path))
+                .id_salt(("md_details", path))
                 .default_open(details.open)
                 .show(ui, |ui| {
                     let details_ctx = BlockStyleContext {
@@ -1147,14 +1151,14 @@ fn render_styled_container_block(
         );
     };
     if has_chrome {
-        let mut frame = egui::Frame::none()
+        let mut frame = egui::Frame::NONE
             .inner_margin(egui::Margin {
-                top: style.padding[0],
-                right: style.padding[1],
-                bottom: style.padding[2],
-                left: style.padding[3],
+                top: style.padding[0].round().clamp(0.0, 127.0) as i8,
+                right: style.padding[1].round().clamp(0.0, 127.0) as i8,
+                bottom: style.padding[2].round().clamp(0.0, 127.0) as i8,
+                left: style.padding[3].round().clamp(0.0, 127.0) as i8,
             })
-            .rounding(Rounding::same(style.border_radius));
+            .corner_radius(egui::CornerRadius::from(style.border_radius));
         if has_visible_bg {
             frame = frame.fill(bg);
         }
@@ -1192,7 +1196,7 @@ fn render_code_or_diagram_block(
             .or_default()
             .show(ui, format, text);
         egui::CollapsingHeader::new("Diagram source")
-            .id_source(("diagram_source", path))
+            .id_salt(("diagram_source", path))
             .show(ui, |ui| {
                 render_styled_code_block(ui, text, language, palette, path);
             });
@@ -1211,10 +1215,10 @@ fn render_footnote_block(
     ctx: BlockStyleContext,
     mut media: DocMedia<'_>,
 ) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(hex_to_c32(&palette.colors.surface_recessed))
-        .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .corner_radius(egui::CornerRadius::from(crate::ui_ext::BADGE_CORNER_RADIUS))
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 ui.label(
@@ -1393,7 +1397,7 @@ fn render_list(
     let gutter_w = if ordered {
         let last_num = start.saturating_add(items.len().saturating_sub(1) as u64);
         let widest = format!("{last_num}.");
-        let w = ui.fonts(|f| {
+        let w = ui.fonts_mut(|f| {
             f.layout_no_wrap(widest, marker_font.clone(), marker_color)
                 .size()
                 .x
@@ -1411,7 +1415,7 @@ fn render_list(
             if indent_pad > 0.0 {
                 ui.add_space(indent_pad);
             }
-            let row_h = ui.fonts(|f| f.row_height(&marker_font));
+            let row_h = ui.fonts_mut(|f| f.row_height(&marker_font));
             let (marker_rect, _) =
                 ui.allocate_exact_size(Vec2::new(gutter_w, row_h), egui::Sense::hover());
             match item.task {
@@ -1533,15 +1537,15 @@ fn render_pull_quote(
 
     let bg = hex_to_c32(&palette.colors.surface_recessed);
     let stripe = hex_to_c32_alpha(&palette.chrome_border, 220);
-    let frame_resp = egui::Frame::none()
+    let frame_resp = egui::Frame::NONE
         .fill(bg)
         .inner_margin(egui::Margin {
-            left: 16.0,
-            right: 14.0,
-            top: 10.0,
-            bottom: 8.0,
+            left: 16,
+            right: 14,
+            top: 10,
+            bottom: 8,
         })
-        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+        .corner_radius(egui::CornerRadius::from(crate::ui_ext::BADGE_CORNER_RADIUS))
         .show(ui, |ui| {
             let quote_ctx = BlockStyleContext {
                 compact_spacing: true,
@@ -1582,7 +1586,7 @@ fn render_pull_quote(
             rect.left_top(),
             egui::pos2(rect.left() + 3.5, rect.bottom()),
         ),
-        Rounding::same(1.5),
+        egui::CornerRadius::from(1.5),
         stripe,
     );
     ui.add_space(if compact_spacing { 4.0 } else { 8.0 });
@@ -1606,11 +1610,13 @@ fn render_tabs_block(
 
     let panel_bg = hex_to_c32(&palette.colors.surface_recessed);
     let border = hex_to_c32_alpha(&palette.chrome_border, 150);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(panel_bg)
         .stroke(Stroke::new(1.0_f32, border))
-        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .corner_radius(egui::CornerRadius::from(
+            crate::ui_ext::CONTROL_CORNER_RADIUS,
+        ))
+        .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             let items: Vec<clip_ui::ui_tabs::Tab<'_, usize>> = tabs
                 .iter()
@@ -1753,7 +1759,7 @@ fn render_columns_block(
 fn paint_task_checkbox(ui: &egui::Ui, rect: egui::Rect, checked: bool, palette: &AppPalette) {
     let box_size = 14.0;
     let box_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(box_size));
-    let rounding = Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS);
+    let rounding = egui::CornerRadius::from(crate::ui_ext::BADGE_CORNER_RADIUS);
     if checked {
         let fill = hex_to_c32(&palette.diff_add);
         let fg = crate::ui_ext::contrast_text_c32_on(
@@ -1780,6 +1786,7 @@ fn paint_task_checkbox(ui: &egui::Ui, rect: egui::Rect, checked: bool, palette: 
             box_rect,
             rounding,
             Stroke::new(1.2_f32, hex_to_c32(&palette.chrome_border)),
+            egui::StrokeKind::Inside,
         );
     }
 }
@@ -1937,13 +1944,12 @@ fn render_heading(
     };
 
     if let Some((tick_w, tick_color)) = style.left_tick {
-        let inset = 10.0_f32;
-        let frame_response = egui::Frame::none()
+        let frame_response = egui::Frame::NONE
             .inner_margin(egui::Margin {
-                left: inset,
-                right: 0.0,
-                top: 1.0,
-                bottom: 1.0,
+                left: 10,
+                right: 0,
+                top: 1,
+                bottom: 1,
             })
             .show(ui, |ui| {
                 render_spans_with_options(
@@ -1969,7 +1975,7 @@ fn render_heading(
                     (rect.bottom() - 2.0).max(rect.top() + 2.0),
                 ),
             ),
-            Rounding::same(tick_w * 0.5),
+            egui::CornerRadius::from(tick_w * 0.5),
             tick_color,
         );
     } else {
@@ -2061,9 +2067,9 @@ pub(super) fn inline_highlighted_runs(
     runs
 }
 
-fn spoiler_is_revealed(ctx: &egui::Context, path: u64, idx: usize) -> bool {
-    let open_id = egui::Id::new(("md_spoiler_open", path, idx));
-    let hover_id = egui::Id::new(("md_spoiler_hover", path, idx));
+pub(super) fn spoiler_is_revealed(ctx: &egui::Context, path: u64, idx: usize) -> bool {
+    let open_id = egui::Id::unique(("md_spoiler_open", path, idx));
+    let hover_id = egui::Id::unique(("md_spoiler_hover", path, idx));
     ctx.data(|d| {
         d.get_temp::<bool>(open_id).unwrap_or(false)
             || d.get_temp::<bool>(hover_id).unwrap_or(false)
@@ -2364,28 +2370,26 @@ fn hit_range_at_pos<'a, T>(
     pointer: egui::Pos2,
     ranges: &'a [(std::ops::Range<usize>, T)],
 ) -> Option<&'a T> {
-    let local = pointer - galley_pos;
-    let cursor = galley.cursor_from_pos(local);
-    let row = galley.rows.get(cursor.rcursor.row)?;
-    if !row.rect.contains(local.to_pos2()) {
-        return None;
-    }
-    let mut col = row.glyphs.len();
-    for (idx, glyph) in row.glyphs.iter().enumerate() {
-        if local.x >= glyph.pos.x && local.x < glyph.pos.x + glyph.size.x {
-            col = idx;
-            break;
+    let local = (pointer - galley_pos).to_pos2();
+    let mut row_start = 0usize;
+    for row in &galley.rows {
+        let row_end = row_start + row.char_count_including_newline().0;
+        if row.rect().contains(local) {
+            let row_local_x = local.x - row.pos.x;
+            for (idx, glyph) in row.glyphs.iter().enumerate() {
+                if row_local_x >= glyph.pos.x && row_local_x < glyph.max_x() {
+                    let char_idx = row_start + idx;
+                    return ranges
+                        .iter()
+                        .find(|(range, _)| range.contains(&char_idx))
+                        .map(|(_, val)| val);
+                }
+            }
+            return None;
         }
+        row_start = row_end;
     }
-    if col >= row.glyphs.len() {
-        return None;
-    }
-    let row_start_char = cursor.ccursor.index.saturating_sub(cursor.rcursor.column);
-    let char_idx = row_start_char + col;
-    ranges
-        .iter()
-        .find(|(range, _)| range.contains(&char_idx))
-        .map(|(_, val)| val)
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2436,7 +2440,7 @@ fn render_spans_with_options(
         opts,
         media.links.as_deref_mut(),
     );
-    let galley = ui.fonts(|f| f.layout_job(built.job));
+    let galley = ui.fonts_mut(|f| f.layout_job(built.job));
     render_galley_with_links(
         ui,
         galley,
@@ -2456,20 +2460,20 @@ fn paint_dashed_underline_for_range(
 ) {
     let mut row_start = 0usize;
     for row in &galley.rows {
-        let row_end = row_start + row.char_count_including_newline();
+        let row_end = row_start + row.char_count_including_newline().0;
         let from = range.start.max(row_start).min(row_end) - row_start;
         let to = (range.end.max(row_start).min(row_end) - row_start).min(row.glyphs.len());
         if from < to {
-            let x0 = galley_pos.x + row.x_offset(from);
-            let x1 = galley_pos.x + row.x_offset(to);
+            let x0 = galley_pos.x + row.pos.x + row.x_offset(egui::text::CharIndex(from));
+            let x1 = galley_pos.x + row.pos.x + row.x_offset(egui::text::CharIndex(to));
             if x1 > x0 + 0.5 {
                 let first_glyph = row.glyphs[from..to]
                     .iter()
-                    .find(|g| g.size.y > 0.0)
+                    .find(|g| g.size().y > 0.0)
                     .or_else(|| row.glyphs[from..to].first());
                 let y = if let Some(glyph) = first_glyph {
-                    let offset = (glyph.size.y * 0.14).clamp(1.5, 3.0);
-                    galley_pos.y + (glyph.pos.y + offset).min(row.max_y() - 0.5)
+                    let offset = (glyph.size().y * 0.14).clamp(1.5, 3.0);
+                    galley_pos.y + (row.pos.y + glyph.pos.y + offset).min(row.max_y() - 0.5)
                 } else {
                     galley_pos.y + row.max_y() - 1.5
                 };
@@ -2527,7 +2531,7 @@ fn render_galley_with_links(
     }
 
     for &(_, idx) in spoilers {
-        let hover_id = egui::Id::new(("md_spoiler_hover", path, idx));
+        let hover_id = egui::Id::unique(("md_spoiler_hover", path, idx));
         let now_hovered = hovered_spoiler == Some(idx);
         let was_hovered = ui
             .ctx()
@@ -2547,7 +2551,7 @@ fn render_galley_with_links(
     } else if let Some(idx) = hovered_spoiler {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         if response.clicked() {
-            let open_id = egui::Id::new(("md_spoiler_open", path, idx));
+            let open_id = egui::Id::unique(("md_spoiler_open", path, idx));
             let toggled = ui
                 .ctx()
                 .data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
@@ -2654,7 +2658,7 @@ fn measure_table_col_widths(
                     ProseFormatOptions::default(),
                     media.links.as_deref_mut(),
                 );
-                ui.fonts(|f| f.layout_job(built.job)).size().x
+                ui.fonts_mut(|f| f.layout_job(built.job)).size().x
             };
             natural[c_idx] = natural[c_idx].max(cell_w + TABLE_CELL_PAD_X * 2.0);
         }
@@ -2764,7 +2768,7 @@ fn measure_table_rows<'a>(
                     },
                     media.links.as_deref_mut(),
                 );
-                let galley = ui.fonts(|f| f.layout_job(built.job));
+                let galley = ui.fonts_mut(|f| f.layout_job(built.job));
                 max_h = max_h.max(galley.size().y);
                 cells.push(MeasuredCell::Prose {
                     galley,
@@ -2802,7 +2806,8 @@ fn paint_measured_table(
     let canvas_bg = hex_to_c32(&palette.colors.canvas);
     let prose_color = hex_to_c32(&palette.colors.text_secondary);
     let bold_color = hex_to_c32(&palette.colors.text_primary);
-    let rounding = Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS);
+    let rounding = egui::CornerRadius::from(crate::ui_ext::BADGE_CORNER_RADIUS);
+    let top_corner = crate::ui_ext::BADGE_CORNER_RADIUS.round() as u8;
 
     ui.painter().rect_filled(table_rect, rounding, canvas_bg);
 
@@ -2814,14 +2819,14 @@ fn paint_measured_table(
         );
         let row_bg = table_row_background(row.is_header, r_idx, canvas_bg, palette);
         let row_rounding = if r_idx == 0 {
-            Rounding {
-                nw: crate::ui_ext::BADGE_CORNER_RADIUS,
-                ne: crate::ui_ext::BADGE_CORNER_RADIUS,
-                sw: 0.0,
-                se: 0.0,
+            egui::CornerRadius {
+                nw: top_corner,
+                ne: top_corner,
+                sw: 0,
+                se: 0,
             }
         } else {
-            Rounding::ZERO
+            egui::CornerRadius::ZERO
         };
         ui.painter().rect_filled(row_rect, row_rounding, row_bg);
 
@@ -2839,8 +2844,9 @@ fn paint_measured_table(
                 egui::Align::RIGHT => egui::Layout::top_down(egui::Align::RIGHT),
                 _ => egui::Layout::top_down(egui::Align::Min),
             };
-            ui.allocate_ui_at_rect(cell_rect, |ui| {
-                ui.with_layout(layout, |ui| match cell {
+            ui.scope_builder(
+                egui::UiBuilder::new().max_rect(cell_rect).layout(layout),
+                |ui| match cell {
                     MeasuredCell::Prose {
                         galley,
                         links,
@@ -2878,8 +2884,8 @@ fn paint_measured_table(
                             align,
                         );
                     }
-                });
-            });
+                },
+            );
 
             x += col_w;
             if c_idx + 1 < col_count {
@@ -2910,8 +2916,12 @@ fn paint_measured_table(
         }
     }
 
-    ui.painter()
-        .rect_stroke(table_rect, rounding, Stroke::new(1.0_f32, border_outer));
+    ui.painter().rect_stroke(
+        table_rect,
+        rounding,
+        Stroke::new(1.0_f32, border_outer),
+        egui::StrokeKind::Inside,
+    );
 }
 
 fn render_markdown_table(
@@ -2945,7 +2955,7 @@ fn render_markdown_table(
 
     if needs_h_scroll {
         egui::ScrollArea::horizontal()
-            .id_source(("markdown_table_h", path))
+            .id_salt(("markdown_table_h", path))
             .max_width(avail_w)
             .show(ui, |ui| draw_table(ui, &mut media));
     } else {
@@ -2964,14 +2974,14 @@ pub(super) fn render_styled_code_block(
     let syntax = find_syntax(lang);
     let display_code = code.strip_suffix('\n').unwrap_or(code);
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(hex_to_c32(&palette.colors.surface_recessed))
         .stroke(Stroke::new(
             1.0_f32,
             hex_to_c32(&palette.colors.surface_panel),
         ))
-        .inner_margin(egui::Margin::same(10.0))
-        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+        .inner_margin(egui::Margin::same(10))
+        .corner_radius(egui::CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 let label = if lang.is_empty() {
@@ -3007,20 +3017,23 @@ pub(super) fn render_styled_code_block(
 
             let avail_w = ui.available_width().max(1.0);
             egui::ScrollArea::horizontal()
-                .id_source(("markdown_code_h", path))
+                .id_salt(("markdown_code_h", path))
                 .max_width(avail_w)
                 .show(ui, |ui| {
-                    let mut layouter = |ui: &egui::Ui, text: &str, _wrap_width: f32| {
-                        let mut layout_job = build_highlighted_layout_job(text, syntax, palette, &[]);
-                        layout_job.wrap.max_width = f32::INFINITY;
-                        ui.fonts(|f| f.layout_job(layout_job))
-                    };
+                    let mut layouter =
+                        |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, _wrap_width: f32| {
+                            let text = buffer.as_str();
+                            let mut layout_job =
+                                build_highlighted_layout_job(text, syntax, palette, &[]);
+                            layout_job.wrap.max_width = f32::INFINITY;
+                            ui.fonts_mut(|f| f.layout_job(layout_job))
+                        };
 
                     let mut code_buf = display_code;
                     let text_edit = egui::TextEdit::multiline(&mut code_buf)
                         .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
                         .layouter(&mut layouter)
-                        .frame(false)
+                        .frame(egui::Frame::NONE)
                         .desired_width(avail_w)
                         .lock_focus(false)
                         .interactive(true);

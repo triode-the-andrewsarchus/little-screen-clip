@@ -268,6 +268,13 @@ impl MarkdownExcerptView {
         self.pending_navigation.take()
     }
 
+    /// Advances background diagram and math jobs owned by this excerpt.
+    pub fn tick(&mut self, ctx: &egui::Context) {
+        for preview in self.previews.values_mut() {
+            preview.tick(ctx);
+        }
+    }
+
     /// Renders inside a bounded hover area without source parsing or file I/O.
     pub fn show(
         &mut self,
@@ -279,6 +286,7 @@ impl MarkdownExcerptView {
             ui.weak("Empty Markdown file");
             return;
         }
+        self.tick(ui.ctx());
         egui::ScrollArea::vertical()
             .id_salt((
                 "markdown_source_excerpt",

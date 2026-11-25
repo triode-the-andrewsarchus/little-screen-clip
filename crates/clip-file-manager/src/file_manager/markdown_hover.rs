@@ -19,6 +19,9 @@ pub(super) struct Hover {
 impl Hover {
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
+        if let Some((_, view)) = &mut self.view {
+            view.tick(ctx);
+        }
     }
     pub fn clear(&mut self) {
         self.cache.clear();

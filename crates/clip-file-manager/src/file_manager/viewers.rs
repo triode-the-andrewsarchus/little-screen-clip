@@ -1716,7 +1716,8 @@ mod tests {
         // so a later close/discard returns to the folder instead of navigating there.
         viewers.confirm_close = true;
         viewers.pending_navigation_target = Some((first.clone(), None));
-        let _ = ctx.run(
+        let mut copies = crate::file_manager::preview_copy::Copies::default();
+        let mut out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1731,12 +1732,13 @@ mod tests {
                 }],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let _ = viewers.ui(ui, &AppPalette::default());
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let _ = viewers.ui(ui, &AppPalette::default(), &mut copies);
                 });
             },
         );
+        out.textures_delta.clear();
         assert!(!viewers.confirm_close);
         assert!(viewers.pending_navigation_target.is_none());
 

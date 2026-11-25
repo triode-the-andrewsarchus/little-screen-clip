@@ -23,7 +23,7 @@ enum Content {
     },
     Image {
         texture: egui::TextureHandle,
-        rounding: egui::Rounding,
+        rounding: egui::CornerRadius,
         alt: String,
     },
     HardBreak,
@@ -35,6 +35,7 @@ struct Atom {
     ascent: f32,
     descent: f32,
     link: Option<LinkTarget>,
+    spoiler: Option<usize>,
     display: bool,
 }
 
@@ -51,6 +52,7 @@ impl Atom {
             descent: (galley.size().y - ascent).max(0.0),
             content: Content::Text(galley),
             link,
+            spoiler: None,
             display: false,
         }
     }
@@ -66,7 +68,7 @@ impl Atom {
         let mut job = egui::text::LayoutJob::default();
         job.wrap.max_width = width;
         job.append(text, 0.0, format);
-        let galley = ui.fonts(|fonts| fonts.layout_job(job));
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
         Self::from_galley(galley, size, link)
     }
 
@@ -79,7 +81,7 @@ impl Atom {
     ) -> Self {
         let galley = egui::WidgetText::from(text).into_galley(
             ui,
-            Some(true),
+            Some(egui::TextWrapMode::Wrap),
             width,
             FontId::proportional(size),
         );
@@ -93,6 +95,7 @@ impl Atom {
             ascent: size,
             descent: size * 0.2,
             link: None,
+            spoiler: None,
             display: false,
         }
     }
@@ -172,6 +175,8 @@ pub(super) fn show_spans(
         block: style.block,
     };
     let atoms = collect_atoms(ui, spans, &line, media);
+    let mut all_spoilers = std::collections::BTreeSet::new();
+    let mut hovered_spoilers = std::collections::BTreeSet::new();
     for (row_index, row) in wrap_atoms(atoms, line.width).into_iter().enumerate() {
         let (ascent, descent, occupied) = row_metrics(&row, style.size);
         let (rect, _) = ui.allocate_exact_size(
@@ -193,43 +198,74 @@ pub(super) fn show_spans(
                 egui::vec2(atom.width, atom.ascent + atom.descent),
             );
             let id = ui
-                .id()
+                .scope_id()
                 .with(("math-row", style.block, row_index, atom_index));
             let response = paint_atom(ui, &atom, atom_rect, id, &line, media);
+            if let Some(sp_idx) = atom.spoiler {
+                all_spoilers.insert(sp_idx);
+                if response.hovered() {
+                    hovered_spoilers.insert(sp_idx);
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if response.clicked() && atom.link.is_none() {
+                    let open_id = egui::Id::unique(("md_spoiler_open", style.block, sp_idx));
+                    let toggled = ui
+                        .ctx()
+                        .data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
+                    ui.ctx().data_mut(|d| d.insert_temp(open_id, !toggled));
+                    ui.ctx().request_repaint();
+                }
+            }
             if let Some(link) = atom.link {
-                if link.is_internal() {
-                    let y = match &atom.content {
-                        Content::Text(galley) => {
-                            let offset = (line.size * 0.15).clamp(1.5, 3.0);
-                            (atom_rect.top() + atom.ascent + offset)
-                                .min(atom_rect.bottom() - 0.5)
-                                .min(atom_rect.top() + galley.size().y - 0.5)
-                        }
-                        _ => (atom_rect.bottom() - 1.0).max(atom_rect.top()),
-                    };
-                    let stroke_w = if response.hovered() {
-                        1.5_f32
-                    } else {
-                        1.25_f32
-                    };
-                    super::paint_dashed_h_line(
-                        ui.painter(),
-                        atom_rect.left(),
-                        atom_rect.right(),
-                        y,
-                        Stroke::new(stroke_w, link.dash_color),
-                        4.0,
-                        2.5,
-                    );
+                let spoiler_hidden = atom
+                    .spoiler
+                    .is_some_and(|idx| !super::spoiler_is_revealed(ui.ctx(), style.block, idx));
+                if !spoiler_hidden {
+                    if link.is_internal() {
+                        let y = match &atom.content {
+                            Content::Text(galley) => {
+                                let offset = (line.size * 0.15).clamp(1.5, 3.0);
+                                (atom_rect.top() + atom.ascent + offset)
+                                    .min(atom_rect.bottom() - 0.5)
+                                    .min(atom_rect.top() + galley.size().y - 0.5)
+                            }
+                            _ => (atom_rect.bottom() - 1.0).max(atom_rect.top()),
+                        };
+                        let stroke_w = if response.hovered() {
+                            1.5_f32
+                        } else {
+                            1.25_f32
+                        };
+                        super::paint_dashed_h_line(
+                            ui.painter(),
+                            atom_rect.left(),
+                            atom_rect.right(),
+                            y,
+                            Stroke::new(stroke_w, link.dash_color),
+                            4.0,
+                            2.5,
+                        );
+                    }
+                    if response.clicked() {
+                        super::activate_link_target(ui, &link, media.navigate_to.as_deref_mut());
+                    }
+                    response
+                        .on_hover_text(link.hover_label())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
                 }
-                if response.clicked() {
-                    super::activate_link_target(ui, &link, media.navigate_to.as_deref_mut());
-                }
-                response
-                    .on_hover_text(link.hover_label())
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
             }
             x += atom.width;
+        }
+    }
+    for sp_idx in all_spoilers {
+        let hover_id = egui::Id::unique(("md_spoiler_hover", style.block, sp_idx));
+        let now_hovered = hovered_spoilers.contains(&sp_idx);
+        let was_hovered = ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(hover_id).unwrap_or(false));
+        if now_hovered != was_hovered {
+            ui.ctx().data_mut(|d| d.insert_temp(hover_id, now_hovered));
+            ui.ctx().request_repaint();
         }
     }
 }
@@ -299,6 +335,7 @@ fn atoms_for_span(
                     ascent: layout.baseline_em * line.size * scale,
                     descent: (layout.height_em - layout.baseline_em) * line.size * scale,
                     link,
+                    spoiler: None,
                     display: *display,
                 }
             } else {
@@ -395,6 +432,7 @@ fn image_atoms(
                     ascent: size.y,
                     descent: 2.0,
                     link: link_target,
+                    spoiler: None,
                     display: false,
                 }];
             }
@@ -443,22 +481,27 @@ fn is_web_url(url: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
-fn plain_span_text(span: &MarkdownSpan) -> &str {
+fn plain_span_text(span: &MarkdownSpan) -> String {
     match span {
         MarkdownSpan::Text(t)
         | MarkdownSpan::Bold(t)
         | MarkdownSpan::Italic(t)
         | MarkdownSpan::BoldItalic(t)
         | MarkdownSpan::Strikethrough(t)
-        | MarkdownSpan::Code(t) => t,
-        MarkdownSpan::HighlightedCode { code, .. } => code,
-        MarkdownSpan::Styled { text, .. } => text,
-        MarkdownSpan::Link { label, .. } => label,
-        MarkdownSpan::Math { source, .. } => source,
-        MarkdownSpan::Image { .. }
-        | MarkdownSpan::StyledImage { .. }
-        | MarkdownSpan::Spoiler { .. }
-        | MarkdownSpan::HardBreak => "",
+        | MarkdownSpan::Code(t) => t.clone(),
+        MarkdownSpan::HighlightedCode { code, .. } => code.clone(),
+        MarkdownSpan::Styled { text, .. } => text.clone(),
+        MarkdownSpan::Link { label, .. } => label.clone(),
+        MarkdownSpan::Math { source, .. } => source.clone(),
+        MarkdownSpan::Image { alt, .. } | MarkdownSpan::StyledImage { alt, .. } => {
+            if alt.is_empty() {
+                "[image]".to_owned()
+            } else {
+                format!("[image: {alt}]")
+            }
+        }
+        MarkdownSpan::Spoiler { spans } => spans.iter().map(plain_span_text).collect(),
+        MarkdownSpan::HardBreak => "\n".to_owned(),
     }
 }
 
@@ -544,23 +587,26 @@ fn spoiler_atoms(
     inner: &[MarkdownSpan],
     span_index: usize,
     line: &LineContext<'_>,
+    media: &mut DocMedia<'_>,
 ) -> Vec<Atom> {
-    let open_id = egui::Id::new(("md_spoiler_open", line.block, span_index));
-    let hover_id = egui::Id::new(("md_spoiler_hover", line.block, span_index));
-    let revealed = ui.ctx().data(|d| {
-        d.get_temp::<bool>(open_id).unwrap_or(false)
-            || d.get_temp::<bool>(hover_id).unwrap_or(false)
-    });
+    let revealed = super::spoiler_is_revealed(ui.ctx(), line.block, span_index);
+    if revealed {
+        let mut atoms = Vec::new();
+        for (idx, inner_span) in inner.iter().enumerate() {
+            let sub_index = span_index.saturating_mul(1024).saturating_add(idx + 1);
+            for mut atom in atoms_for_span(ui, inner_span, sub_index, line, media) {
+                atom.spoiler = Some(span_index);
+                atoms.push(atom);
+            }
+        }
+        return atoms;
+    }
     let mask = super::spoiler_mask_color(line.palette);
     let label_text: String = inner.iter().map(plain_span_text).collect();
     let fmt = egui::TextFormat {
         font_id: FontId::proportional(line.size),
-        color: if revealed { line.prose_color } else { mask },
-        background: if revealed {
-            hex_to_c32(&line.palette.colors.surface_panel)
-        } else {
-            mask
-        },
+        color: mask,
+        background: mask,
         ..Default::default()
     };
     let mut atoms = Vec::new();
@@ -573,6 +619,9 @@ fn spoiler_atoms(
         None,
         &mut atoms,
     );
+    for atom in &mut atoms {
+        atom.spoiler = Some(span_index);
+    }
     atoms
 }
 
@@ -589,7 +638,7 @@ fn prose_atoms(
             return highlighted_code_atoms(ui, language, code, line);
         }
         MarkdownSpan::Spoiler { spans: inner } => {
-            return spoiler_atoms(ui, inner, span_index, line);
+            return spoiler_atoms(ui, inner, span_index, line, media);
         }
         MarkdownSpan::Text(text) => (
             text.as_str(),
@@ -716,7 +765,7 @@ fn paint_atom(
     line: &LineContext<'_>,
     media: &mut DocMedia<'_>,
 ) -> egui::Response {
-    let sense = if atom.link.is_some() {
+    let sense = if atom.link.is_some() || atom.spoiler.is_some() {
         egui::Sense::click()
     } else {
         egui::Sense::hover()
@@ -749,7 +798,7 @@ fn paint_atom(
                             .on_hover_text(source.chars().take(2048).collect::<String>());
                     }
                     r
-                } else if atom.link.is_some() {
+                } else if atom.link.is_some() || atom.spoiler.is_some() {
                     preview.paint_math_linked(ui, rect, id)
                 } else {
                     preview.paint_math(ui, rect, source, id)
@@ -768,7 +817,7 @@ fn paint_atom(
             alt,
         } => {
             egui::Image::new(texture)
-                .rounding(*rounding)
+                .corner_radius(*rounding)
                 .paint_at(ui, rect);
             let response = ui.interact(rect, id, sense);
             if !alt.is_empty() && atom.link.is_none() {
@@ -826,7 +875,7 @@ mod tests {
         let palette = AppPalette::default();
         let mut available = egui::Rect::NOTHING;
         let mut following_top = 0.0;
-        let output = ctx.run(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -834,21 +883,22 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     available = ui.available_rect_before_wrap();
                     super::super::render_blocks(ui, &blocks, &palette, Some(&mut previews));
                     following_top = ui.label("Following paragraph").rect.top();
                 });
             },
         );
+        output.textures_delta.clear();
         // Inspect requested layout bounds before tessellation adds its
         // antialiasing fringe around the image rectangle.
         let bounds = output
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Rect(rect) if rect.fill_texture_id == texture_id => {
+                egui::epaint::Shape::Rect(rect) if rect.fill_texture_id() == texture_id => {
                     Some(rect.rect)
                 }
                 _ => None,

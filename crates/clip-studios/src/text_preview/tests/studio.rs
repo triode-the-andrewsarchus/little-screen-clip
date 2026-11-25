@@ -531,7 +531,7 @@ fn markdown_reading_column_reflows_inline_spans_lists_and_tables_cleanly() {
         Some("Guide.md".to_owned()),
         &AppConfig::default(),
     );
-    let output = ctx.run(
+    let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -539,12 +539,13 @@ fn markdown_reading_column_reflows_inline_spans_lists_and_tables_cleanly() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 state.render_markdown_view(ui, &palette);
             });
         },
     );
+    output.textures_delta.clear();
 
     let para_shape = output
         .shapes
@@ -638,7 +639,7 @@ fn markdown_wide_table_uses_horizontal_scroll_and_hides_raw_wrap_toggle() {
         &AppConfig::default(),
     );
     let mut close = false;
-    let output = ctx.run(
+    let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -646,12 +647,14 @@ fn markdown_wide_table_uses_horizontal_scroll_and_hides_raw_wrap_toggle() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                state.render_ui(ui, ctx, &palette, &mut close);
+        |ui| {
+            let ctx = ui.ctx().clone();
+            egui::CentralPanel::default().show(ui, |ui| {
+                state.render_ui(ui, &ctx, &palette, &mut close);
             });
         },
     );
+    output.textures_delta.clear();
 
     assert!(
         !output.shapes.iter().any(|clipped| matches!(
@@ -703,7 +706,7 @@ fn markdown_headings_preserve_clear_size_and_format_hierarchy() {
         Some("Headings.md".to_owned()),
         &AppConfig::default(),
     );
-    let output = ctx.run(
+    let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -711,12 +714,13 @@ fn markdown_headings_preserve_clear_size_and_format_hierarchy() {
             )),
             ..Default::default()
         },
-        |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 state.render_markdown_view(ui, &palette);
             });
         },
     );
+    output.textures_delta.clear();
 
     let find_text = |needle: &str| {
         output
@@ -818,7 +822,7 @@ Text flowing beside floated image.
     ctx.set_visuals(egui::Visuals::dark());
 
     let run_frame = |state: &mut TextPreviewState, events: Vec<egui::Event>| {
-        ctx.run(
+        let mut out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -827,17 +831,19 @@ Text flowing beside floated image.
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     state.render_markdown_view(ui, &palette);
                 });
             },
-        )
+        );
+        out.textures_delta.clear();
+        out
     };
 
     let has_painted_image = |output: &egui::FullOutput| {
         output.shapes.iter().any(|clipped| match &clipped.shape {
-            egui::Shape::Rect(rect) => rect.fill_texture_id != egui::TextureId::default(),
+            egui::Shape::Rect(rect) => rect.fill_texture_id() != egui::TextureId::default(),
             egui::Shape::Mesh(mesh) => mesh.texture_id != egui::TextureId::default(),
             _ => false,
         })
@@ -971,7 +977,7 @@ def hi():
     ctx.set_visuals(egui::Visuals::dark());
 
     let run_frame = |state: &mut TextPreviewState, events: Vec<egui::Event>| {
-        ctx.run(
+        let mut out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -980,12 +986,14 @@ def hi():
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     state.render_markdown_view(ui, &palette);
                 });
             },
-        )
+        );
+        out.textures_delta.clear();
+        out
     };
 
     let output = run_frame(&mut state, Vec::new());
@@ -1148,7 +1156,7 @@ Second two-col
     ctx.set_visuals(egui::Visuals::dark());
 
     let run_at = |state: &mut TextPreviewState, width: f32, events: Vec<egui::Event>| {
-        ctx.run(
+        let mut out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1157,12 +1165,14 @@ Second two-col
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     state.render_markdown_view(ui, &palette);
                 });
             },
-        )
+        );
+        out.textures_delta.clear();
+        out
     };
 
     let output = run_at(&mut state, 1024.0, Vec::new());
@@ -1184,7 +1194,10 @@ Second two-col
         .job
         .sections
         .iter()
-        .find(|sec| spoiler_line.galley.text()[sec.byte_range.clone()].contains("secret_word"))
+        .find(|sec| {
+            spoiler_line.galley.text()[sec.byte_range.start.0..sec.byte_range.end.0]
+                .contains("secret_word")
+        })
         .expect("secret_word section");
     assert_eq!(
         secret_sec.format.color, secret_sec.format.background,
@@ -1197,7 +1210,10 @@ Second two-col
         .job
         .sections
         .iter()
-        .find(|sec| spoiler_line.galley.text()[sec.byte_range.clone()].contains("tiny_aside"))
+        .find(|sec| {
+            spoiler_line.galley.text()[sec.byte_range.start.0..sec.byte_range.end.0]
+                .contains("tiny_aside")
+        })
         .expect("tiny_aside section");
     assert!(
         small_sec.format.font_id.size < BODY_FONT_SIZE,
@@ -1210,11 +1226,10 @@ Second two-col
         let char_idx = spoiler_line.galley.text().find("secret_word").unwrap();
         let mut ccursor = egui::text::CCursor::new(char_idx + 3);
         ccursor.prefer_next_row = true;
-        let cursor = spoiler_line.galley.from_ccursor(ccursor);
         spoiler_line.pos
             + spoiler_line
                 .galley
-                .pos_from_cursor(&cursor)
+                .pos_from_cursor(ccursor)
                 .center()
                 .to_vec2()
             + egui::vec2(2.0, 0.0)
@@ -1245,7 +1260,10 @@ Second two-col
         .job
         .sections
         .iter()
-        .find(|sec| revealed_line.galley.text()[sec.byte_range.clone()].contains("secret_word"))
+        .find(|sec| {
+            revealed_line.galley.text()[sec.byte_range.start.0..sec.byte_range.end.0]
+                .contains("secret_word")
+        })
         .unwrap();
     assert_ne!(
         revealed_sec.format.color, revealed_sec.format.background,
@@ -1317,6 +1335,49 @@ Second two-col
         nc1.pos,
         nc2.pos
     );
+
+    // 7. Spoiler inside a mixed math paragraph (`math::show_spans`) is masked initially and reveals on click.
+    let mut math_spoiler_state = TextPreviewState::from_text(
+        "Equation $x$ with {{< spoiler >}}math_secret{{< /spoiler >}} inline.".to_owned(),
+        Some("md".to_owned()),
+        &AppConfig::default(),
+    );
+    let math_out = run_at(&mut math_spoiler_state, 1024.0, Vec::new());
+    let math_secret_shape =
+        find_text(&math_out, "math_secret").expect("math_secret atom in mixed math row");
+    assert_eq!(
+        math_secret_shape.galley.job.sections[0].format.color,
+        math_secret_shape.galley.job.sections[0].format.background,
+        "spoiler in mixed math row must be masked initially"
+    );
+    let math_secret_pos = math_secret_shape.pos + math_secret_shape.galley.rect.center().to_vec2();
+    let _ = run_at(
+        &mut math_spoiler_state,
+        1024.0,
+        vec![
+            egui::Event::PointerMoved(math_secret_pos),
+            egui::Event::PointerButton {
+                pos: math_secret_pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: math_secret_pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    let math_after = run_at(&mut math_spoiler_state, 1024.0, Vec::new());
+    let math_revealed_shape =
+        find_text(&math_after, "math_secret").expect("revealed math_secret atom");
+    assert_ne!(
+        math_revealed_shape.galley.job.sections[0].format.color,
+        math_revealed_shape.galley.job.sections[0].format.background,
+        "clicking spoiler in mixed math row must reveal readable foreground"
+    );
 }
 
 #[test]
@@ -1345,7 +1406,7 @@ See [Soatok]({{< relref \"Interviews/soatok\" >}}) and {{< button relref=\"Other
     let mut state = TextPreviewState::from_file(&source, &AppConfig::default()).unwrap();
 
     let run_frame = |state: &mut TextPreviewState, events: Vec<egui::Event>| {
-        ctx.run(
+        let mut out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1354,12 +1415,14 @@ See [Soatok]({{< relref \"Interviews/soatok\" >}}) and {{< button relref=\"Other
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     state.render_markdown_view(ui, &palette);
                 });
             },
-        )
+        );
+        out.textures_delta.clear();
+        out
     };
 
     let output = run_frame(&mut state, Vec::new());
@@ -1380,7 +1443,10 @@ See [Soatok]({{< relref \"Interviews/soatok\" >}}) and {{< button relref=\"Other
         .job
         .sections
         .iter()
-        .find(|sec| intro_shape.galley.text()[sec.byte_range.clone()].contains("Engineering Guide"))
+        .find(|sec| {
+            intro_shape.galley.text()[sec.byte_range.start.0..sec.byte_range.end.0]
+                .contains("Engineering Guide")
+        })
         .expect("internal link section");
     assert_eq!(
         eng_sec.format.underline,
@@ -1393,7 +1459,10 @@ See [Soatok]({{< relref \"Interviews/soatok\" >}}) and {{< button relref=\"Other
         .job
         .sections
         .iter()
-        .find(|sec| intro_shape.galley.text()[sec.byte_range.clone()].contains("External Docs"))
+        .find(|sec| {
+            intro_shape.galley.text()[sec.byte_range.start.0..sec.byte_range.end.0]
+                .contains("External Docs")
+        })
         .expect("external link section");
     assert_ne!(
         ext_sec.format.underline,
@@ -1405,16 +1474,12 @@ See [Soatok]({{< relref \"Interviews/soatok\" >}}) and {{< button relref=\"Other
         let byte_start = text_shape.galley.text().find(needle).unwrap();
         let start_char = text_shape.galley.text()[..byte_start].chars().count();
         let end_char = start_char + needle.chars().count();
-        let r0 = text_shape.galley.pos_from_cursor(
-            &text_shape
-                .galley
-                .from_ccursor(egui::text::CCursor::new(start_char)),
-        );
-        let r1 = text_shape.galley.pos_from_cursor(
-            &text_shape
-                .galley
-                .from_ccursor(egui::text::CCursor::new(end_char)),
-        );
+        let r0 = text_shape
+            .galley
+            .pos_from_cursor(egui::text::CCursor::new(start_char));
+        let r1 = text_shape
+            .galley
+            .pos_from_cursor(egui::text::CCursor::new(end_char));
         let min_x = text_shape.pos.x + r0.left() - 2.0;
         let max_x = text_shape.pos.x + r1.right() + 2.0;
         let min_y = text_shape.pos.y + r0.top();
@@ -1449,13 +1514,10 @@ See [Soatok]({{< relref \"Interviews/soatok\" >}}) and {{< button relref=\"Other
     let eng_click_pos = {
         let byte_start = intro_shape.galley.text().find("Engineering Guide").unwrap();
         let char_idx = intro_shape.galley.text()[..byte_start].chars().count() + 2;
-        let cursor = intro_shape
-            .galley
-            .from_ccursor(egui::text::CCursor::new(char_idx));
         intro_shape.pos
             + intro_shape
                 .galley
-                .pos_from_cursor(&cursor)
+                .pos_from_cursor(egui::text::CCursor::new(char_idx))
                 .center()
                 .to_vec2()
     };
@@ -1517,13 +1579,10 @@ See [Soatok]({{< relref \"Interviews/soatok\" >}}) and {{< button relref=\"Other
     let ext_click_pos = {
         let byte_start = intro_shape.galley.text().find("External Docs").unwrap();
         let char_idx = intro_shape.galley.text()[..byte_start].chars().count() + 2;
-        let cursor = intro_shape
-            .galley
-            .from_ccursor(egui::text::CCursor::new(char_idx));
         intro_shape.pos
             + intro_shape
                 .galley
-                .pos_from_cursor(&cursor)
+                .pos_from_cursor(egui::text::CCursor::new(char_idx))
                 .center()
                 .to_vec2()
     };

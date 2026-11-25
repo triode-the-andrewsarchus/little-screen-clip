@@ -46,7 +46,7 @@ impl ScreenRenderer {
         has_url: bool,
         default_color: Color,
     ) -> (FontStyle, Color) {
-        let style = if css.monospace {
+        let style = if css.monospace || css.kbd {
             FontStyle::Mono
         } else if css.bold && css.italic {
             FontStyle::BoldItalic
@@ -57,8 +57,16 @@ impl ScreenRenderer {
         } else {
             FontStyle::Regular
         };
-        let color = if has_url {
+        let color = if let Some(raw) = css.color {
+            let canvas = self.color_from_hex(&self.palette.colors.canvas);
+            let preferred = Color::from_rgba8(raw.r, raw.g, raw.b, raw.a);
+            self.contrast_color(canvas, Some(preferred))
+        } else if has_url {
             self.color_from_hex(&self.palette.url_color)
+        } else if css.strikethrough || css.muted {
+            self.color_from_hex_alpha(&self.palette.colors.text_muted, 200)
+        } else if css.monospace || css.kbd {
+            self.color_from_hex(&self.palette.undo_border)
         } else if css.bold {
             self.color_from_hex(&self.palette.colors.text_primary)
         } else {

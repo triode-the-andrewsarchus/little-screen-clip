@@ -428,7 +428,7 @@ fn clicking_internal_hugo_link_in_workbench_viewer_navigates_to_target_document(
 
     let ctx = egui::Context::default();
     let run_modal = |app: &mut WorkbenchApp, events: Vec<egui::Event>| {
-        ctx.run(
+        let mut out = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -437,10 +437,12 @@ fn clicking_internal_hugo_link_in_workbench_viewer_navigates_to_target_document(
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                let _ = app.render_modal_viewers(ctx);
+            |ui| {
+                let _ = app.render_modal_viewers(ui);
             },
-        )
+        );
+        out.textures_delta.clear();
+        out
     };
 
     let output = run_modal(&mut app, Vec::new());
@@ -454,13 +456,10 @@ fn clicking_internal_hugo_link_in_workbench_viewer_navigates_to_target_document(
         .expect("internal link text shape");
     let byte_start = link_shape.galley.text().find("Engineering").unwrap();
     let char_idx = link_shape.galley.text()[..byte_start].chars().count() + 2;
-    let cursor = link_shape
-        .galley
-        .from_ccursor(egui::text::CCursor::new(char_idx));
     let click_pos = link_shape.pos
         + link_shape
             .galley
-            .pos_from_cursor(&cursor)
+            .pos_from_cursor(egui::text::CCursor::new(char_idx))
             .center()
             .to_vec2();
 
