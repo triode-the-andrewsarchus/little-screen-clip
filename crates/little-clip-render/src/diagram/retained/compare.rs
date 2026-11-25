@@ -387,6 +387,41 @@ mod tests {
     }
 
     #[test]
+    fn important_css_priority_reports_an_unsupported_comparison() {
+        let base = svg(r#"<rect class="mark" width="20" height="20" fill="red"/>"#);
+        let cancelled = AtomicBool::new(false);
+        for revision in [
+            r#"<style>.mark { fill: red !important; } .mark { fill: blue !important; }</style>
+                <rect class="mark" width="20" height="20"/>"#,
+            r#"<rect width="20" height="20" style="fill: blue ! /* priority */ IMPORTANT"/>"#,
+        ] {
+            let revised = svg(revision);
+            let error = compare(base.as_bytes(), revised.as_bytes(), &cancelled).err();
+            assert_eq!(
+                error.as_deref(),
+                Some("Comparison SVG: Unsupported SVG CSS !important priority")
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_bidi_attributes_report_an_unsupported_comparison() {
+        let text = r#"<text x="50" y="40" font-family="serif" font-size="16">ABCD</text>"#;
+        let base = svg(text);
+        let cancelled = AtomicBool::new(false);
+        for (attribute, value) in [("direction", "rtl"), ("unicode-bidi", "bidi-override")] {
+            let revised = svg(&text.replace("<text ", &format!(r#"<text {attribute}="{value}" "#)));
+            let error = compare(base.as_bytes(), revised.as_bytes(), &cancelled)
+                .err()
+                .expect("explicit bidi layout requires an unavailable verdict");
+            assert_eq!(
+                error,
+                format!("Comparison SVG: Unsupported SVG attribute {attribute}")
+            );
+        }
+    }
+
+    #[test]
     fn unsupported_effects_have_no_match_verdict_even_for_equal_inputs() {
         for effect in [
             r#"<path d="M0 0h10v10z" style="filter: blur(2px)"/>"#,

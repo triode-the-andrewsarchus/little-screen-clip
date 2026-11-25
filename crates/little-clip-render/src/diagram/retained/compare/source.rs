@@ -222,6 +222,8 @@ fn validate_attributes(
             | "requiredExtensions"
             | "systemLanguage"
             | "font-feature-settings"
+            | "direction"
+            | "unicode-bidi"
             | "text-orientation"
             | "white-space"
             | "inline-size"
@@ -313,6 +315,15 @@ fn validate_declarations(css: &str, ids: &HashMap<&str, Node<'_, '_>>) -> Result
         let declaration = DeclarationTokenizer::from(part)
             .next()
             .ok_or("Unsupported SVG CSS declaration")?;
+        // The retained cascade can pick the wrong important declaration.
+        // Also catch case variants that simplecss does not mark as important.
+        if declaration.important
+            || part
+                .rsplit_once('!')
+                .is_some_and(|(_, suffix)| suffix.trim().eq_ignore_ascii_case("important"))
+        {
+            return Err("Unsupported SVG CSS !important priority".into());
+        }
         validate_declaration(declaration, ids)?;
     }
     Ok(())
