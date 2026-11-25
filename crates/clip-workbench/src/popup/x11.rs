@@ -19,6 +19,7 @@ x11rb::atom_manager! {
     Atoms: AtomsCookie {
         WM_CLASS,
         RESOURCE_MANAGER,
+        _XSETTINGS_SETTINGS,
         STRING,
         _NET_ACTIVE_WINDOW,
         _NET_SUPPORTING_WM_CHECK,
@@ -71,7 +72,7 @@ pub(super) fn discover_placement() -> Result<Placement, String> {
     let focus = query_focus_point(&conn, root, &atoms);
     let monitor =
         select_monitor(&monitors, focus).ok_or_else(|| "No active X11 monitor".to_owned())?;
-    let scale = resolve_scale(&conn, root, &atoms);
+    let scale = resolve_scale(&conn, screen_num, root, &atoms);
     Ok(placement_for_monitor(monitor, scale))
 }
 
@@ -199,13 +200,19 @@ fn query_focus_point(conn: &RustConnection, root: Window, atoms: &Atoms) -> Opti
         .map(|ptr| (i32::from(ptr.root_x), i32::from(ptr.root_y)))
 }
 
-fn resolve_scale(conn: &RustConnection, root: Window, atoms: &Atoms) -> f32 {
-    if let Ok(raw) = std::env::var("WINIT_X11_SCALE_FACTOR")
-        && let Ok(scale) = raw.trim().parse::<f32>()
+fn resolve_scale(conn: &RustConnection, screen: usize, root: Window, atoms: &Atoms) -> f32 {
+    let override_scale = std::env::var("WINIT_X11_SCALE_FACTOR").unwrap_or_default();
+    if let Ok(scale) = override_scale.trim().parse::<f32>()
         && scale.is_finite()
         && scale > 0.0
     {
         return scale.clamp(0.5, 8.0);
+    }
+    // winit uses XSETTINGS before the resource database when mapping the window.
+    if !override_scale.eq_ignore_ascii_case("randr")
+        && let Some(dpi) = query_xsettings_dpi(conn, screen, atoms._XSETTINGS_SETTINGS)
+    {
+        return (dpi / 96.0).clamp(0.5, 8.0);
     }
     if let Ok(cookie) = conn.get_property(
         false,
@@ -221,6 +228,80 @@ fn resolve_scale(conn: &RustConnection, root: Window, atoms: &Atoms) -> f32 {
         return (dpi / 96.0).clamp(0.5, 8.0);
     }
     1.0
+}
+
+fn query_xsettings_dpi(conn: &RustConnection, screen: usize, property: Atom) -> Option<f32> {
+    let selection = conn
+        .intern_atom(true, format!("_XSETTINGS_S{screen}").as_bytes())
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
+    if selection == x11rb::NONE {
+        return None;
+    }
+    let owner = conn
+        .get_selection_owner(selection)
+        .ok()?
+        .reply()
+        .ok()?
+        .owner;
+    if owner == x11rb::NONE {
+        return None;
+    }
+    let reply = conn
+        .get_property(false, owner, property, property, 0, 16 * 1024)
+        .ok()?
+        .reply()
+        .ok()?;
+    if reply.format != 8 || reply.bytes_after != 0 {
+        return None;
+    }
+    parse_xsettings_dpi(&reply.value)
+}
+
+fn parse_xsettings_dpi(data: &[u8]) -> Option<f32> {
+    let little_endian = match data.first()? {
+        b'l' => true,
+        b'B' => false,
+        _ => cfg!(target_endian = "little"),
+    };
+    let word = |bytes| {
+        if little_endian {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        }
+    };
+    let count = word(data.get(8..12)?.try_into().ok()?);
+    let mut settings = data.get(12..)?;
+    for _ in 0..count {
+        let (header, setting) = settings.split_first_chunk::<4>()?;
+        let name_len = if little_endian {
+            u16::from_le_bytes([header[2], header[3]])
+        } else {
+            u16::from_be_bytes([header[2], header[3]])
+        };
+        let name_len = usize::from(name_len);
+        let name = setting.get(..name_len)?;
+        // Names are padded to four bytes and followed by the last-change serial.
+        let value = setting.get(name_len.next_multiple_of(4) + 4..)?;
+        if name == b"Xft/DPI" {
+            let dpi = word(*value.first_chunk()?) as i32;
+            return (header[0] == 0 && dpi > 0).then_some(dpi as f32 / 1024.0);
+        }
+        let value_len = match header[0] {
+            0 => 4,
+            1 => {
+                let len = usize::try_from(word(*value.first_chunk()?)).ok()?;
+                4usize.checked_add(len.checked_next_multiple_of(4)?)?
+            }
+            2 => 8,
+            _ => return None,
+        };
+        settings = value.get(value_len..)?;
+    }
+    None
 }
 
 fn find_workbench_window(
@@ -412,6 +493,15 @@ mod tests {
         assert_eq!(parse_xft_dpi("Xft.dpi: 0"), None);
         assert_eq!(parse_xft_dpi("Xft.dpi: NaN"), None);
         assert_eq!(parse_xft_dpi("Xcursor.size: 24"), None);
+    }
+
+    #[test]
+    fn xsettings_dpi_skips_padded_strings_and_supports_both_byte_orders() {
+        let little = b"l\0\0\0\0\0\0\0\x02\0\0\0\x01\0\x03\0Foo\0\0\0\0\0\x03\0\0\0abc\0\0\0\x07\0Xft/DPI\0\0\0\0\0\0\0\x03\0";
+        let big = b"B\0\0\0\0\0\0\0\0\0\0\x01\0\0\0\x07Xft/DPI\0\0\0\0\0\0\x03\0\0";
+        assert_eq!(parse_xsettings_dpi(little), Some(192.0));
+        assert_eq!(parse_xsettings_dpi(big), Some(192.0));
+        assert_eq!(parse_xsettings_dpi(&little[..little.len() - 1]), None);
     }
 
     #[test]
