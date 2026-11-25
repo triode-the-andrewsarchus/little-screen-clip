@@ -17,6 +17,23 @@ impl FileManager {
             .map_or(0, |location| location.selection.len())
     }
 
+    pub(super) fn comparable_selection(&self) -> Option<[PathBuf; 2]> {
+        if self.selection_count() != 2 || self.archive_context().is_some() {
+            return None;
+        }
+        let paths: [PathBuf; 2] = self.selected_paths().try_into().ok()?;
+        let entries = self.displayed_entries();
+        paths
+            .iter()
+            .all(|path| {
+                !self.search.is_offline(path)
+                    && entries.iter().any(|entry| {
+                        entry.path == *path && entry.regular_file && entry.system.is_none()
+                    })
+            })
+            .then_some(paths)
+    }
+
     pub(super) fn select(&mut self, path: PathBuf) {
         self.select_with(path, false, false);
     }

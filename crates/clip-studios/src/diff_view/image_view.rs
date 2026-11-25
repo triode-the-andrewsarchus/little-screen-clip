@@ -414,7 +414,8 @@ impl DiffViewerState {
         ));
     }
 
-    pub(crate) fn copy_pending(&self) -> bool {
+    /// Returns whether a diff mask copy is awaiting completion.
+    pub fn copy_pending(&self) -> bool {
         self.copy_job.is_some()
     }
 

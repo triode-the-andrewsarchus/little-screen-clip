@@ -681,6 +681,57 @@ mod tests {
     }
 
     #[test]
+    fn compare_context_menu_uses_both_selected_file_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let base = root.path().join("base.svg");
+        let revised = root.path().join("revised.svgz");
+        std::fs::write(&base, b"placeholder").unwrap();
+        std::fs::write(&revised, b"placeholder").unwrap();
+        let mut manager = FileManager::default();
+        manager.pending = None;
+        manager.commit(
+            filesystem::read_directory(root.path(), &std::sync::atomic::AtomicBool::new(false))
+                .unwrap(),
+            Navigation::New,
+        );
+        manager.select(base.clone());
+        assert!(manager.comparable_selection().is_none());
+        manager.select_with(revised.clone(), true, false);
+
+        let ctx = egui::Context::default();
+        let output = list_frame(&mut manager, &ctx, Vec::new());
+        let row = heading_position(&output, "base.svg") + vec2(4.0, 6.0);
+        let click = |manager: &mut FileManager, point, button| {
+            for pressed in [true, false] {
+                list_frame(
+                    manager,
+                    &ctx,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        };
+        click(&mut manager, row, egui::PointerButton::Secondary);
+        let output = list_frame(&mut manager, &ctx, Vec::new());
+        let action = heading_position(&output, "Compare") + vec2(8.0, 7.0);
+        click(&mut manager, action, egui::PointerButton::Primary);
+
+        assert_eq!(
+            manager.compare_files.take(),
+            Some([base.clone(), revised.clone()])
+        );
+        assert_eq!(manager.selected_paths(), [base, revised]);
+        assert!(manager.open_file.is_none());
+    }
+
+    #[test]
     fn brush_family_shows_and_sorts_library_counts() {
         use std::io::Write;
         use std::time::{Duration, Instant};

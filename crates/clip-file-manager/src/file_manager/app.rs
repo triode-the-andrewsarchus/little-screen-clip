@@ -500,6 +500,7 @@ impl FileManagerApp {
                 }
             } else {
                 self.browser.ui(ui, &self.palette);
+                self.open_requested_comparison();
                 if let Some(request) = self.browser.constellation.studio_request.take() {
                     self.browser.stop_previews();
                     self.viewers
@@ -563,6 +564,20 @@ impl FileManagerApp {
             }
         });
     }
+    fn open_requested_comparison(&mut self) {
+        let Some(paths) = self.browser.compare_files.take() else {
+            return;
+        };
+        let guards = self.browser.search_source_guards(&paths);
+        if self.browser.search.has_result_sources() && guards.len() != paths.len() {
+            self.browser.error = Some("Refresh the search before comparing these files.".into());
+            return;
+        }
+        self.browser.containers.retire();
+        self.browser.stop_previews();
+        self.viewers.open_comparison(paths, guards);
+    }
+
     fn preview_keys(&mut self, ctx: &egui::Context) {
         // Handle preview keys before focused controls consume them.
         if ctx.input(|input| input.key_pressed(Key::Escape)) {

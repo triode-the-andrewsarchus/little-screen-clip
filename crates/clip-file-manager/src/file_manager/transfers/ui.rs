@@ -35,6 +35,7 @@ impl FileManager {
 
     pub(in crate::file_manager) fn selection_action(&mut self, action: SelectionAction) {
         match action {
+            SelectionAction::Compare => self.compare_files = self.comparable_selection(),
             SelectionAction::Copy => self.copy_selection(false),
             SelectionAction::Cut => self.copy_selection(true),
             SelectionAction::Paste => self.paste_files(),
@@ -356,6 +357,7 @@ impl Transfers {
 
 #[derive(Clone, Copy)]
 pub(in crate::file_manager) enum SelectionAction {
+    Compare,
     Copy,
     Cut,
     Paste,
@@ -368,7 +370,11 @@ pub(in crate::file_manager) fn selection_buttons(
     selected: bool,
     can_paste: bool,
     can_mutate: bool,
+    can_compare: bool,
 ) -> Option<SelectionAction> {
+    if can_compare && ui.button("Compare").clicked() {
+        return Some(SelectionAction::Compare);
+    }
     let mut action = None;
     for (label, enabled, candidate) in [
         ("Copy", selected, SelectionAction::Copy),
