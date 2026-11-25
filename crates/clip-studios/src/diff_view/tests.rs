@@ -243,6 +243,13 @@ fn image_diff_state_uses_generated_fixture_images() {
     let mut state = DiffViewerState::new(left, right, DiffDisplayMode::SideBySide);
     state.wait_for_completion();
 
+    assert!(state.raster_preview.is_some());
+    assert!(state.image_result.is_none());
+
+    state.image_mode = ImageDiffViewMode::Overlay;
+    state.ensure_raster_overlay();
+    state.wait_for_completion();
+
     let result = state.image_result.as_ref().unwrap();
     assert_eq!((result.width, result.height), (3, 2));
     assert_eq!(result.diff_count, 1);
@@ -381,7 +388,7 @@ fn text_diff_tab_and_c_recompute_the_selected_mode() {
 }
 
 #[test]
-fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
+fn raster_swap_reuses_previews_and_the_on_demand_overlay() {
     fn send_shortcut(state: &mut DiffViewerState, key: egui::Key) {
         let ctx = egui::Context::default();
         let mut close = false;
@@ -397,7 +404,10 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
                 }],
                 ..Default::default()
             },
-            |ctx| state.handle_shortcuts(ctx, &mut close),
+            |ctx| {
+                state.handle_shortcuts(ctx, &mut close);
+                state.tick(ctx);
+            },
         );
         assert!(!close);
     }
@@ -422,30 +432,62 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
         image_target("Right", [0, 0, 255, 255]),
         DiffDisplayMode::SideBySide,
     );
+    let preview_started = state.compute_start_time;
+    state.swap_operands(); // A swap while the original previews are still in flight.
+    assert_eq!(state.compute_start_time, preview_started);
     state.wait_for_completion();
-    let initial_result = state.image_result.as_ref().expect("image diff result");
-    let result_address = std::sync::Arc::as_ptr(initial_result);
-    let compute_started = state.compute_start_time;
+    assert!(state.image_result.is_none());
+    assert_eq!(state.lhs.label(), "Right");
+    assert_eq!(state.raster_order, [1, 0]);
 
-    for (key, expected_mode) in [
-        (egui::Key::Tab, ImageDiffViewMode::Overlay),
-        (egui::Key::C, ImageDiffViewMode::MaskOnly),
-        (egui::Key::Tab, ImageDiffViewMode::Split),
-        (egui::Key::C, ImageDiffViewMode::ThreeUp),
+    send_shortcut(&mut state, egui::Key::Tab);
+    assert_eq!(state.image_mode, ImageDiffViewMode::Blink);
+    send_shortcut(&mut state, egui::Key::S);
+    assert_eq!(state.lhs.label(), "Left");
+    assert_eq!(state.raster_order, [0, 1]);
+    assert_eq!(state.compute_start_time, preview_started);
+    assert!(!state.is_computing());
+    assert!(state.image_result.is_none());
+
+    send_shortcut(&mut state, egui::Key::C);
+    assert_eq!(state.image_mode, ImageDiffViewMode::Overlay);
+    assert!(
+        state.is_computing(),
+        "Overlay should schedule the perceptual diff"
+    );
+    let compute_started = state.compute_start_time;
+    state.swap_operands();
+    assert_eq!(state.raster_order, [1, 0]);
+    assert_eq!(state.compute_start_time, compute_started);
+    state.wait_for_completion();
+    let result = state.image_result.clone().expect("image diff result");
+    let forward = state.raster_overlay[0].as_ref().unwrap().pixels[0];
+    let reversed = state.raster_overlay[1].as_ref().unwrap().pixels[0];
+    assert_ne!(forward.r(), forward.g());
+    assert_eq!(
+        reversed,
+        Color32::from_rgb(forward.g(), forward.r(), forward.b())
+    );
+
+    for (key, mode) in [
+        (egui::Key::Tab, ImageDiffViewMode::Slider),
+        (egui::Key::C, ImageDiffViewMode::SideBySide),
+        (egui::Key::Tab, ImageDiffViewMode::Blink),
+        (egui::Key::C, ImageDiffViewMode::Overlay),
     ] {
         send_shortcut(&mut state, key);
-        assert_eq!(state.image_mode, expected_mode);
-        assert!(
-            !state.is_computing(),
-            "presentation change must not compute"
-        );
-        assert!(state.compute_job.is_none());
+        assert_eq!(state.image_mode, mode);
+        if mode == ImageDiffViewMode::Blink {
+            send_shortcut(&mut state, egui::Key::S);
+            assert_eq!(state.lhs.label(), "Left");
+            assert_eq!(state.raster_order, [0, 1]);
+        }
+        assert!(!state.is_computing());
         assert_eq!(state.compute_start_time, compute_started);
-        assert_eq!(
-            std::sync::Arc::as_ptr(state.image_result.as_ref().unwrap()),
-            result_address,
-            "presentation change must retain the computed image result"
-        );
+        assert!(std::sync::Arc::ptr_eq(
+            state.image_result.as_ref().unwrap(),
+            &result
+        ));
     }
 }
 

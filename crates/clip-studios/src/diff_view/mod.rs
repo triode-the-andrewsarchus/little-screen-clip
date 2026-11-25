@@ -1,11 +1,12 @@
-//! Text and image differential inspection workbench view.
+//! Shared text, raster, and retained SVG comparison views.
 //!
-//! Provides side-by-side, unified, and inline word diffs for text, and 3-up/overlay/mask
-//! pixel diffs for bitmap images.
+//! Graphical comparisons share side-by-side, blink, overlay, and slider views.
 
+mod graphical;
 mod handoff;
 mod image_view;
 mod studio;
+mod svg_view;
 mod text;
 
 use crate::ansi::ansi_to_layout_job;
@@ -13,6 +14,7 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use egui::{self, Color32, CornerRadius, Stroke, Vec2};
+use graphical::GraphicalView;
 use little_clip_core::HandSide;
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::jobs::task::Task;
@@ -76,7 +78,18 @@ impl DiffHandoffTarget {
                         content, ext_hint, ..
                     } => (content.as_bytes(), ext_hint.as_deref().unwrap_or("txt")),
                     DiffTarget::Image { bytes, mime, .. } => {
-                        (bytes, if mime.contains("png") { "png" } else { "jpg" })
+                        let extension = if svg_view::is_svg(&target) {
+                            if bytes.starts_with(&[0x1f, 0x8b]) {
+                                "svgz"
+                            } else {
+                                "svg"
+                            }
+                        } else if mime.contains("png") {
+                            "png"
+                        } else {
+                            "jpg"
+                        };
+                        (bytes, extension)
                     }
                     _ => unreachable!(),
                 };
@@ -100,37 +113,23 @@ impl DiffHandoffTarget {
     }
 }
 
-/// Layout visualization mode for comparing bitmap images.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Presentation mode for SVG and raster comparisons.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ImageDiffViewMode {
-    /// 3-Up view: `[Base] [Comparison] [Diff Mask]`.
-    ThreeUp, // [ base ] [ comparison ] [ diff ] (matching ODiff demo table)
-    /// Dimmed base image overlayed with glowing diff pixels.
-    Overlay, // [ dimmed base + glowing diff pixels ]
-    /// High-contrast black mask highlighting pixel differences.
-    MaskOnly, // [ black mask + glowing diff pixels ]
-    /// Split view: `[Base] [Diff Mask]`.
-    Split, // [ base ] [ diff ]
+    #[default]
+    SideBySide,
+    Blink,
+    Overlay,
+    Slider,
 }
 
 impl ImageDiffViewMode {
-    /// Human-readable display label.
-    pub fn label(&self) -> &'static str {
+    fn next(self) -> Self {
         match self {
-            ImageDiffViewMode::ThreeUp => "3-Up (Base | Comp | Diff)",
-            ImageDiffViewMode::Overlay => "Overlay",
-            ImageDiffViewMode::MaskOnly => "Diff Mask",
-            ImageDiffViewMode::Split => "Split (Base | Diff)",
-        }
-    }
-
-    /// SVG icon for mode tab.
-    pub fn icon(&self) -> Icon {
-        match self {
-            ImageDiffViewMode::ThreeUp => Icon::Grid,
-            ImageDiffViewMode::Overlay => Icon::Layers,
-            ImageDiffViewMode::MaskOnly => Icon::Eye,
-            ImageDiffViewMode::Split => Icon::Diff,
+            Self::SideBySide => Self::Blink,
+            Self::Blink => Self::Overlay,
+            Self::Overlay => Self::Slider,
+            Self::Slider => Self::SideBySide,
         }
     }
 }
@@ -145,14 +144,17 @@ pub struct DiffViewerState {
     pub layout_job: egui::text::LayoutJob,
     // Image diff state
     pub image_result: Option<std::sync::Arc<ImageDiffResult>>,
+    svg: Option<little_clip_render::diagram::retained::compare::Comparison>,
+    raster_preview: Option<image_view::RasterPreview>,
+    raster_overlay: [Option<egui::ColorImage>; 2],
+    // The worker and textures keep the original order, including during an in-flight swap.
+    raster_order: [usize; 2],
+    overlay_error: Option<String>,
+    graphical: GraphicalView,
+    is_svg: bool,
     copy_job: Option<crate::desktop_ipc::PendingRequest>,
     pub image_options: ImageDiffOptions,
     pub image_mode: ImageDiffViewMode,
-    pub base_texture: Option<egui::TextureHandle>,
-    pub comp_texture: Option<egui::TextureHandle>,
-    pub mask_texture: Option<egui::TextureHandle>,
-    pub overlay_texture: Option<egui::TextureHandle>,
-    pub textures_loaded: bool,
     pub decode_error: Option<String>,
     pub status_toast: Option<(crate::ui_ext::StatusMessage, f64)>, // (text, timestamp)
     compute_job: Option<Task<Result<DiffComputation, String>>>,
@@ -171,14 +173,15 @@ impl Drop for DiffViewerState {
 }
 
 enum DiffComputation {
-    Image(ImageDiffResult),
+    RasterPreview(image_view::RasterPreview),
+    Overlay(ImageDiffResult, [egui::ColorImage; 2]),
+    Svg(little_clip_render::diagram::retained::compare::Comparison),
     Text(DiffResult, egui::text::LayoutJob),
 }
 
-fn spawn_image_diff_worker(
+fn spawn_graphical_diff_worker(
     lhs: &std::sync::Arc<DiffTarget>,
     rhs: &std::sync::Arc<DiffTarget>,
-    options: ImageDiffOptions,
     jobs: &BackgroundJobs,
 ) -> Result<Task<Result<DiffComputation, String>>, String> {
     if let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) {
@@ -199,18 +202,29 @@ fn spawn_image_diff_worker(
 
         let lhs = std::sync::Arc::clone(lhs);
         let rhs = std::sync::Arc::clone(rhs);
-        let job = Task::start_unbounded(jobs, move |_| {
+        let job = Task::start_unbounded(jobs, move |cancelled| {
             let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) else {
                 return Err("Failed to obtain image bytes from comparison targets".to_string());
             };
-            little_clip_ops::image_diff::compare_image_bytes_with_mime(
+            match (svg_view::is_svg(&lhs), svg_view::is_svg(&rhs)) {
+                (true, true) => {
+                    return little_clip_render::diagram::retained::compare::compare(
+                        b1, b2, cancelled,
+                    )
+                    .map(DiffComputation::Svg);
+                }
+                (true, false) | (false, true) => {
+                    return Err("SVG comparison requires two SVG or SVGZ operands.".into());
+                }
+                (false, false) => {}
+            }
+            little_clip_ops::image_diff::decode_aspect_matched_images(
                 b1,
                 lhs.image_mime(),
                 b2,
                 rhs.image_mime(),
-                &options,
             )
-            .map(DiffComputation::Image)
+            .map(|pair| DiffComputation::RasterPreview(image_view::RasterPreview::new(pair)))
             .map_err(|e| e.to_string())
         });
 
@@ -252,9 +266,10 @@ impl DiffViewerState {
         let rhs = std::sync::Arc::new(rhs);
         let is_img = lhs.is_image() && rhs.is_image();
         let image_options = ImageDiffOptions::default();
+        let is_svg = is_img && (svg_view::is_svg(&lhs) || svg_view::is_svg(&rhs));
 
         let (compute_job, decode_error) = if is_img {
-            match spawn_image_diff_worker(&lhs, &rhs, image_options.clone(), jobs) {
+            match spawn_graphical_diff_worker(&lhs, &rhs, jobs) {
                 Ok(job) => (Some(job), None),
                 Err(error) => (None, Some(error)),
             }
@@ -285,14 +300,16 @@ impl DiffViewerState {
             result,
             layout_job,
             image_result: None,
+            svg: None,
+            raster_preview: None,
+            raster_overlay: [None, None],
+            raster_order: [0, 1],
+            overlay_error: None,
+            graphical: GraphicalView::default(),
+            is_svg,
             copy_job: None,
             image_options,
-            image_mode: ImageDiffViewMode::ThreeUp,
-            base_texture: None,
-            comp_texture: None,
-            mask_texture: None,
-            overlay_texture: None,
-            textures_loaded: false,
+            image_mode: ImageDiffViewMode::default(),
             decode_error,
             status_toast: None,
             compute_job,
@@ -319,6 +336,11 @@ impl DiffViewerState {
         self.lhs.is_image() && self.rhs.is_image()
     }
 
+    /// Returns whether this graphical comparison has an SVG operand.
+    pub fn is_svg(&self) -> bool {
+        self.is_svg
+    }
+
     pub fn is_computing(&self) -> bool {
         self.compute_job.is_some()
     }
@@ -332,9 +354,15 @@ impl DiffViewerState {
             .map_err(|error| format!("Diff computation failed: {error}"))
             .and_then(|result| result);
         match outcome {
-            Ok(DiffComputation::Image(result)) => {
+            Ok(DiffComputation::RasterPreview(preview)) => {
+                self.raster_preview = Some(preview);
+            }
+            Ok(DiffComputation::Overlay(result, overlay)) => {
                 self.image_result = Some(std::sync::Arc::new(result));
-                self.textures_loaded = false;
+                self.raster_overlay = overlay.map(Some);
+            }
+            Ok(DiffComputation::Svg(result)) => {
+                self.svg = Some(result);
                 self.decode_error = None;
             }
             Ok(DiffComputation::Text(result, layout_job)) => {
@@ -342,12 +370,8 @@ impl DiffViewerState {
                 self.layout_job = layout_job;
                 self.decode_error = None;
             }
-            Err(error) => {
-                self.decode_error = Some(error);
-                if self.is_image() {
-                    self.image_result = None;
-                }
-            }
+            Err(error) if self.raster_preview.is_some() => self.overlay_error = Some(error),
+            Err(error) => self.decode_error = Some(error),
         }
     }
 
@@ -355,19 +379,20 @@ impl DiffViewerState {
         // Retire the old read before starting its replacement. Task owns cancellation.
         self.compute_job = None;
         if self.is_image() {
-            match spawn_image_diff_worker(
-                &self.lhs,
-                &self.rhs,
-                self.image_options.clone(),
-                BackgroundJobs::global(),
-            ) {
+            self.svg = None;
+            self.image_result = None;
+            self.raster_preview = None;
+            self.raster_overlay = [None, None];
+            self.raster_order = [0, 1];
+            self.overlay_error = None;
+            self.graphical.clear_textures();
+            match spawn_graphical_diff_worker(&self.lhs, &self.rhs, BackgroundJobs::global()) {
                 Ok(job) => {
                     self.compute_job = Some(job);
                     self.decode_error = None;
                 }
                 Err(error) => self.decode_error = Some(error),
             }
-            self.textures_loaded = false;
         } else {
             let width = if self.mode == DiffDisplayMode::SideBySide {
                 150
@@ -387,12 +412,7 @@ impl DiffViewerState {
 
     pub fn toggle_mode(&mut self) {
         if self.is_image() {
-            self.image_mode = match self.image_mode {
-                ImageDiffViewMode::ThreeUp => ImageDiffViewMode::Overlay,
-                ImageDiffViewMode::Overlay => ImageDiffViewMode::MaskOnly,
-                ImageDiffViewMode::MaskOnly => ImageDiffViewMode::Split,
-                ImageDiffViewMode::Split => ImageDiffViewMode::ThreeUp,
-            };
+            self.image_mode = self.image_mode.next();
         } else {
             self.mode = self.mode.toggled();
             self.recompute();
@@ -401,7 +421,11 @@ impl DiffViewerState {
 
     pub fn swap_operands(&mut self) {
         std::mem::swap(&mut self.lhs, &mut self.rhs);
-        self.recompute();
+        if self.is_image() && !self.is_svg() {
+            self.raster_order.swap(0, 1);
+        } else {
+            self.recompute();
+        }
     }
 }
 

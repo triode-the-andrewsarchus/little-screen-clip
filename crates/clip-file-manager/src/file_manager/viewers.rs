@@ -10,6 +10,7 @@ use crate::{
     splat_view::SplatViewerState,
     spreadsheet_view::SpreadsheetViewerState,
 };
+use clip_studios::diff_view::DiffViewerState;
 use egui::{Context, Ui};
 use little_clip_core::{AppConfig, BackgroundJobs, JobError, JobTicket, palette::AppPalette};
 use std::{
@@ -19,6 +20,7 @@ use std::{
 };
 
 mod chrome;
+mod comparison;
 #[cfg(test)]
 mod escape;
 mod gallery;
@@ -27,6 +29,7 @@ mod video;
 pub(super) mod video_audio;
 
 enum Loaded {
+    Comparison([little_clip_ops::diff::DiffTarget; 2]),
     Archive(super::container_preview::archive::Viewer),
     System(Box<super::system::Document>),
     Font(super::font_strip::viewer::Viewer),
@@ -58,6 +61,7 @@ enum Loaded {
     External,
 }
 enum ViewerSession {
+    Comparison(Box<DiffViewerState>),
     Archive(super::container_preview::archive::Viewer),
     System(super::system::Inspector),
     Font(super::font_strip::viewer::Viewer),
@@ -227,6 +231,29 @@ impl Viewers {
         self.document_start = None;
         let source = path.clone();
         let config = self.config.clone();
+        let guard = self.source_guard.clone();
+        self.start_loading(path, system, move |worker| {
+            super::search::SourceGuard::read_checked(guard.as_ref(), worker, || {
+                if system {
+                    super::system::collect(&source, worker)
+                        .map(|document| (Loaded::System(Box::new(document)), None))
+                } else {
+                    load_file_session(&source, &config, position, worker)
+                }
+            })
+        });
+    }
+
+    fn start_loading(
+        &mut self,
+        path: PathBuf,
+        system: bool,
+        load: impl FnOnce(
+            &std::sync::atomic::AtomicBool,
+        ) -> Result<(Loaded, Option<FileSource>), String>
+        + Send
+        + 'static,
+    ) {
         let executor = if system {
             super::system::jobs()
         } else {
@@ -234,17 +261,7 @@ impl Viewers {
         };
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker = cancelled.clone();
-        let guard = self.source_guard.clone();
-        let (ticket, receiver) = executor.submit(Duration::from_secs(120), move || {
-            super::search::SourceGuard::read_checked(guard.as_ref(), &worker, || {
-                if system {
-                    super::system::collect(&source, &worker)
-                        .map(|document| (Loaded::System(Box::new(document)), None))
-                } else {
-                    load_file_session(&source, &config, position, &worker)
-                }
-            })
-        });
+        let (ticket, receiver) = executor.submit(Duration::from_secs(120), move || load(&worker));
         self.loading = Some(Loading {
             response_deadline: system
                 .then(|| std::time::Instant::now() + super::system::RESPONSE_DEADLINE),
@@ -401,6 +418,7 @@ impl Viewers {
     pub(super) fn tick(&mut self, ctx: &Context) {
         self.poll(ctx);
         match self.session.as_mut() {
+            Some(ViewerSession::Comparison(state)) => state.tick(ctx),
             Some(ViewerSession::Archive(state)) => state.tick(ctx),
             Some(ViewerSession::System(state)) => state.poll(ctx),
             Some(ViewerSession::Font(state)) => state.poll(ctx),
@@ -920,6 +938,13 @@ fn session(
     check: crate::file_source::ReadCheck,
 ) -> ViewerSession {
     match loaded {
+        Loaded::Comparison([base, revised]) => {
+            ViewerSession::Comparison(Box::new(DiffViewerState::new(
+                base,
+                revised,
+                little_clip_ops::diff::DiffDisplayMode::SideBySide,
+            )))
+        }
         Loaded::Archive(mut state) => {
             state.set_check(check);
             ViewerSession::Archive(state)
@@ -1023,6 +1048,7 @@ fn render(
         ViewerSession::Mail(state) => state.ui(ui, close, palette),
         ViewerSession::Font(state) => state.ui(ui, close, palette),
         ViewerSession::System(state) => state.ui(ui, close, palette),
+        ViewerSession::Comparison(state) => state.render_ui(ui, &ctx, palette, close),
         ViewerSession::Image(state) => state.render_ui(ui, &ctx, palette, close),
         ViewerSession::Text(state) => state.ui(ui, palette, close),
         ViewerSession::Audio(state) => state.render_ui(ui, &ctx, palette, close),

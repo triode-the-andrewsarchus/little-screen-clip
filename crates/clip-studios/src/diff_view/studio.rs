@@ -1,4 +1,5 @@
 use super::*;
+use little_clip_core::palette::AppPalette;
 
 impl DiffViewerState {
     pub fn tick(&mut self, ctx: &egui::Context) {
@@ -6,6 +7,7 @@ impl DiffViewerState {
         self.poll_handoff(now, ctx);
         self.poll_copy_job(now);
         self.poll_computation();
+        self.ensure_raster_overlay();
         if self.is_computing() || self.copy_pending() {
             ctx.request_repaint_after(std::time::Duration::from_millis(40));
         }
@@ -43,132 +45,29 @@ impl DiffViewerState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
-        palette: &little_clip_core::palette::AppPalette,
+        palette: &AppPalette,
         close_requested: &mut bool,
     ) {
         let now = ctx.input(|i| i.time);
 
         self.handle_shortcuts(ctx, close_requested);
 
-        let is_img = self.is_image();
-
-        if is_img {
-            self.ensure_image_textures(ctx);
+        if self.is_image() && self.image_mode == ImageDiffViewMode::Blink {
+            // Reserve Space for the held preview while this view owns it.
+            ctx.input_mut(|input| input.consume_key(input.modifiers, egui::Key::Space));
         }
 
-        // Copy shortcut
-        let copy_requested = ctx.input(|i| {
-            i.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || i.raw.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || (i.key_pressed(egui::Key::C)
-                    && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
-        }) || ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
-        });
+        self.handle_copy_shortcut(ctx, now);
 
-        if copy_requested {
-            if is_img {
-                self.copy_image_diff_to_clipboard();
-            } else {
-                ctx.copy_text(strip_ansi_codes(&self.result.raw_ansi));
-                self.status_toast = Some(("Diff text copied to clipboard!".into(), now));
-            }
-        }
-
-        let accent = crate::hex_to_c32(&palette.harmonies.base);
-        let success_color = crate::hex_to_c32(&palette.diff_add);
-        let del_color = crate::hex_to_c32(&palette.diff_del);
-
-        let hatch = EscapeHatch::new("Meld", "meld", "Open comparison in external Meld tool")
-            .with_icon(Icon::Diff);
-
-        let mut shell = if is_img {
-            let mut s = StudioShell::new("Picture Diff Comparison", Icon::Diff, palette, close_requested)
-                .with_escape_hatch(hatch)
-                .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Mask");
-
-            if self.is_computing() {
-                let elapsed = self.compute_start_time.elapsed().as_secs_f32();
-                s = s.with_badge(format!("Comparing... ({:.1}s)", elapsed), Some(accent));
-            } else if let Some(res) = &self.image_result {
-                if res.is_identical {
-                    s = s.with_badge("0 diff pixels • Identical", Some(success_color));
-                } else {
-                    s = s.with_badge(
-                        format!(
-                            "{} diff pixels ({:.2}%)",
-                            res.diff_count, res.diff_percentage
-                        ),
-                        Some(del_color),
-                    );
-                }
-                s = s.with_badge(format!("{} × {}", res.width, res.height), None);
-                s = s.with_footer_readout(format!(
-                    "Tolerance: {:.2} • {} diff pixels",
-                    self.image_options.threshold, res.diff_count
-                ));
-            }
-            s
-        } else {
-            let lines_count = self.result.raw_ansi.lines().count();
-            let mut s = StudioShell::new("Diff Comparison", Icon::Diff, palette, close_requested)
-                .with_badge(self.result.engine_name.to_string(), Some(accent))
-                .with_escape_hatch(hatch)
-                .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Diff");
-
-            if self.result.is_identical {
-                s = s.with_badge("Identical", Some(success_color));
-            } else {
-                s = s.with_badge(format!("{} lines in diff", lines_count), None);
-            }
-            s = s.with_footer_readout(format!(
-                "LHS: {} • RHS: {}",
-                self.lhs.label(),
-                self.rhs.label()
-            ));
-            s
-        };
+        let mut shell = self.comparison_shell(palette, close_requested);
 
         egui::Frame::NONE
             .fill(crate::hex_to_c32(&palette.colors.canvas))
             .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 // Zone 1: Header
-                let clicked_hatch = shell.render_header(ui, |ui| {
-                    let swap_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
-                        Some(Icon::Swap),
-                        "Swap [S]",
-                        palette,
-                    );
-                    if ui
-                        .add(swap_btn)
-                        .on_hover_text("Swap operands (S)")
-                        .clicked()
-                    {
-                        self.swap_operands();
-                    }
-
-                    let copy_label = if is_img {
-                        "Copy Diff Mask"
-                    } else {
-                        "Copy Diff"
-                    };
-                    let copy_btn = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
-                        Some(Icon::Copy),
-                        copy_label,
-                        palette,
-                    );
-                    if ui.add(copy_btn).clicked() {
-                        if is_img {
-                            self.copy_image_diff_to_clipboard();
-                        } else {
-                            ui.ctx().copy_text(strip_ansi_codes(&self.result.raw_ansi));
-                            self.status_toast =
-                                Some(("Diff text copied to clipboard!".into(), now));
-                        }
-                    }
-                });
+                let clicked_hatch =
+                    shell.render_header(ui, |ui| self.render_header_actions(ui, palette, now));
 
                 if clicked_hatch.is_some() {
                     self.trigger_escape_hatch(now);
@@ -181,8 +80,14 @@ impl DiffViewerState {
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 2: Mode Toolbar
-                if is_img {
-                    self.render_image_toolbar(ui, palette);
+                if self.is_image() {
+                    ui.horizontal_wrapped(|ui| {
+                        graphical::toolbar(ui, &mut self.image_mode, palette);
+                        if !self.is_svg() && self.image_mode == ImageDiffViewMode::Overlay {
+                            ui.separator();
+                            self.render_image_tolerance(ui, palette);
+                        }
+                    });
                 } else {
                     self.render_text_toolbar(ui, palette);
                 }
@@ -198,8 +103,8 @@ impl DiffViewerState {
                     Vec2::new(avail.x, viewport_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        if is_img {
-                            self.render_image_viewport(ui, palette);
+                        if self.is_image() {
+                            self.render_graphical_viewport(ui, palette);
                         } else {
                             self.render_text_viewport(ui, palette);
                         }
@@ -218,11 +123,238 @@ impl DiffViewerState {
         }
     }
 
-    pub(super) fn render_computing_ui(
+    fn render_header_actions(&mut self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
+        let swap = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+            Some(Icon::Swap),
+            "Swap [S]",
+            palette,
+        );
+        if ui.add(swap).on_hover_text("Swap operands (S)").clicked() {
+            self.swap_operands();
+        }
+
+        let (label, enabled, unavailable) = if self.is_svg() {
+            (
+                "Copy Summary",
+                self.svg.is_some(),
+                "SVG summary unavailable",
+            )
+        } else if self.is_image() {
+            (
+                "Copy Diff Mask",
+                self.image_result.is_some(),
+                "Open Overlay to compute the diff mask",
+            )
+        } else {
+            ("Copy Diff", true, "")
+        };
+        let copy = clip_ui::buttons::ButtonRole::Secondary.button_with_icon(
+            Some(Icon::Copy),
+            label,
+            palette,
+        );
+        if ui
+            .add_enabled(enabled, copy)
+            .on_disabled_hover_text(unavailable)
+            .clicked()
+        {
+            self.copy_current_diff(ui.ctx(), now);
+        }
+    }
+
+    fn comparison_shell<'a>(
         &self,
-        ui: &mut egui::Ui,
-        palette: &little_clip_core::palette::AppPalette,
-    ) {
+        palette: &'a AppPalette,
+        close_requested: &'a mut bool,
+    ) -> StudioShell<'a> {
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        let added = crate::hex_to_c32(&palette.diff_add);
+        let removed = crate::hex_to_c32(&palette.diff_del);
+        let (title, hints) = if self.is_svg() {
+            (
+                "SVG Comparison",
+                "Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Summary",
+            )
+        } else if self.is_image() {
+            (
+                "Picture Diff Comparison",
+                "Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Mask",
+            )
+        } else {
+            (
+                "Diff Comparison",
+                "Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Diff",
+            )
+        };
+        let hatch = EscapeHatch::new("Meld", "meld", "Open comparison in external Meld tool")
+            .with_icon(Icon::Diff);
+        let shell = StudioShell::new(title, Icon::Diff, palette, close_requested)
+            .with_escape_hatch(hatch)
+            .with_footer_hints(hints);
+        if self.is_svg() {
+            let (status, color) = match &self.svg {
+                _ if self.is_computing() => ("Comparing SVG…".into(), accent),
+                Some(result) if result.matches() => (result.summary(), added),
+                Some(result) => (result.summary(), removed),
+                None => ("Comparison unavailable".into(), removed),
+            };
+            return shell
+                .with_badge(status, Some(color))
+                .with_footer_readout(format!(
+                    "Geometry tolerance: {} SVG user units",
+                    little_clip_render::diagram::retained::compare::USER_TOLERANCE
+                ));
+        }
+        if self.is_image() {
+            return self.bitmap_shell(shell, [accent, added, removed]);
+        }
+        let status = if self.result.is_identical {
+            ("Identical".into(), Some(added))
+        } else {
+            (
+                format!("{} lines in diff", self.result.raw_ansi.lines().count()),
+                None,
+            )
+        };
+        shell
+            .with_badge(self.result.engine_name.clone(), Some(accent))
+            .with_badge(status.0, status.1)
+            .with_footer_readout(format!(
+                "LHS: {} • RHS: {}",
+                self.lhs.label(),
+                self.rhs.label()
+            ))
+    }
+
+    fn bitmap_shell<'a>(
+        &self,
+        shell: StudioShell<'a>,
+        [accent, added, removed]: [Color32; 3],
+    ) -> StudioShell<'a> {
+        let Some(preview) = &self.raster_preview else {
+            return if self.is_computing() {
+                shell.with_badge("Loading previews…", Some(accent))
+            } else {
+                shell
+            };
+        };
+        let (width, height) = preview.canvas_size();
+        let size = if preview.dimensions[0] != preview.dimensions[1] {
+            format!("Aligned to {width} × {height}")
+        } else {
+            format!("{width} × {height}")
+        };
+        let shell = shell.with_badge(size, None);
+        let Some(result) = self
+            .image_result
+            .as_ref()
+            .filter(|_| self.image_mode == ImageDiffViewMode::Overlay)
+        else {
+            return shell;
+        };
+        let (status, color) = if result.is_identical {
+            ("0 diff pixels • Identical".into(), added)
+        } else {
+            (
+                format!(
+                    "{} diff pixels ({:.2}%)",
+                    result.diff_count, result.diff_percentage
+                ),
+                removed,
+            )
+        };
+        shell
+            .with_badge(status, Some(color))
+            .with_footer_readout(format!(
+                "Tolerance: {:.2} • {} diff pixels",
+                self.image_options.threshold, result.diff_count
+            ))
+    }
+
+    fn render_graphical_viewport(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        self.ensure_raster_overlay();
+        let overlay =
+            self.image_mode == ImageDiffViewMode::Overlay && self.raster_preview.is_some();
+        if self.is_computing() && (self.raster_preview.is_none() || overlay) {
+            self.render_computing_ui(ui, palette);
+            return;
+        }
+        let overlay_error = self.overlay_error.as_ref().filter(|_| overlay);
+        if let Some(error) = self.decode_error.as_ref().or(overlay_error) {
+            ui.centered_and_justified(|ui| ui.label(error));
+            return;
+        }
+        let sizes = if let Some(svg) = &self.svg {
+            self.graphical.prepare_svg(ui.ctx(), svg);
+            [svg.base.viewport, svg.revised.viewport].map(|[w, h]| egui::vec2(w, h))
+        } else if let Some(raster) = &mut self.raster_preview {
+            if let Some(images) = raster.images.take() {
+                self.graphical.prepare(ui.ctx(), images);
+            }
+            let first = self.raster_order[0];
+            if overlay && let Some(image) = self.raster_overlay[first].take() {
+                self.graphical.prepare_overlay(ui.ctx(), first, image);
+            }
+            let (width, height) = raster.canvas_size();
+            [egui::vec2(width as f32, height as f32); 2]
+        } else {
+            return;
+        };
+        self.graphical.render(
+            ui,
+            palette,
+            self.image_mode,
+            graphical::Pair {
+                labels: [self.lhs.label(), self.rhs.label()],
+                sizes,
+                svg: self.svg.as_ref(),
+                order: self.raster_order,
+            },
+        );
+    }
+
+    fn handle_copy_shortcut(&mut self, ctx: &egui::Context, now: f64) {
+        let copy_requested = ctx.input(|i| {
+            i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                || i.raw.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                || (i.key_pressed(egui::Key::C)
+                    && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
+        }) || ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
+        });
+
+        if copy_requested {
+            self.copy_current_diff(ctx, now);
+        }
+    }
+
+    fn copy_current_diff(&mut self, ctx: &egui::Context, now: f64) {
+        if self.is_svg() {
+            if let Some(result) = &self.svg {
+                ctx.copy_text(format!(
+                    "{} → {}\n{}",
+                    self.lhs.label(),
+                    self.rhs.label(),
+                    result.summary()
+                ));
+                self.status_toast = Some(("SVG comparison summary copied".into(), now));
+            }
+        } else if self.is_image() {
+            self.copy_image_diff_to_clipboard();
+        } else {
+            ctx.copy_text(strip_ansi_codes(&self.result.raw_ansi));
+            self.status_toast = Some(("Diff text copied to clipboard!".into(), now));
+        }
+    }
+
+    pub(super) fn render_computing_ui(&self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if self.is_image() && !self.is_svg() && self.raster_preview.is_none() {
+            ui.centered_and_justified(|ui| {
+                ui.spinner();
+            });
+            return;
+        }
         let elapsed = self.compute_start_time.elapsed().as_secs_f32();
         let progress = (elapsed * 0.75).fract();
         let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
@@ -231,21 +363,26 @@ impl DiffViewerState {
         let f_low = crate::hex_to_c32(&palette.colors.text_muted);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
 
-        let heading = if self.is_image() {
-            "Comparing Images..."
+        let (heading, engine, detail) = if self.is_svg() {
+            (
+                "Comparing SVG…",
+                "Retained vector geometry",
+                "source geometry and paint",
+            )
+        } else if self.raster_preview.is_some() {
+            (
+                "Comparing Images...",
+                "Parallel Perceptual Diff",
+                "multithreaded SIMD comparison",
+            )
         } else {
-            "Computing Diff..."
+            (
+                "Computing Diff...",
+                "Syntax-Highlighted Diff",
+                "background syntax diff engine",
+            )
         };
-        let bar_text = if self.is_image() {
-            "Parallel Perceptual Diff"
-        } else {
-            "Syntax-Highlighted Diff"
-        };
-        let readout = if self.is_image() {
-            format!("{:.2}s elapsed • multithreaded SIMD comparison", elapsed)
-        } else {
-            format!("{:.2}s elapsed • background syntax diff engine", elapsed)
-        };
+        let readout = format!("{elapsed:.2}s elapsed • {detail}");
 
         ui.centered_and_justified(|ui| {
             egui::Frame::NONE
@@ -272,7 +409,7 @@ impl DiffViewerState {
                             egui::ProgressBar::new(progress)
                                 .animate(true)
                                 .desired_width(300.0)
-                                .text(bar_text),
+                                .text(engine),
                         );
 
                         ui.add_space(crate::ui_ext::SPACE_MD);

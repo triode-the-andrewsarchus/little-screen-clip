@@ -39,6 +39,7 @@ impl Viewers {
     }
     pub(super) fn writes_pending(&self) -> bool {
         match &self.session {
+            Some(ViewerSession::Comparison(state)) => state.copy_pending(),
             Some(ViewerSession::Image(state)) => state.file_write_pending(),
             Some(ViewerSession::Audio(state)) => state.file_write_pending(),
             Some(ViewerSession::Text(state)) => state.busy(),
@@ -134,6 +135,10 @@ impl Viewers {
         close: &mut bool,
         copies: &mut super::super::preview_copy::Copies,
     ) {
+        if matches!(self.session, Some(ViewerSession::Comparison(_))) {
+            self.render_session(ui, palette, close, copies);
+            return;
+        }
         let source = self.editor_source().or_else(|| self.source.clone());
         let archive_label = self.archive_location.as_ref().and_then(|(root, label)| {
             self.path
@@ -237,7 +242,8 @@ fn relocate(viewer: &mut ViewerSession, old: &Path, path: &Path, source: FileSou
         }
         ViewerSession::Scene(state) => state.relocate_file(path.into()),
         ViewerSession::Video(state) => state.relocate_file(path.into(), source),
-        ViewerSession::System(_)
+        ViewerSession::Comparison(_)
+        | ViewerSession::System(_)
         | ViewerSession::Font(_)
         | ViewerSession::Notebook(_)
         | ViewerSession::Geography(_)

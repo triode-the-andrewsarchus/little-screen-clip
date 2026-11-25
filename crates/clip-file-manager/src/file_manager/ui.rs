@@ -1656,6 +1656,7 @@ struct ListActions {
     mount_binary: Option<(PathBuf, bool)>,
     unmount_binary: Option<PathBuf>,
     search_similar: Option<PathBuf>,
+    can_compare: bool,
 }
 
 impl ListActions {
@@ -1665,6 +1666,7 @@ impl ListActions {
             metadata_only: browser.search.has_offline_results(),
             context: browser.search_preview_context(),
             copy_only: browser.archive_context().is_some(),
+            can_compare: browser.comparable_selection().is_some(),
             ..Self::default()
         }
     }
@@ -1679,7 +1681,13 @@ impl ListActions {
         }
         focus.context_menu(|ui| {
             self.naming = super::edit_ui::naming_buttons(ui, can_edit, None);
-            self.files = super::transfers::ui::selection_buttons(ui, selected, can_edit, can_edit);
+            self.files = super::transfers::ui::selection_buttons(
+                ui,
+                selected,
+                can_edit,
+                can_edit,
+                self.can_compare,
+            );
             self.select_all = ui.button("Select all").clicked();
             self.open_trash = ui.button("Open Trash…").clicked();
             if self.naming.is_some() || self.files.is_some() || self.select_all || self.open_trash {
@@ -1756,7 +1764,8 @@ impl ListActions {
         if entry.directory {
             self.transfer = drop_files(ui, response, &entry.path);
         }
-        self.row_context_menu(response, entry, marked, can_edit, selection_count);
+        let rename = (!marked || selection_count == 1).then_some(entry.path.as_path());
+        self.row_context_menu(response, entry, can_edit, rename, marked && self.can_compare);
         self.row_activation(ui, response, entry);
     }
 
@@ -1794,9 +1803,9 @@ impl ListActions {
         &mut self,
         response: &egui::Response,
         entry: &super::filesystem::Entry,
-        marked: bool,
         can_edit: bool,
-        selection_count: usize,
+        rename: Option<&std::path::Path>,
+        can_compare: bool,
     ) {
         response.context_menu(|ui| {
             if let Some(path) = inspection_button(ui, entry) {
@@ -1869,7 +1878,6 @@ impl ListActions {
                 ui.close();
             }
             ui.separator();
-            let rename = (!marked || selection_count == 1).then_some(entry.path.as_path());
             self.naming =
                 super::edit_ui::naming_buttons(ui, can_edit && entry.system.is_none(), rename);
             self.files = super::transfers::ui::selection_buttons(
@@ -1877,6 +1885,7 @@ impl ListActions {
                 true,
                 can_edit,
                 can_edit && entry.system.is_none(),
+                can_compare,
             );
             if self.naming.is_some() || self.files.is_some() {
                 ui.close();

@@ -1,400 +1,149 @@
 use super::*;
+use little_clip_core::palette::AppPalette;
+use little_clip_ops::image_diff::downsample_rgba;
+
+pub(super) struct RasterPreview {
+    pub dimensions: [(u32, u32); 2],
+    pub images: Option<[egui::ColorImage; 2]>,
+}
+
+impl RasterPreview {
+    pub fn new(pair: [image::RgbaImage; 2]) -> Self {
+        let dimensions = pair.each_ref().map(image::RgbaImage::dimensions);
+        let images = pair.map(|image| {
+            let (width, height, pixels) =
+                downsample_rgba(image.width(), image.height(), image.as_raw(), 2048);
+            egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &pixels)
+        });
+        Self {
+            dimensions,
+            images: Some(images),
+        }
+    }
+
+    pub fn canvas_size(&self) -> (u32, u32) {
+        self.dimensions[0].max(self.dimensions[1])
+    }
+}
+
+fn overlay_images(result: &ImageDiffResult) -> [egui::ColorImage; 2] {
+    let sample = |rgba: &[u8]| downsample_rgba(result.width, result.height, rgba, 2048);
+    let (width, height, base) = sample(&result.base_rgba);
+    let (_, _, revised) = sample(&result.comp_rgba);
+    let (_, _, mask) = sample(&result.mask_rgba);
+    let pixels: Vec<_> = base
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(revised.as_chunks::<4>().0)
+        .zip(mask.as_chunks::<4>().0)
+        .map(|((base, revised), marker)| overlay_pixel(*base, *revised, *marker))
+        .collect();
+    // Reversing the operands exchanges the red and green ink. The diff mask
+    // and statistics are symmetric on the aligned grid.
+    let reversed = pixels
+        .iter()
+        .map(|pixel| Color32::from_rgb(pixel.g(), pixel.r(), pixel.b()))
+        .collect();
+    let size = [width as usize, height as usize];
+    [pixels, reversed].map(|pixels| egui::ColorImage::new(size, pixels))
+}
+
+fn overlay_pixel(base: [u8; 4], revised: [u8; 4], marker: [u8; 4]) -> Color32 {
+    // Stack the two images' ink in red and green against a dim neutral image.
+    let ink = |[r, g, b, a]: [u8; 4]| {
+        let light = (77 * u32::from(r) + 150 * u32::from(g) + 29 * u32::from(b)) / 256;
+        ((255 - light) * u32::from(a) / 255) as u8
+    };
+    let (a, b) = (ink(base), ink(revised));
+    let gray = (255 - u16::from(a).midpoint(u16::from(b)) as u8) / 2;
+    if marker == [0, 0, 0, 255] {
+        Color32::from_gray(gray)
+    } else if a.abs_diff(b) < 8 {
+        // A color-only change can have equal luminance in both operands.
+        Color32::from_rgb(200, 200, gray)
+    } else {
+        let red = if a > b {
+            160_u8.saturating_add(a.abs_diff(b))
+        } else {
+            gray
+        };
+        let green = if b > a {
+            160_u8.saturating_add(a.abs_diff(b))
+        } else {
+            gray
+        };
+        Color32::from_rgb(red, green, gray)
+    }
+}
 
 impl DiffViewerState {
-    pub(super) fn ensure_image_textures(&mut self, ctx: &egui::Context) {
-        if self.textures_loaded || self.is_computing() {
+    pub(super) fn ensure_raster_overlay(&mut self) {
+        if self.image_mode != ImageDiffViewMode::Overlay {
+            self.overlay_error = None;
             return;
         }
-
-        if let Some(res) = &self.image_result {
-            let max_tex_dim = 2048;
-            let (w, h, base_rgba) = little_clip_ops::image_diff::downsample_rgba(
-                res.width,
-                res.height,
-                &res.base_rgba,
-                max_tex_dim,
-            );
-            let (_, _, comp_rgba) = little_clip_ops::image_diff::downsample_rgba(
-                res.width,
-                res.height,
-                &res.comp_rgba,
-                max_tex_dim,
-            );
-            let (_, _, mask_rgba) = little_clip_ops::image_diff::downsample_rgba(
-                res.width,
-                res.height,
-                &res.mask_rgba,
-                max_tex_dim,
-            );
-            let (_, _, overlay_rgba) = little_clip_ops::image_diff::downsample_rgba(
-                res.width,
-                res.height,
-                &res.overlay_rgba,
-                max_tex_dim,
-            );
-
-            let size = [w as usize, h as usize];
-            if size[0] > 0 && size[1] > 0 {
-                let base_img = egui::ColorImage::from_rgba_unmultiplied(size, &base_rgba);
-                self.base_texture =
-                    Some(ctx.load_texture("diff-base", base_img, egui::TextureOptions::LINEAR));
-
-                let comp_img = egui::ColorImage::from_rgba_unmultiplied(size, &comp_rgba);
-                self.comp_texture =
-                    Some(ctx.load_texture("diff-comp", comp_img, egui::TextureOptions::LINEAR));
-
-                let mask_img = egui::ColorImage::from_rgba_unmultiplied(size, &mask_rgba);
-                self.mask_texture =
-                    Some(ctx.load_texture("diff-mask", mask_img, egui::TextureOptions::NEAREST));
-
-                let overlay_img = egui::ColorImage::from_rgba_unmultiplied(size, &overlay_rgba);
-                self.overlay_texture = Some(ctx.load_texture(
-                    "diff-overlay",
-                    overlay_img,
-                    egui::TextureOptions::LINEAR,
-                ));
-            }
-            self.textures_loaded = true;
+        if self.raster_preview.is_none()
+            || self.image_result.is_some()
+            || self.overlay_error.is_some()
+            || self.is_computing()
+        {
+            return;
         }
+        let [lhs, rhs] = self
+            .raster_order
+            .map(|index| [&self.lhs, &self.rhs][index].clone());
+        let options = self.image_options.clone();
+        self.compute_start_time = std::time::Instant::now();
+        self.compute_job = Some(Task::start_unbounded(BackgroundJobs::global(), move |_| {
+            let result = little_clip_ops::image_diff::compare_aligned_image_bytes(
+                lhs.image_bytes().ok_or("Missing base image")?,
+                lhs.image_mime(),
+                rhs.image_bytes().ok_or("Missing comparison image")?,
+                rhs.image_mime(),
+                &options,
+            )
+            .map_err(|error| error.to_string())?
+            .0;
+            let overlay = overlay_images(&result);
+            Ok(DiffComputation::Overlay(result, overlay))
+        }));
     }
 
-    pub(super) fn render_image_toolbar(
-        &mut self,
-        ui: &mut egui::Ui,
-        palette: &little_clip_core::palette::AppPalette,
-    ) {
-        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
-        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
-        let f_low = crate::hex_to_c32(&palette.colors.text_muted);
-
-        egui::Frame::NONE
-            .fill(b_low)
-            .inner_margin(egui::Margin::from(
-                egui::vec2(crate::ui_ext::SPACE_MD,
-                crate::ui_ext::CONTROL_GROUP_INSET_Y),
-            ))
-            .stroke(Stroke::new(1.0_f32, b_med))
-            .corner_radius(CornerRadius::from(crate::ui_ext::CONTROL_CORNER_RADIUS))
-            .show(ui, |ui| {
-                ui.set_min_height(CONTROL_HEIGHT);
-                ui.horizontal(|ui| {
-                    let tabs: Vec<_> = [
-                        ImageDiffViewMode::ThreeUp,
-                        ImageDiffViewMode::Overlay,
-                        ImageDiffViewMode::MaskOnly,
-                        ImageDiffViewMode::Split,
-                    ].iter().map(|&mode| crate::ui_tabs::Tab::new(mode, mode.label()).icon(mode.icon())).collect();
-                    if let Some(mode) = crate::ui_tabs::TabBar::new("image_diff_views", self.image_mode, &tabs, palette).show(ui) {
-                        self.image_mode = mode;
-                    }
-
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-                    ui.separator();
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-
-                    ui.label(
-                        egui::RichText::new("Tolerance:")
-                            .size(BODY_FONT_SIZE)
-                            .color(f_low),
-                    );
-                    let slider = egui::Slider::new(&mut self.image_options.threshold, 0.00..=0.50)
-                        .step_by(0.01)
-                        .show_value(true);
-                    if ui.add(slider).on_hover_text("Allowable perceptual difference threshold (0.00 = strict, 0.50 = loose)").changed() {
-                        self.recompute();
-                    }
-
-                    for (val, label) in &[(0.05f32, "0.05"), (0.10f32, "0.10"), (0.20f32, "0.20")] {
-                        let is_cur = (self.image_options.threshold - val).abs() < 0.005;
-                        let t_btn = crate::mode_tab_button(*label, is_cur, palette);
-                        if ui.add(t_btn).clicked() && !is_cur {
-                            self.image_options.threshold = *val;
-                            self.recompute();
-                        }
-                    }
-                });
-            });
-    }
-
-    pub(super) fn render_image_viewport(
-        &self,
-        ui: &mut egui::Ui,
-        palette: &little_clip_core::palette::AppPalette,
-    ) {
-        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
-        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
-        let f_high = crate::hex_to_c32(&palette.colors.text_primary);
-        let f_med = crate::hex_to_c32(&palette.colors.text_secondary);
-        let del_color = crate::hex_to_c32(&palette.diff_del);
-        let del_label_color = crate::ui_ext::contrast_text_c32_on(
-            ui.visuals().panel_fill,
-            ui.visuals().panel_fill,
-            Some(del_color),
-            palette,
-        );
-
-        if self.is_computing() {
-            self.render_computing_ui(ui, palette);
-        } else if let Some(res) = &self.image_result {
-            let aspect = (res.width as f32) / (res.height as f32).max(1.0);
-
-            match self.image_mode {
-                ImageDiffViewMode::ThreeUp => {
-                    let avail_w = ui.available_width() - 32.0;
-                    let col_w = ((avail_w - 24.0) / 3.0).max(180.0);
-                    let avail_h = (ui.available_height() - 40.0).max(200.0);
-
-                    let mut img_w = col_w;
-                    let mut img_h = img_w / aspect;
-                    if img_h > avail_h {
-                        img_h = avail_h;
-                        img_w = img_h * aspect;
-                    }
-
-                    ui.horizontal(|ui| {
-                        ui.add_space(crate::ui_ext::SPACE_MD);
-
-                        // Column 1: Base
-                        self.render_image_column(
-                            ui,
-                            palette,
-                            "base",
-                            self.lhs.label(),
-                            f_high,
-                            self.base_texture.as_ref(),
-                            img_w,
-                            img_h,
-                        );
-
-                        ui.add_space(crate::ui_ext::SPACE_MD);
-
-                        // Column 2: Comparison
-                        self.render_image_column(
-                            ui,
-                            palette,
-                            "comparison",
-                            self.rhs.label(),
-                            f_high,
-                            self.comp_texture.as_ref(),
-                            img_w,
-                            img_h,
-                        );
-
-                        ui.add_space(crate::ui_ext::SPACE_MD);
-
-                        // Column 3: Diff
-                        let diff_sub = format!(
-                            "{} diff pixels ({:.2}%)",
-                            res.diff_count, res.diff_percentage
-                        );
-                        self.render_image_column(
-                            ui,
-                            palette,
-                            "diff",
-                            &diff_sub,
-                            del_color,
-                            self.mask_texture.as_ref(),
-                            img_w,
-                            img_h,
-                        );
-                    });
-                }
-                ImageDiffViewMode::Overlay => {
-                    let avail_w = ui.available_width() - 32.0;
-                    let avail_h = (ui.available_height() - 40.0).max(200.0);
-
-                    let mut img_w = avail_w;
-                    let mut img_h = img_w / aspect;
-                    if img_h > avail_h {
-                        img_h = avail_h;
-                        img_w = img_h * aspect;
-                    }
-
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("Diff Overlay (Dimmed Base + Glowing Difference)")
-                                .strong()
-                                .color(f_high),
-                        );
-                        ui.add_space(crate::ui_ext::SPACE_XS);
-
-                        if let Some(tex) = &self.overlay_texture {
-                            egui::Frame::NONE
-                                .fill(b_low)
-                                .corner_radius(CornerRadius::from(
-                                    crate::ui_ext::PANEL_CORNER_RADIUS,
-                                ))
-                                .stroke(Stroke::new(1.0_f32, b_med))
-                                .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_XS))
-                                .show(ui, |ui| {
-                                    ui.image(egui::load::SizedTexture::new(
-                                        tex.id(),
-                                        Vec2::new(img_w, img_h),
-                                    ));
-                                });
-                        }
-                    });
-                }
-                ImageDiffViewMode::MaskOnly => {
-                    let avail_w = ui.available_width() - 32.0;
-                    let avail_h = (ui.available_height() - 40.0).max(200.0);
-
-                    let mut img_w = avail_w;
-                    let mut img_h = img_w / aspect;
-                    if img_h > avail_h {
-                        img_h = avail_h;
-                        img_w = img_h * aspect;
-                    }
-
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("Diff Mask (Dark Canvas + Glowing Difference)")
-                                .strong()
-                                .color(del_label_color),
-                        );
-                        ui.add_space(crate::ui_ext::SPACE_XS);
-
-                        if let Some(tex) = &self.mask_texture {
-                            egui::Frame::NONE
-                                .fill(b_low)
-                                .corner_radius(CornerRadius::from(
-                                    crate::ui_ext::PANEL_CORNER_RADIUS,
-                                ))
-                                .stroke(Stroke::new(1.0_f32, b_med))
-                                .inner_margin(egui::Margin::from(crate::ui_ext::SPACE_XS))
-                                .show(ui, |ui| {
-                                    ui.image(egui::load::SizedTexture::new(
-                                        tex.id(),
-                                        Vec2::new(img_w, img_h),
-                                    ));
-                                });
-                        }
-                    });
-                }
-                ImageDiffViewMode::Split => {
-                    let avail_w = ui.available_width() - 32.0;
-                    let col_w = ((avail_w - 16.0) / 2.0).max(240.0);
-                    let avail_h = (ui.available_height() - 40.0).max(200.0);
-
-                    let mut img_w = col_w;
-                    let mut img_h = img_w / aspect;
-                    if img_h > avail_h {
-                        img_h = avail_h;
-                        img_w = img_h * aspect;
-                    }
-
-                    ui.horizontal(|ui| {
-                        ui.add_space(crate::ui_ext::SPACE_MD);
-
-                        self.render_image_column(
-                            ui,
-                            palette,
-                            "base",
-                            self.lhs.label(),
-                            f_high,
-                            self.base_texture.as_ref(),
-                            img_w,
-                            img_h,
-                        );
-
-                        ui.add_space(16.0);
-
-                        let diff_sub = format!(
-                            "{} diff pixels ({:.2}%)",
-                            res.diff_count, res.diff_percentage
-                        );
-                        self.render_image_column(
-                            ui,
-                            palette,
-                            "diff",
-                            &diff_sub,
-                            del_color,
-                            self.mask_texture.as_ref(),
-                            img_w,
-                            img_h,
-                        );
-                    });
-                }
+    pub(super) fn render_image_tolerance(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        ui.label("Tolerance");
+        let slider = egui::Slider::new(&mut self.image_options.threshold, 0.0..=0.5).step_by(0.01);
+        let changed = ui
+            .add(slider)
+            .on_hover_text("Allowable perceptual difference")
+            .changed();
+        let mut preset = None;
+        for value in [0.05_f32, 0.10, 0.20] {
+            let is_current = (self.image_options.threshold - value).abs() < 0.005;
+            if ui
+                .add(crate::mode_tab_button(
+                    &format!("{value:.2}"),
+                    is_current,
+                    palette,
+                ))
+                .clicked()
+                && !is_current
+            {
+                preset = Some(value);
             }
-        } else {
-            ui.centered_and_justified(|ui| {
-                ui.vertical_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("Unable to Compare Images")
-                            .color(del_label_color)
-                            .heading(),
-                    );
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-                    let err_text = self
-                        .decode_error
-                        .as_deref()
-                        .unwrap_or("Unable to decode one or both images for comparison");
-                    ui.label(
-                        egui::RichText::new(err_text)
-                            .color(f_med)
-                            .size(BODY_FONT_SIZE),
-                    );
-                });
-            });
         }
-    }
-
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Comparison painter receives both inputs, comparison controls and host UI state together"
-    )]
-    pub(super) fn render_image_column(
-        &self,
-        ui: &mut egui::Ui,
-        palette: &little_clip_core::palette::AppPalette,
-        title: &str,
-        subtitle: &str,
-        title_color: Color32,
-        texture: Option<&egui::TextureHandle>,
-        w: f32,
-        h: f32,
-    ) {
-        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
-        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
-        let f_low = crate::hex_to_c32(&palette.colors.text_muted);
-        let surface = ui.visuals().panel_fill;
-
-        ui.vertical(|ui| {
-            ui.set_width(w);
-
-            // Column Header
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(title).strong().color(
-                    crate::ui_ext::contrast_text_c32_on(
-                        surface,
-                        surface,
-                        Some(title_color),
-                        palette,
-                    ),
-                ));
-                ui.label(
-                    egui::RichText::new(format!("• {}", subtitle))
-                        .size(BODY_FONT_SIZE)
-                        .color(f_low),
-                );
-            });
-
-            ui.add_space(crate::ui_ext::SPACE_XS);
-
-            // Image Frame Box
-            egui::Frame::NONE
-                .fill(b_low)
-                .corner_radius(CornerRadius::from(crate::ui_ext::PANEL_CORNER_RADIUS))
-                .stroke(Stroke::new(1.0_f32, b_med))
-                .inner_margin(egui::Margin::same(2))
-                .show(ui, |ui| {
-                    if let Some(tex) = texture {
-                        ui.image(egui::load::SizedTexture::new(tex.id(), Vec2::new(w, h)));
-                    } else {
-                        ui.allocate_space(Vec2::new(w, h));
-                    }
-                });
-        });
+        if let Some(value) = preset {
+            self.image_options.threshold = value;
+        }
+        if changed || preset.is_some() {
+            if self.raster_preview.is_some() {
+                self.compute_job = None;
+            }
+            self.image_result = None;
+            self.raster_overlay = [None, None];
+            self.overlay_error = None;
+            self.graphical.clear_overlay();
+        }
     }
 
     pub(super) fn copy_image_diff_to_clipboard(&mut self) {
@@ -414,7 +163,8 @@ impl DiffViewerState {
         ));
     }
 
-    pub(crate) fn copy_pending(&self) -> bool {
+    /// Returns whether a diff mask copy is awaiting completion.
+    pub fn copy_pending(&self) -> bool {
         self.copy_job.is_some()
     }
 

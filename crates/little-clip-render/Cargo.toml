@@ -27,6 +27,8 @@ rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 roxmltree.workspace = true
+simplecss = "0.2.2"
+svgtypes = "0.16.2"
 pikchr-rs = "=0.1.0"
 svgbob = "0.7.6"
 merman = { version = "=0.10.0", features = ["system-clock", "system-timezone"] }

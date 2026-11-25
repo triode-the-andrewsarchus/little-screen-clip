@@ -21,6 +21,9 @@ pub enum ImageDiffError {
     /// SVG rendering failed (e.g. rsvg-convert missing or invalid SVG markup).
     #[error("Failed to render SVG vector data: {0}. Ensure 'rsvg-convert' (librsvg) is installed.")]
     SvgRenderError(String),
+    /// The comparison canvas cannot align unequal aspect ratios.
+    #[error("Image aspect ratios do not match ({} × {} vs {} × {})", .0.0, .0.1, .1.0, .1.1)]
+    AspectRatioMismatch((u32, u32), (u32, u32)),
 }
 
 /// Configuration options for perceptual image comparison.
@@ -444,7 +447,7 @@ fn load_rgba_with_mime(bytes: &[u8], mime: Option<&str>) -> Result<RgbaImage, Im
     if let Ok(dyn_img) =
         little_clip_core::item::image_reader(bytes, mime).and_then(|reader| reader.decode())
     {
-        return Ok(dyn_img.to_rgba8());
+        return Ok(dyn_img.into_rgba8());
     }
 
     if let Ok(source) = little_clip_core::svg_image::document(bytes) {
@@ -489,20 +492,92 @@ pub fn compare_image_bytes_with_mime(
     comp_mime: Option<&str>,
     options: &ImageDiffOptions,
 ) -> Result<ImageDiffResult, ImageDiffError> {
+    let [base, comp] = decode_pair(base_bytes, base_mime, comp_bytes, comp_mime)?;
+    Ok(compare_rgba_images(&base, &comp, options))
+}
+
+/// Compares same-ratio images on the larger decoded pixel grid.
+///
+/// Returns the result and the original decoded dimensions in operand order.
+///
+/// # Errors
+///
+/// Returns an error if either image cannot be decoded or the aspect ratios differ.
+pub fn compare_aligned_image_bytes(
+    base_bytes: &[u8],
+    base_mime: Option<&str>,
+    comp_bytes: &[u8],
+    comp_mime: Option<&str>,
+    options: &ImageDiffOptions,
+) -> Result<(ImageDiffResult, [(u32, u32); 2]), ImageDiffError> {
+    let [mut base, mut comp] =
+        decode_aspect_matched_images(base_bytes, base_mime, comp_bytes, comp_mime)?;
+    let [a, b] = [base.dimensions(), comp.dimensions()];
+    match a.0.cmp(&b.0) {
+        std::cmp::Ordering::Less => base = upscale(base, b),
+        std::cmp::Ordering::Greater => comp = upscale(comp, a),
+        std::cmp::Ordering::Equal => {}
+    }
+    Ok((compare_rgba_images(&base, &comp, options), [a, b]))
+}
+
+/// Decodes a pair with equal aspect ratios for display on a common canvas.
+///
+/// # Errors
+///
+/// Returns an error if either image cannot be decoded or the aspect ratios differ.
+pub fn decode_aspect_matched_images(
+    base_bytes: &[u8],
+    base_mime: Option<&str>,
+    comp_bytes: &[u8],
+    comp_mime: Option<&str>,
+) -> Result<[RgbaImage; 2], ImageDiffError> {
+    let [base, comp] = decode_pair(base_bytes, base_mime, comp_bytes, comp_mime)?;
+    let (a, b) = (base.dimensions(), comp.dimensions());
+    if u64::from(a.0) * u64::from(b.1) != u64::from(b.0) * u64::from(a.1) {
+        return Err(ImageDiffError::AspectRatioMismatch(a, b));
+    }
+    Ok([base, comp])
+}
+
+fn decode_pair(
+    base_bytes: &[u8],
+    base_mime: Option<&str>,
+    comp_bytes: &[u8],
+    comp_mime: Option<&str>,
+) -> Result<[RgbaImage; 2], ImageDiffError> {
     if base_bytes.is_empty() || comp_bytes.is_empty() {
         return Err(ImageDiffError::EmptyData);
     }
+    std::thread::scope(|s| {
+        let base = s.spawn(|| load_rgba_with_mime(base_bytes, base_mime));
+        let comp = load_rgba_with_mime(comp_bytes, comp_mime);
+        Ok([base.join().unwrap()?, comp?])
+    })
+}
 
-    // Decode base and comp concurrently across threads
-    let (base_res, comp_res) = std::thread::scope(|s| {
-        let h1 = s.spawn(|| load_rgba_with_mime(base_bytes, base_mime));
-        let h2 = s.spawn(|| load_rgba_with_mime(comp_bytes, comp_mime));
-        (h1.join().unwrap(), h2.join().unwrap())
-    });
-
-    let base = base_res?;
-    let comp = comp_res?;
-    Ok(compare_rgba_images(&base, &comp, options))
+fn upscale(mut image: RgbaImage, (width, height): (u32, u32)) -> RgbaImage {
+    // Interpolate in premultiplied alpha so hidden RGB cannot bleed into edges.
+    let has_alpha = image.pixels().any(|p| p[3] < 255);
+    if has_alpha {
+        for pixel in image.pixels_mut() {
+            let alpha = u32::from(pixel[3]);
+            for channel in &mut pixel.0[..3] {
+                *channel = ((u32::from(*channel) * alpha + 127) / 255) as u8;
+            }
+        }
+    }
+    let mut resized =
+        image::imageops::resize(&image, width, height, image::imageops::FilterType::Triangle);
+    if has_alpha {
+        for pixel in resized.pixels_mut().filter(|p| p[3] != 0) {
+            let alpha = u32::from(pixel[3]);
+            for channel in &mut pixel.0[..3] {
+                *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
+            }
+        }
+    }
+    resized
 }
 
 /// Downsamples an RGBA buffer so neither width nor height exceeds `max_dim`.
@@ -543,6 +618,53 @@ pub fn downsample_rgba(width: u32, height: u32, rgba: &[u8], max_dim: u32) -> (u
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    fn aligned_compare_upscales_either_smaller_operand_across_formats() {
+        let encode = |(w, h), format| {
+            let image = image::RgbImage::from_pixel(w, h, image::Rgb([255, 255, 255]));
+            let mut output = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image)
+                .write_to(&mut output, format)
+                .unwrap();
+            output.into_inner()
+        };
+        let png = encode((32, 24), image::ImageFormat::Png);
+        let jpeg = encode((8, 6), image::ImageFormat::Jpeg);
+        for (a, b, sizes) in [
+            (
+                (&jpeg, "image/jpeg"),
+                (&png, "image/png"),
+                [(8, 6), (32, 24)],
+            ),
+            (
+                (&png, "image/png"),
+                (&jpeg, "image/jpeg"),
+                [(32, 24), (8, 6)],
+            ),
+        ] {
+            let (result, dimensions) = compare_aligned_image_bytes(
+                a.0,
+                Some(a.1),
+                b.0,
+                Some(b.1),
+                &ImageDiffOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(dimensions, sizes);
+            assert_eq!((result.width, result.height), (32, 24));
+            assert!(
+                result.is_identical,
+                "the entire common canvas should be white"
+            );
+        }
+
+        let square = encode((12, 12), image::ImageFormat::Png);
+        assert!(matches!(
+            compare_aligned_image_bytes(&png, None, &square, None, &ImageDiffOptions::default()),
+            Err(ImageDiffError::AspectRatioMismatch((32, 24), (12, 12)))
+        ));
+    }
 
     #[test]
     fn test_identical_images() {

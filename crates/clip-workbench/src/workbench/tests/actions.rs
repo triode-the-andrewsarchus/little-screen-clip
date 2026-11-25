@@ -66,36 +66,22 @@ fn palette_text_diff_opens_and_escape_returns_to_palette() {
         .expect("right slot") = Some(ClipItem::from_text("right text\n"));
     app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
     let original_slots = app.selected_slots.clone();
-    app.search_query = "diff".to_owned();
-    let diff_action = ready_palette_actions(&mut app)
-        .iter()
-        .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "diff"))
-        .expect("built-in text Diff action");
-    app.selected_action_index = diff_action;
-
-    app.execute_current_action(&egui::Context::default());
+    let ctx = egui::Context::default();
+    open_palette_diff(&mut app, &ctx);
 
     assert!(matches!(app.viewer, Some(ViewerSession::Diff(_))));
     assert_eq!(app.view, WorkbenchView::Palette);
 
-    let ctx = egui::Context::default();
-    let _ = clip_ui::test_support::run_frame(
+    render_compare_frame(
+        &mut app,
         &ctx,
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(900.0, 700.0),
-            )),
-            events: vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-            ..Default::default()
+        egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
         },
-        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(app.viewer.is_none());
@@ -138,14 +124,8 @@ fn palette_image_diff_opens_and_escape_returns_to_palette() {
         .expect("right slot") = Some(png_item([0, 0, 255, 255], "right.png"));
     app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
     let original_slots = app.selected_slots.clone();
-    app.search_query = "diff".to_owned();
-    let diff_action = ready_palette_actions(&mut app)
-        .iter()
-        .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "diff"))
-        .expect("built-in image Diff action");
-    app.selected_action_index = diff_action;
-
-    app.execute_current_action(&egui::Context::default());
+    let ctx = egui::Context::default();
+    open_palette_diff(&mut app, &ctx);
 
     assert!(matches!(
         app.viewer,
@@ -153,24 +133,29 @@ fn palette_image_diff_opens_and_escape_returns_to_palette() {
     ));
     assert_eq!(app.view, WorkbenchView::Palette);
 
-    let ctx = egui::Context::default();
-    let _ = clip_ui::test_support::run_frame(
+    let state = await_workbench_diff(&mut app, &ctx);
+    assert!(!state.is_svg());
+    assert!(state.image_result.is_none());
+    let Some(ViewerSession::Diff(state)) = &mut app.viewer else {
+        unreachable!()
+    };
+    state.image_mode = clip_studios::diff_view::ImageDiffViewMode::Overlay;
+    state.tick(&ctx);
+    let state = await_workbench_diff(&mut app, &ctx);
+    let result = state.image_result.as_ref().expect("bitmap diff result");
+    assert_eq!(result.diff_count, 4);
+    assert!(!result.is_identical);
+
+    render_compare_frame(
+        &mut app,
         &ctx,
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(900.0, 700.0),
-            )),
-            events: vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: None,
-                pressed: true,
-                repeat: false,
-                modifiers: egui::Modifiers::NONE,
-            }],
-            ..Default::default()
+        egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
         },
-        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
     );
 
     assert!(app.viewer.is_none());
@@ -834,4 +819,83 @@ fn palette_mouse_click_dispatches_the_rendered_operation_or_recipe() {
             unexpected => panic!("unexpected action: {unexpected:?}"),
         }
     }
+}
+
+fn open_palette_diff(app: &mut WorkbenchApp, ctx: &egui::Context) {
+    app.search_query = "diff".into();
+    app.selected_action_index = ready_palette_actions(app)
+        .iter()
+        .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "diff"))
+        .expect("built-in Diff action");
+    app.execute_current_action(ctx);
+}
+
+fn render_compare_frame(
+    app: &mut WorkbenchApp,
+    ctx: &egui::Context,
+    event: egui::Event,
+) -> egui::FullOutput {
+    clip_ui::test_support::run_frame(
+        ctx,
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            events: vec![event],
+            ..Default::default()
+        },
+        |ctx| assert!(ctx.root_ui(|ui| app.render_modal_viewers(ui))),
+    )
+}
+
+fn await_workbench_diff<'a>(
+    app: &'a mut WorkbenchApp,
+    ctx: &egui::Context,
+) -> &'a clip_studios::diff_view::DiffViewerState {
+    let Some(ViewerSession::Diff(state)) = &mut app.viewer else {
+        panic!("expected the Compare viewer");
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while state.is_computing() {
+        state.tick(ctx);
+        assert!(std::time::Instant::now() < deadline, "comparison timed out");
+        std::thread::yield_now();
+    }
+    state
+}
+
+#[test]
+fn palette_compare_reports_subpixel_svgz_changes_in_the_vector_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.svgz");
+    let revised = dir.path().join("revised.svg");
+    std::fs::write(
+        &base,
+        include_bytes!("../../../../little-clip-core/tests/fixtures/panels.svgz"),
+    )
+    .unwrap();
+    std::fs::write(
+        &revised,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><path d="M.125 0h32v32H.125Z" fill="#1e78d2"/><rect x="32" width="32" height="32" fill="#b43c28"/></svg>"##,
+    )
+    .unwrap();
+
+    let mut app = test_workbench_app(None, VecDeque::new());
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .unwrap() = Some(ClipItem::from_files(vec![base, revised]));
+    app.selected_slots = vec![SlotId::LeftHand];
+    let ctx = egui::Context::default();
+    open_palette_diff(&mut app, &ctx);
+    let state = await_workbench_diff(&mut app, &ctx);
+    assert!(state.is_svg());
+    assert!(state.image_result.is_none());
+    assert_eq!(state.decode_error, None);
+
+    let output = render_compare_frame(&mut app, &ctx, egui::Event::Copy);
+    assert!(
+        clip_ui::test_support::copied_text(&output.platform_output)
+            .contains("1 changed · 0 removed · 0 added")
+    );
 }
