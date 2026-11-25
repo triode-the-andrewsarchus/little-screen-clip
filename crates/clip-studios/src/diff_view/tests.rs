@@ -428,10 +428,10 @@ fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
     let compute_started = state.compute_start_time;
 
     for (key, expected_mode) in [
-        (egui::Key::Tab, ImageDiffViewMode::Overlay),
-        (egui::Key::C, ImageDiffViewMode::MaskOnly),
-        (egui::Key::Tab, ImageDiffViewMode::Split),
-        (egui::Key::C, ImageDiffViewMode::ThreeUp),
+        (egui::Key::Tab, ImageDiffViewMode::Blink),
+        (egui::Key::C, ImageDiffViewMode::Overlay),
+        (egui::Key::Tab, ImageDiffViewMode::Slider),
+        (egui::Key::C, ImageDiffViewMode::SideBySide),
     ] {
         send_shortcut(&mut state, key);
         assert_eq!(state.image_mode, expected_mode);

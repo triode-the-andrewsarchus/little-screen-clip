@@ -50,12 +50,13 @@ impl DiffViewerState {
 
         self.handle_shortcuts(ctx, close_requested);
 
+        if self.is_image() && self.image_mode == ImageDiffViewMode::Blink {
+            // Reserve Space for the held preview while this view owns it.
+            ctx.input_mut(|input| input.consume_key(input.modifiers, egui::Key::Space));
+        }
+
         let is_svg = self.is_svg();
         let is_img = self.is_image() && !is_svg;
-
-        if is_img {
-            self.ensure_image_textures(ctx);
-        }
 
         self.handle_copy_shortcut(ctx, now);
 
@@ -93,7 +94,7 @@ impl DiffViewerState {
                         palette,
                     );
                     if ui
-                        .add_enabled(!is_svg || self.svg.result.is_some(), copy_btn)
+                        .add_enabled(!is_svg || self.svg.is_some(), copy_btn)
                         .clicked()
                     {
                         self.copy_current_diff(ctx, now);
@@ -111,10 +112,14 @@ impl DiffViewerState {
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 2: Mode Toolbar
-                if is_svg {
-                    self.svg.toolbar(ui, palette);
-                } else if is_img {
-                    self.render_image_toolbar(ui, palette);
+                if self.is_image() {
+                    ui.horizontal_wrapped(|ui| {
+                        graphical::toolbar(ui, &mut self.image_mode, palette);
+                        if is_img {
+                            ui.separator();
+                            self.render_image_tolerance(ui, palette);
+                        }
+                    });
                 } else {
                     self.render_text_toolbar(ui, palette);
                 }
@@ -130,10 +135,8 @@ impl DiffViewerState {
                     Vec2::new(avail.x, viewport_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        if is_svg {
-                            self.render_svg_viewport(ui, palette);
-                        } else if is_img {
-                            self.render_image_viewport(ui, palette);
+                        if self.is_image() {
+                            self.render_graphical_viewport(ui, palette);
                         } else {
                             self.render_text_viewport(ui, palette);
                         }
@@ -182,7 +185,7 @@ impl DiffViewerState {
             .with_escape_hatch(hatch)
             .with_footer_hints(hints);
         if self.is_svg() {
-            let (status, color) = match &self.svg.result {
+            let (status, color) = match &self.svg {
                 _ if self.is_computing() => ("Comparing SVG…".into(), accent),
                 Some(result) if result.matches() => (result.summary(), added),
                 Some(result) => (result.summary(), removed),
@@ -239,28 +242,62 @@ impl DiffViewerState {
                 removed,
             )
         };
+        let aligned = self
+            .raster_preview
+            .as_ref()
+            .is_some_and(|preview| preview.dimensions[0] != preview.dimensions[1]);
+        let size = if aligned {
+            format!("Aligned to {} × {}", result.width, result.height)
+        } else {
+            format!("{} × {}", result.width, result.height)
+        };
         shell
             .with_badge(status, Some(color))
-            .with_badge(format!("{} × {}", result.width, result.height), None)
+            .with_badge(size, None)
             .with_footer_readout(format!(
                 "Tolerance: {:.2} • {} diff pixels",
                 self.image_options.threshold, result.diff_count
             ))
     }
 
-    fn render_svg_viewport(
+    fn render_graphical_viewport(
         &mut self,
         ui: &mut egui::Ui,
         palette: &little_clip_core::palette::AppPalette,
     ) {
         if self.is_computing() {
             self.render_computing_ui(ui, palette);
-        } else if let Some(error) = &self.decode_error {
-            ui.centered_and_justified(|ui| ui.label(error));
-        } else {
-            self.svg
-                .render(ui, palette, [self.lhs.label(), self.rhs.label()]);
+            return;
         }
+        if let Some(error) = &self.decode_error {
+            ui.centered_and_justified(|ui| ui.label(error));
+            return;
+        }
+        let sizes = if let Some(svg) = &self.svg {
+            self.graphical.prepare_svg(ui.ctx(), svg);
+            [svg.base.viewport, svg.revised.viewport].map(|[w, h]| egui::vec2(w, h))
+        } else if let Some(raster) = &self.image_result {
+            if let Some((images, overlay)) = self
+                .raster_preview
+                .as_mut()
+                .and_then(|preview| preview.images.take())
+            {
+                self.graphical.prepare(ui.ctx(), images, Some(overlay));
+            }
+            [egui::vec2(raster.width as f32, raster.height as f32); 2]
+        } else {
+            return;
+        };
+        self.graphical.render(
+            ui,
+            palette,
+            self.image_mode,
+            graphical::Pair {
+                labels: [self.lhs.label(), self.rhs.label()],
+                sizes,
+                svg: self.svg.as_ref(),
+            },
+        );
     }
 
     fn handle_copy_shortcut(&mut self, ctx: &egui::Context, now: f64) {
@@ -281,7 +318,7 @@ impl DiffViewerState {
 
     fn copy_current_diff(&mut self, ctx: &egui::Context, now: f64) {
         if self.is_svg() {
-            if let Some(result) = &self.svg.result {
+            if let Some(result) = &self.svg {
                 ctx.copy_text(format!(
                     "{} → {}\n{}",
                     self.lhs.label(),

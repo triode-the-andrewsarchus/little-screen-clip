@@ -1,8 +1,8 @@
-//! Text and image differential inspection workbench view.
+//! Shared text, raster, and retained SVG comparison views.
 //!
-//! Provides side-by-side, unified, and inline word diffs for text, and 3-up/overlay/mask
-//! pixel diffs for bitmap images, and retained vector comparisons for SVG.
+//! Graphical comparisons share side-by-side, blink, overlay, and slider views.
 
+mod graphical;
 mod handoff;
 mod image_view;
 mod studio;
@@ -14,13 +14,13 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use egui::{self, Color32, CornerRadius, Stroke, Vec2};
+use graphical::GraphicalView;
 use little_clip_core::HandSide;
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::jobs::task::Task;
 use little_clip_core::{BackgroundJobs, JobTicket};
 use little_clip_ops::diff::{DiffDisplayMode, DiffResult, DiffTarget, compute_diff};
 use little_clip_ops::image_diff::{ImageDiffOptions, ImageDiffResult};
-use svg_view::SvgView;
 
 enum DiffHandoffTarget {
     Existing(std::path::PathBuf),
@@ -113,37 +113,23 @@ impl DiffHandoffTarget {
     }
 }
 
-/// Layout visualization mode for comparing bitmap images.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Presentation mode for SVG and raster comparisons.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ImageDiffViewMode {
-    /// 3-Up view: `[Base] [Comparison] [Diff Mask]`.
-    ThreeUp, // [ base ] [ comparison ] [ diff ] (matching ODiff demo table)
-    /// Dimmed base image overlayed with glowing diff pixels.
-    Overlay, // [ dimmed base + glowing diff pixels ]
-    /// High-contrast black mask highlighting pixel differences.
-    MaskOnly, // [ black mask + glowing diff pixels ]
-    /// Split view: `[Base] [Diff Mask]`.
-    Split, // [ base ] [ diff ]
+    #[default]
+    SideBySide,
+    Blink,
+    Overlay,
+    Slider,
 }
 
 impl ImageDiffViewMode {
-    /// Human-readable display label.
-    pub fn label(&self) -> &'static str {
+    fn next(self) -> Self {
         match self {
-            ImageDiffViewMode::ThreeUp => "3-Up (Base | Comp | Diff)",
-            ImageDiffViewMode::Overlay => "Overlay",
-            ImageDiffViewMode::MaskOnly => "Diff Mask",
-            ImageDiffViewMode::Split => "Split (Base | Diff)",
-        }
-    }
-
-    /// SVG icon for mode tab.
-    pub fn icon(&self) -> Icon {
-        match self {
-            ImageDiffViewMode::ThreeUp => Icon::Grid,
-            ImageDiffViewMode::Overlay => Icon::Layers,
-            ImageDiffViewMode::MaskOnly => Icon::Eye,
-            ImageDiffViewMode::Split => Icon::Diff,
+            Self::SideBySide => Self::Blink,
+            Self::Blink => Self::Overlay,
+            Self::Overlay => Self::Slider,
+            Self::Slider => Self::SideBySide,
         }
     }
 }
@@ -158,16 +144,13 @@ pub struct DiffViewerState {
     pub layout_job: egui::text::LayoutJob,
     // Image diff state
     pub image_result: Option<std::sync::Arc<ImageDiffResult>>,
-    svg: SvgView,
+    svg: Option<little_clip_render::diagram::retained::compare::Comparison>,
+    raster_preview: Option<image_view::RasterPreview>,
+    graphical: GraphicalView,
     is_svg: bool,
     copy_job: Option<crate::desktop_ipc::PendingRequest>,
     pub image_options: ImageDiffOptions,
     pub image_mode: ImageDiffViewMode,
-    pub base_texture: Option<egui::TextureHandle>,
-    pub comp_texture: Option<egui::TextureHandle>,
-    pub mask_texture: Option<egui::TextureHandle>,
-    pub overlay_texture: Option<egui::TextureHandle>,
-    pub textures_loaded: bool,
     pub decode_error: Option<String>,
     pub status_toast: Option<(crate::ui_ext::StatusMessage, f64)>, // (text, timestamp)
     compute_job: Option<Task<Result<DiffComputation, String>>>,
@@ -186,7 +169,7 @@ impl Drop for DiffViewerState {
 }
 
 enum DiffComputation {
-    Image(ImageDiffResult),
+    Image(ImageDiffResult, image_view::RasterPreview),
     Svg(little_clip_render::diagram::retained::compare::Comparison),
     Text(DiffResult, egui::text::LayoutJob),
 }
@@ -231,14 +214,17 @@ fn spawn_graphical_diff_worker(
                 }
                 (false, false) => {}
             }
-            little_clip_ops::image_diff::compare_image_bytes_with_mime(
+            little_clip_ops::image_diff::compare_aligned_image_bytes(
                 b1,
                 lhs.image_mime(),
                 b2,
                 rhs.image_mime(),
                 &options,
             )
-            .map(DiffComputation::Image)
+            .map(|(result, dimensions)| {
+                let preview = image_view::RasterPreview::new(&result, dimensions);
+                DiffComputation::Image(result, preview)
+            })
             .map_err(|e| e.to_string())
         });
 
@@ -314,16 +300,13 @@ impl DiffViewerState {
             result,
             layout_job,
             image_result: None,
-            svg: SvgView::default(),
+            svg: None,
+            raster_preview: None,
+            graphical: GraphicalView::default(),
             is_svg,
             copy_job: None,
             image_options,
-            image_mode: ImageDiffViewMode::ThreeUp,
-            base_texture: None,
-            comp_texture: None,
-            mask_texture: None,
-            overlay_texture: None,
-            textures_loaded: false,
+            image_mode: ImageDiffViewMode::default(),
             decode_error,
             status_toast: None,
             compute_job,
@@ -368,13 +351,13 @@ impl DiffViewerState {
             .map_err(|error| format!("Diff computation failed: {error}"))
             .and_then(|result| result);
         match outcome {
-            Ok(DiffComputation::Image(result)) => {
+            Ok(DiffComputation::Image(result, preview)) => {
                 self.image_result = Some(std::sync::Arc::new(result));
-                self.textures_loaded = false;
+                self.raster_preview = Some(preview);
                 self.decode_error = None;
             }
             Ok(DiffComputation::Svg(result)) => {
-                self.svg.result = Some(result);
+                self.svg = Some(result);
                 self.decode_error = None;
             }
             Ok(DiffComputation::Text(result, layout_job)) => {
@@ -395,7 +378,10 @@ impl DiffViewerState {
         // Retire the old read before starting its replacement. Task owns cancellation.
         self.compute_job = None;
         if self.is_image() {
-            self.svg.clear_result();
+            self.svg = None;
+            self.image_result = None;
+            self.raster_preview = None;
+            self.graphical.clear_textures();
             match spawn_graphical_diff_worker(
                 &self.lhs,
                 &self.rhs,
@@ -408,7 +394,6 @@ impl DiffViewerState {
                 }
                 Err(error) => self.decode_error = Some(error),
             }
-            self.textures_loaded = false;
         } else {
             let width = if self.mode == DiffDisplayMode::SideBySide {
                 150
@@ -427,15 +412,8 @@ impl DiffViewerState {
     }
 
     pub fn toggle_mode(&mut self) {
-        if self.is_svg() {
-            self.svg.toggle();
-        } else if self.is_image() {
-            self.image_mode = match self.image_mode {
-                ImageDiffViewMode::ThreeUp => ImageDiffViewMode::Overlay,
-                ImageDiffViewMode::Overlay => ImageDiffViewMode::MaskOnly,
-                ImageDiffViewMode::MaskOnly => ImageDiffViewMode::Split,
-                ImageDiffViewMode::Split => ImageDiffViewMode::ThreeUp,
-            };
+        if self.is_image() {
+            self.image_mode = self.image_mode.next();
         } else {
             self.mode = self.mode.toggled();
             self.recompute();
